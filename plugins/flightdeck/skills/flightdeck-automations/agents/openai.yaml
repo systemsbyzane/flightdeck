@@ -1,0 +1,4 @@
+interface:
+  display_name: "Flightdeck Automations"
+  short_description: "Design safe read-only recurring checks"
+  default_prompt: "Use $flightdeck-automations to design this recurring check with stable finding keys and read-only authority."

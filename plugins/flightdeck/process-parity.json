@@ -1,0 +1,562 @@
+{
+  "schema_version": "process-parity/v1",
+  "capabilities": [
+    {
+      "id": "distribution-boundary",
+      "status": "matched",
+      "source_count": 1,
+      "source_paths": [
+        ".gitignore"
+      ],
+      "candidate_paths": [
+        ".gitignore"
+      ]
+    },
+    {
+      "id": "coordination-entry-documents",
+      "status": "generalized",
+      "source_count": 3,
+      "source_paths": [
+        "AGENTS.md",
+        "Makefile",
+        "README.md"
+      ],
+      "candidate_paths": [
+        "AGENTS.md",
+        "Makefile",
+        "README.md"
+      ]
+    },
+    {
+      "id": "workspace-registry",
+      "status": "generalized",
+      "source_count": 1,
+      "source_paths": [
+        "@registry"
+      ],
+      "candidate_paths": [
+        "flightdeck.yaml"
+      ]
+    },
+    {
+      "id": "control-plane-entrypoint",
+      "status": "generalized",
+      "source_count": 1,
+      "source_paths": [
+        "@entrypoint"
+      ],
+      "candidate_paths": [
+        "bin/flightdeck"
+      ]
+    },
+    {
+      "id": "workspace-section-guides",
+      "status": "generalized",
+      "source_count": 7,
+      "source_paths": [
+        "*-*/README.md",
+        "patching/AGENTS.md",
+        "patching/README.md",
+        "patching/_repo-bridges/*/AGENTS.override.md",
+        "patching/_repo-bridges/*/README.md",
+        "patching/scripts/install-*-bridge.sh"
+      ],
+      "candidate_paths": [
+        "charts/README.md",
+        "development/README.md",
+        "environments/README.md",
+        "operations/README.md",
+        "patching/README.md",
+        "research/README.md"
+      ]
+    },
+    {
+      "id": "compliance-workspace-guidance",
+      "status": "generalized",
+      "source_count": 2,
+      "source_paths": [
+        "compliance/AGENTS.md",
+        "compliance/README.md"
+      ],
+      "candidate_paths": [
+        "compliance/README.md"
+      ]
+    },
+    {
+      "id": "compliance-program-template",
+      "status": "generalized",
+      "source_count": 10,
+      "source_paths": [
+        "compliance/_program-template/AGENTS.md",
+        "compliance/_program-template/README.md",
+        "compliance/_program-template/context/.gitkeep",
+        "compliance/_program-template/control-assessments/.gitkeep",
+        "compliance/_program-template/evidence-index/.gitkeep",
+        "compliance/_program-template/generated-documents/.gitkeep",
+        "compliance/_program-template/input-templates/.gitkeep",
+        "compliance/_program-template/poam/.gitkeep",
+        "compliance/_program-template/source-documents/.gitkeep",
+        "compliance/_program-template/working-notes/.gitkeep"
+      ],
+      "candidate_paths": [
+        "compliance/_program-template/AGENTS.md",
+        "compliance/_program-template/README.md",
+        "compliance/_program-template/context/.gitkeep",
+        "compliance/_program-template/context/README.md",
+        "compliance/_program-template/control-assessments/.gitkeep",
+        "compliance/_program-template/control-assessments/control-assessment-template.md",
+        "compliance/_program-template/evidence-index/.gitkeep",
+        "compliance/_program-template/evidence-index/evidence-index-template.md",
+        "compliance/_program-template/generated-documents/.gitkeep",
+        "compliance/_program-template/input-templates/.gitkeep",
+        "compliance/_program-template/input-templates/README.md",
+        "compliance/_program-template/poam/.gitkeep",
+        "compliance/_program-template/poam/poam-candidate-template.md",
+        "compliance/_program-template/source-documents/.gitkeep",
+        "compliance/_program-template/source-documents/README.md",
+        "compliance/_program-template/working-notes/.gitkeep"
+      ]
+    },
+    {
+      "id": "reusable-method-guides",
+      "status": "generalized",
+      "source_count": 49,
+      "source_paths": [
+        "docs/README.md",
+        "docs/architecture/README.md",
+        "docs/architecture/decision-record-template.md",
+        "docs/architecture/design-review.md",
+        "docs/architecture/*-yaml-manifest-architecture.md",
+        "docs/architecture/*-control-plane.md",
+        "docs/*-ui-workflow.md",
+        "docs/compliance/README.md",
+        "docs/compliance/artifact-sensitivity-and-handling.md",
+        "docs/compliance/assessor-quality-bar.md",
+        "docs/compliance/control-assessment-methodology.md",
+        "docs/compliance/dod-rmf-ato-operating-model.md",
+        "docs/compliance/emass-template-workflow.md",
+        "docs/compliance/evidence-analysis-guide.md",
+        "docs/compliance/machine-readable-artifacts.md",
+        "docs/compliance/poam-generation-guide.md",
+        "docs/compliance/policy-generation-guide.md",
+        "docs/compliance/program-workspace-guide.md",
+        "docs/compliance/templates/control-assessment-notes.md",
+        "docs/compliance/templates/evidence-index.md",
+        "docs/compliance/templates/poam-analysis.md",
+        "docs/compliance/templates/program-agents.md",
+        "docs/compliance/templates/program-readme.md",
+        "docs/patching/README.md",
+        "docs/patching/image-*-compatibility.md",
+        "docs/review/README.md",
+        "docs/review/backend-review-guidelines.md",
+        "docs/review/charts-review-guidelines.md",
+        "docs/review/codex-review-readiness.md",
+        "docs/review/frontend-review-guidelines.md",
+        "docs/review/patching-review-guidelines.md",
+        "docs/review/pr-evidence-packet.md",
+        "docs/security/README.md",
+        "docs/security/secure-code-preflight.md",
+        "docs/security/threat-model*.md",
+        "docs/templates/implementation-plan.md",
+        "docs/templates/pr-readiness.md",
+        "docs/templates/*-feature-handoff.md",
+        "docs/templates/*-vm-validation-handoff.md",
+        "docs/templates/repo-bridge-agents-section.md",
+        "docs/templates/task-intake.md",
+        "docs/templates/validation-evidence.md",
+        "docs/workflows/README.md",
+        "docs/workflows/*-thread-routing.md",
+        "docs/workflows/*-to-*-validation.md",
+        "docs/workflows/*-multirepo-coordination.md",
+        "docs/workflows/repo-bridge-design.md",
+        "docs/workflows/weekly-image-patch-review.md",
+        "docs/workflows/*-operations.md"
+      ],
+      "candidate_paths": [
+        "docs/README.md",
+        "docs/architecture/README.md",
+        "docs/architecture/control-plane.md",
+        "docs/architecture/decision-record-template.md",
+        "docs/architecture/design-review.md",
+        "docs/architecture/manifest-architecture.md",
+        "docs/codex-ui-workflow.md",
+        "docs/compliance/README.md",
+        "docs/compliance/artifact-sensitivity-and-handling.md",
+        "docs/compliance/assessor-quality-bar.md",
+        "docs/compliance/control-assessment-methodology.md",
+        "docs/compliance/control-assessment.md",
+        "docs/compliance/dod-rmf-ato-operating-model.md",
+        "docs/compliance/emass-template-workflow.md",
+        "docs/compliance/evidence-analysis-guide.md",
+        "docs/compliance/evidence-analysis.md",
+        "docs/compliance/machine-readable-artifacts.md",
+        "docs/compliance/poam-generation-guide.md",
+        "docs/compliance/poam.md",
+        "docs/compliance/policy-generation-guide.md",
+        "docs/compliance/program-workspace-guide.md",
+        "docs/compliance/program-workspace.md",
+        "docs/compliance/sensitivity.md",
+        "docs/compliance/sidecars.md",
+        "docs/compliance/templates/control-assessment-notes.md",
+        "docs/compliance/templates/evidence-index.md",
+        "docs/compliance/templates/poam-analysis.md",
+        "docs/compliance/templates/program-agents.md",
+        "docs/compliance/templates/program-readme.md",
+        "docs/patching/README.md",
+        "docs/patching/image-compatibility.md",
+        "docs/review/README.md",
+        "docs/review/backend-review-guidelines.md",
+        "docs/review/charts-review-guidelines.md",
+        "docs/review/codex-review-readiness.md",
+        "docs/review/frontend-review-guidelines.md",
+        "docs/review/patching-review-guidelines.md",
+        "docs/review/pr-evidence-packet.md",
+        "docs/review/pr-evidence.md",
+        "docs/review/review-readiness.md",
+        "docs/security/README.md",
+        "docs/security/secure-code-preflight.md",
+        "docs/security/threat-model.md",
+        "docs/templates/implementation-plan.md",
+        "docs/templates/multirepo-feature-handoff.md",
+        "docs/templates/pr-readiness.md",
+        "docs/templates/repo-bridge.md",
+        "docs/templates/runtime-validation-handoff.md",
+        "docs/templates/task-intake.md",
+        "docs/templates/validation-evidence.md",
+        "docs/workflows/README.md",
+        "docs/workflows/artifacts.md",
+        "docs/workflows/automations.md",
+        "docs/workflows/configure-bridge-repos.md",
+        "docs/workflows/multirepo-coordination.md",
+        "docs/workflows/operations.md",
+        "docs/workflows/remote-validation.md",
+        "docs/workflows/repo-bridge.md",
+        "docs/workflows/repo-onboarding.md",
+        "docs/workflows/thread-routing.md",
+        "docs/workflows/weekly-image-patch-review.md"
+      ]
+    },
+    {
+      "id": "reusable-design-history",
+      "status": "generalized",
+      "source_count": 4,
+      "source_paths": [
+        "docs/superpowers/plans/*.md",
+        "docs/superpowers/specs/*.md"
+      ],
+      "candidate_paths": [
+        "docs/superpowers/plans/compliance-rmf-ato-workbench.md",
+        "docs/superpowers/plans/flightdeck-control-plane.md",
+        "docs/superpowers/specs/compliance-rmf-ato-workbench-design.md",
+        "docs/superpowers/specs/flightdeck-control-plane-design.md"
+      ]
+    },
+    {
+      "id": "coordination-control-data",
+      "status": "generalized",
+      "source_count": 22,
+      "source_paths": [
+        "hub/automations/**",
+        "hub/bridges/**",
+        "hub/schemas/*.schema.json",
+        "hub/templates/project-handoff.yaml",
+        "hub/workflows/*.yaml"
+      ],
+      "candidate_paths": [
+        "hub/automations/README.md",
+        "hub/automations/daily-repository-ci-monitor.yaml",
+        "hub/automations/daily-workspace-health.yaml",
+        "hub/automations/monthly-compliance-integrity.yaml",
+        "hub/automations/monthly-governance-audit.yaml",
+        "hub/automations/weekly-research-refresh.yaml",
+        "hub/automations/weekly-vulnerability-triage.yaml",
+        "hub/bridges/README.md",
+        "hub/bridges/manifest.yaml",
+        "hub/bridges/templates/application/AGENTS.override.md",
+        "hub/bridges/templates/charts/AGENTS.override.md",
+        "hub/bridges/templates/environments/AGENTS.override.md",
+        "hub/bridges/templates/patching/AGENTS.override.md",
+        "hub/repositories.yaml",
+        "hub/schemas/bridge-setup-receipt.schema.json",
+        "hub/schemas/bridges.schema.json",
+        "hub/schemas/compliance-artifact.schema.json",
+        "hub/schemas/flightdeck.schema.json",
+        "hub/schemas/local-repositories.schema.json",
+        "hub/schemas/project-verifications.schema.json",
+        "hub/schemas/repository-declarations.schema.json",
+        "hub/schemas/task.schema.json",
+        "hub/schemas/thread-links.schema.json",
+        "hub/templates/project-handoff.yaml",
+        "hub/workflows/charts.yaml",
+        "hub/workflows/compliance.yaml",
+        "hub/workflows/daily-ops.yaml",
+        "hub/workflows/development.yaml",
+        "hub/workflows/patching.yaml",
+        "hub/workflows/research.yaml"
+      ]
+    },
+    {
+      "id": "control-plane-runtime",
+      "status": "generalized",
+      "source_count": 9,
+      "source_paths": [
+        "lib/@control-plane/cli.rb",
+        "lib/@control-plane/config.rb",
+        "lib/@control-plane/doctor.rb",
+        "lib/@control-plane/inspections.rb",
+        "lib/@control-plane/repo_planner.rb",
+        "lib/@control-plane/route_planner.rb",
+        "lib/@control-plane/support.rb",
+        "lib/@control-plane/task_store.rb",
+        "lib/@control-plane/workflow.rb"
+      ],
+      "candidate_paths": [
+        "lib/flightdeck/bridge_bulk_store.rb",
+        "lib/flightdeck/bridge_store.rb",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/config.rb",
+        "lib/flightdeck/doctor.rb",
+        "lib/flightdeck/inspections.rb",
+        "lib/flightdeck/repo_planner.rb",
+        "lib/flightdeck/repository_store.rb",
+        "lib/flightdeck/route_planner.rb",
+        "lib/flightdeck/support.rb",
+        "lib/flightdeck/task_store.rb",
+        "lib/flightdeck/workflow.rb"
+      ]
+    },
+    {
+      "id": "operator-helper-scripts",
+      "status": "generalized",
+      "source_count": 2,
+      "source_paths": [
+        "scripts/new-*-feature.sh",
+        "scripts/*-preflight.sh"
+      ],
+      "candidate_paths": [
+        "scripts/new-multirepo-feature.sh",
+        "scripts/remote-validation-preflight.sh"
+      ]
+    },
+    {
+      "id": "control-plane-regression-suite",
+      "status": "generalized",
+      "source_count": 1,
+      "source_paths": [
+        "tests/*_test.rb"
+      ],
+      "candidate_paths": [
+        "tests/flightdeck_test.rb"
+      ]
+    },
+    {
+      "id": "plugin-metadata-and-parity-contract",
+      "status": "added",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 2,
+      "plugin_paths": [
+        ".codex-plugin/plugin.json",
+        "process-parity.json"
+      ]
+    },
+    {
+      "id": "artifact-production-method",
+      "status": "generalized",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 3,
+      "plugin_paths": [
+        "skills/flightdeck-artifacts/**"
+      ],
+      "source_mapping_ids": [
+        "reusable-method-guides",
+        "compliance-program-template"
+      ]
+    },
+    {
+      "id": "automation-method",
+      "status": "generalized",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 3,
+      "plugin_paths": [
+        "skills/flightdeck-automations/**"
+      ],
+      "source_mapping_ids": [
+        "coordination-control-data"
+      ]
+    },
+    {
+      "id": "manifest-review-method",
+      "status": "generalized",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 3,
+      "plugin_paths": [
+        "skills/flightdeck-charts/**"
+      ],
+      "source_mapping_ids": [
+        "reusable-method-guides"
+      ]
+    },
+    {
+      "id": "compliance-method",
+      "status": "generalized",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 18,
+      "plugin_paths": [
+        "skills/flightdeck-compliance/**"
+      ],
+      "source_mapping_ids": [
+        "compliance-workspace-guidance",
+        "compliance-program-template",
+        "reusable-method-guides"
+      ]
+    },
+    {
+      "id": "development-method",
+      "status": "generalized",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 3,
+      "plugin_paths": [
+        "skills/flightdeck-development/**"
+      ],
+      "source_mapping_ids": [
+        "reusable-method-guides"
+      ]
+    },
+    {
+      "id": "workspace-health-method",
+      "status": "generalized",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 3,
+      "plugin_paths": [
+        "skills/flightdeck-doctor/**"
+      ],
+      "source_mapping_ids": [
+        "control-plane-runtime"
+      ]
+    },
+    {
+      "id": "patching-method",
+      "status": "generalized",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 3,
+      "plugin_paths": [
+        "skills/flightdeck-patching/**"
+      ],
+      "source_mapping_ids": [
+        "workspace-section-guides",
+        "reusable-method-guides"
+      ]
+    },
+    {
+      "id": "repository-bridge-method",
+      "status": "generalized",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 4,
+      "plugin_paths": [
+        "skills/flightdeck-repo-bridge/**"
+      ],
+      "source_mapping_ids": [
+        "coordination-control-data"
+      ]
+    },
+    {
+      "id": "research-method",
+      "status": "generalized",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 3,
+      "plugin_paths": [
+        "skills/flightdeck-research/**"
+      ],
+      "source_mapping_ids": [
+        "reusable-method-guides"
+      ]
+    },
+    {
+      "id": "setup-and-acceptance-method",
+      "status": "generalized",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 16,
+      "plugin_paths": [
+        "skills/flightdeck-setup/SKILL.md",
+        "skills/flightdeck-setup/agents/**",
+        "skills/flightdeck-setup/references/**",
+        "skills/flightdeck-setup/scripts/**",
+        "skills/flightdeck-setup/tests/**"
+      ],
+      "source_mapping_ids": [
+        "coordination-entry-documents",
+        "workspace-registry",
+        "control-plane-entrypoint",
+        "control-plane-runtime",
+        "control-plane-regression-suite"
+      ]
+    },
+    {
+      "id": "stig-evaluation-method",
+      "status": "generalized",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 13,
+      "plugin_paths": [
+        "skills/flightdeck-stig/**"
+      ],
+      "source_mapping_ids": [
+        "compliance-workspace-guidance",
+        "reusable-method-guides"
+      ]
+    },
+    {
+      "id": "dispatch-coordinator-method",
+      "status": "generalized",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 3,
+      "plugin_paths": [
+        "skills/flightdeck/**"
+      ],
+      "source_mapping_ids": [
+        "coordination-entry-documents",
+        "workspace-registry"
+      ]
+    }
+  ],
+  "exclusions": [
+    {
+      "id": "generated-operational-state",
+      "status": "intentionally_excluded",
+      "source_count": 0,
+      "source_paths": [
+        "hub/reports/**",
+        "hub/state/**",
+        "hub/tasks/**"
+      ],
+      "candidate_paths": [],
+      "reason": "Generated reports, runtime state, and task instances are operational data rather than reusable process surfaces."
+    }
+  ],
+  "plugin_exclusions": []
+}

@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/bridge-setup-receipt.schema.json",
+  "title": "Bridge Repository Setup Receipt",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "schema",
+    "generated_at",
+    "failure_policy",
+    "declarations",
+    "receipt_path",
+    "ok",
+    "complete",
+    "repositories",
+    "summary"
+  ],
+  "properties": {
+    "schema_version": {"const": "flightdeck.bridge-setup-receipt/v1"},
+    "schema": {"const": "hub/schemas/bridge-setup-receipt.schema.json"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "failure_policy": {"enum": ["stop", "continue"]},
+    "declarations": {"type": "string"},
+    "receipt_path": {"type": "string"},
+    "ok": {"type": "boolean"},
+    "complete": {"type": "boolean"},
+    "repositories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "repository_id",
+          "git_root",
+          "checkout",
+          "bridge",
+          "project_registration",
+          "errors",
+          "complete"
+        ],
+        "properties": {
+          "repository_id": {"type": "string", "minLength": 1},
+          "git_root": {"type": "string", "pattern": "^/"},
+          "checkout": {"type": ["object", "null"]},
+          "bridge": {
+            "type": "object",
+            "required": ["status", "mode", "profile"],
+            "properties": {
+              "status": {
+                "enum": ["installed", "noop", "blocked", "error", "not_attempted"]
+              },
+              "mode": {
+                "type": ["string", "null"],
+                "enum": ["reference", "materialized", "repo-native", null]
+              },
+              "profile": {"type": ["string", "null"]},
+              "record": {"type": ["object", "null"]}
+            }
+          },
+          "project_registration": {
+            "type": ["object", "null"],
+            "properties": {
+              "expectation": {"const": "saved_exact_path"},
+              "logical_key": {"type": "string", "minLength": 1},
+              "runtime_project_id": {"type": ["string", "null"]},
+              "status": {"enum": ["pending", "verified", "conflict"]},
+              "work": {"type": "string"},
+              "recorded_path": {"type": ["string", "null"]},
+              "exact_path_match": {"type": "boolean"},
+              "verification_source": {
+                "type": ["string", "null"],
+                "enum": ["live_project_list_exact_path", null]
+              }
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "complete": {"type": "boolean"}
+        }
+      }
+    },
+    "summary": {"type": "object"}
+  }
+}

@@ -1,0 +1,380 @@
+# Flightdeck for Codex
+
+Flightdeck gives Codex one safe place to coordinate work that belongs in many
+different repositories, environments, research spaces, and compliance
+workspaces.
+
+The simplest mental model is:
+
+```text
+plugin source -> setup skill -> generated Hub -> owning project
+```
+
+- This repository contains the installable plugin, its skills, setup tools, and
+  the template used to generate a Hub.
+- The setup skill creates a separate local Flightdeck Hub. The Hub holds stable
+  routing policy, workflow guides, schemas, bridge definitions, and disabled
+  automation specifications.
+- Each real repository or program workspace stays a separate Codex project with
+  its own instructions, Git history, tests, and artifacts.
+- The Hub resolves the owner, verifies the exact saved project path, searches
+  for an existing task, creates or resumes it, returns the receipt, and stops.
+
+Flightdeck is a coordinator, not a monorepo and not a background task monitor.
+
+## What gets installed
+
+Installing the plugin makes these focused skills available:
+
+- coordination and exact-project dispatch;
+- setup and Doctor;
+- repository bridge planning and installation;
+- development, charts, patching, and research workflows;
+- Word, PDF, and spreadsheet artifact routing;
+- compliance, POA&M, and machine-readable sidecar methods;
+- STIG evaluation and deterministic CKL tools;
+- safe recurring-automation design and review.
+
+The plugin does not install repositories, credentials, scheduled jobs, document
+engines, clusters, or a Hub automatically.
+
+The generated Hub contains:
+
+- `AGENTS.md` and `flightdeck.yaml`;
+- `bin/flightdeck`, Ruby libraries, schemas, and tests;
+- workflow, architecture, security, review, patching, and compliance guides;
+- declarative repository and bridge configuration;
+- disabled automation specifications;
+- synthetic program-workspace templates;
+- ignored locations for local task, bridge, report, and project state.
+
+The generated Hub does not contain the plugin, live repositories, credentials,
+private evidence, runtime IDs, task history, findings, or deployment state.
+
+## Prerequisites
+
+Required:
+
+- Codex with local plugin marketplace support;
+- Python 3;
+- Ruby with its standard JSON, YAML, Open3, and Minitest libraries;
+- Git;
+- an absent or empty directory for the generated Hub.
+
+Optional:
+
+- an authenticated provider CLI for repository metadata and cloning;
+- installed `documents`, `pdf`, and `Spreadsheets` capabilities for Word, PDF,
+  and XLSX work;
+- separately configured remote Codex projects for runtime validation.
+
+Credentials stay in the user’s existing credential stores. Flightdeck never
+puts them in plugin files, Hub configuration, task prompts, receipts, or Git
+history.
+
+## Five-minute path
+
+Clone or open this private repository, then run:
+
+```sh
+cd /absolute/path/to/flightdeck
+python3 plugins/flightdeck/skills/flightdeck-setup/scripts/preflight.py --json
+codex plugin marketplace add "$PWD"
+codex plugin add flightdeck@flightdeck-team
+```
+
+Start a fresh Codex task so the newly installed skills are loaded. Then ask:
+
+```text
+Use $flightdeck-setup to create a new Flightdeck at /absolute/path/to/my-hub.
+```
+
+The target must be absent or empty. The setup skill validates prerequisites,
+generates atomically without merging, runs the local test and validation suite,
+checks Doctor and de-branding, and then tries to register or open the exact Hub
+path as a Codex project. Registration is successful only when a refreshed live
+project list returns that normalized path and its opaque runtime project ID.
+
+For source-only setup before installing the plugin, preview and apply the
+repo-managed bootstrap:
+
+```sh
+python3 plugins/flightdeck/skills/flightdeck-setup/scripts/bootstrap.py \
+  --target /absolute/path/to/my-hub
+
+python3 plugins/flightdeck/skills/flightdeck-setup/scripts/bootstrap.py \
+  --target /absolute/path/to/my-hub \
+  --apply
+```
+
+Preview is the default. Apply generates only into an absent or empty target,
+runs local validation, and is an idempotent validation-only no-op when the same
+valid generated Hub already exists. It never installs the plugin, registers a
+project, configures credentials, stages or commits files, adds a remote, pushes,
+publishes, or deploys.
+
+## What setup does
+
+`$flightdeck-setup` follows the mandatory
+[setup runbook](plugins/flightdeck/skills/flightdeck-setup/references/setup-runbook.md).
+It:
+
+1. resolves and validates the exact target path;
+2. checks local commands and current Codex capabilities;
+3. verifies external document, PDF, and spreadsheet capability gates;
+4. copies the bundled Hub template through a staging directory;
+5. writes only the generated root and empty ignored local registries;
+6. runs Ruby tests, structured parsing, Doctor, link checks, and de-branding;
+7. registers or opens the Hub project and verifies it by exact path;
+8. reports blockers without claiming installed-runtime acceptance.
+
+Setup never merges with a non-empty directory and never invents repository,
+program, branch, environment, or credential facts.
+
+## Why repository bridges are separate
+
+Opening a nested repository as its own Codex project does not make it inherit
+the Hub’s instructions. A bridge tells that repository where the shared
+Flightdeck policy lives while preserving the repository’s own `AGENTS.md` as
+the authority for layout, commands, tests, and implementation mechanics.
+
+Bridge setup is not automatic out of the box because it must first know and
+verify:
+
+- the exact repository checkout;
+- existing instruction and override files;
+- the selected bridge profile and mode;
+- local ignore protection;
+- the exact saved Codex project path;
+- whether tracked repository instructions may be changed.
+
+### Where repositories live
+
+Flightdeck repository declarations are intentionally Hub-relative. Each managed
+checkout lives under the generated Hub's matching workload root:
+
+```text
+<hub-root>/
+├── development/
+│   ├── example-api/
+│   └── example-web/
+├── charts/
+├── patching/
+└── compliance/
+```
+
+Bridge configuration never moves an existing checkout into the Hub. If a
+checkout already exists under its declared workload root, the `existing-local`
+adapter verifies it in place and preserves its dirty and untracked state. If
+the only checkout is outside the Hub, it may be inspected read-only to verify
+provider, owner, remote, and default-branch facts; after explicit clone
+authorization, Flightdeck creates a fresh checkout under the proper workload
+root and leaves the original untouched.
+
+A fresh clone does not include uncommitted or unpushed work. Preserve the
+original checkout until any required local work has been transferred
+deliberately. Paths outside the Hub cannot be used as declaration
+`local_path` values, and Flightdeck never relocates them implicitly.
+
+Declare repositories in the generated Hub’s `hub/repositories.yaml`, review the
+plan, then ask:
+
+```yaml
+api_version: flightdeck.dev/v1alpha1
+kind: RepositoryDeclarations
+schema: hub/schemas/repository-declarations.schema.json
+repositories:
+  - id: example-service
+    workload: development
+    provider: github
+    locator: example-company/example-service
+    local_path: development/example-service
+    owner: example-company
+    default_branch: main
+    default_branch_verified: true
+    bridge:
+      profile: application
+      mode: reference
+    codex_project:
+      expectation: saved_exact_path
+      logical_key: example-service
+```
+
+Use verified values rather than copying the synthetic example unchanged. With
+an empty declaration list, bridge setup correctly has nothing to configure.
+
+```text
+configure bridge repos
+```
+
+That phrase routes to the mandatory
+[bridge configuration runbook](plugins/flightdeck/skills/flightdeck-repo-bridge/references/configure-bridge-repos.md).
+It plans every repository before applying anything, preserves dirty state,
+refuses unmanaged or drifting targets, verifies exact project paths, records
+ignored receipts, and creates no implementation task.
+
+Bridge modes are:
+
+- `reference`: a machine-local ignored override points to Hub documents;
+- `materialized`: an ignored, versioned local policy pack is copied into the
+  repository;
+- `repo-native`: minimum portable policy is added to tracked repository
+  instructions, only with explicit per-repository authorization.
+
+## How dispatch works
+
+For project-owned work, Flightdeck:
+
+1. reads Hub policy, registry, routing, bridge state, and live project metadata;
+2. resolves the logical owner without inspecting the owner’s code or artifacts;
+3. verifies or safely onboards the checkout;
+4. refreshes the live project list and matches the exact normalized real path;
+5. keeps the stable logical key separate from the returned opaque runtime ID;
+6. verifies the bridge handoff and instruction order;
+7. searches recent tasks and resumes a matching objective or creates one;
+8. returns project key, runtime project ID, task ID, mode, and authorization
+   boundary;
+9. stops without reading, polling, waiting for, or monitoring the child task.
+
+The child reads its active repository `AGENTS.md` first and the verified Hub
+bridge second. Local mode is the default for read-only or intentional
+current-checkout work. Worktree mode is the default for isolated repository
+implementation. A matching remote project is used only for runtime validation
+that genuinely belongs there.
+
+## Common prompts and expected routing
+
+| Prompt | Expected route |
+|---|---|
+| `Run a read-only workspace health check.` | Hub Doctor; no remediation |
+| `Configure bridge repos.` | Bridge runbook; no implementation task |
+| `Add this API behavior in the example service.` | Owning repository task, normally Worktree mode |
+| `Patch the fixable image findings without changing runtime contracts.` | Owning image or consumer repository via patching workflow |
+| `Review this Helm change and render the manifests.` | Owning chart repository via charts workflow |
+| `Research declared versus deployed configuration.` | Read-only owner or runtime project with a source ledger |
+| `Prepare a Word policy from approved Markdown.` | Program workspace plus documents capability and visual QA |
+| `Generate POA&M candidates from these supported weaknesses.` | Isolated compliance program workspace with JSON/YAML sidecars |
+| `Evaluate this CKL without changing a cluster.` | STIG workflow with read-only evidence |
+| `Create a weekly vulnerability review.` | Disabled automation specification until separately enabled |
+
+## Safety and approvals
+
+Read-only planning and diagnostics do not authorize mutation. Explicit user
+approval remains required for:
+
+- commits, pushes, pull requests, comments, and repository publication;
+- deployment or shared-environment mutation;
+- external communication;
+- enabling or changing real scheduled automations;
+- compliance submission;
+- risk acceptance;
+- control, finding, or POA&M closure claims.
+
+Flightdeck preserves dirty and untracked user state. It does not clean, reset,
+stash, force-push, overwrite unmanaged instruction files, expose sensitive
+evidence, or treat client-side authorization as an enforcement boundary.
+
+## Generated-Hub navigation
+
+Start with the generated Hub’s `README.md`, then:
+
+- `docs/README.md` for the complete guide map;
+- `docs/codex-ui-workflow.md` for the project/task mental model;
+- `docs/workflows/thread-routing.md` for owner and mode selection;
+- `docs/workflows/configure-bridge-repos.md` for repository onboarding;
+- `docs/architecture/control-plane.md` for routing and state design;
+- `docs/security/` and `docs/review/` before review-ready claims;
+- `docs/patching/` for image and dependency compatibility;
+- `docs/compliance/` for RMF, ATO, POA&M, evidence, policy, and sidecars;
+- `hub/automations/README.md` for the specification-versus-real-schedule
+  boundary.
+
+Contributor parity and release contracts live in
+[process parity](docs/process-parity.md),
+[functional parity](docs/functional-parity.md), and
+[release readiness](docs/release-readiness.md).
+
+## Updating
+
+Updates are explicit:
+
+```sh
+cd /absolute/path/to/flightdeck
+git pull --ff-only
+codex plugin remove flightdeck@flightdeck-team
+codex plugin add flightdeck@flightdeck-team
+```
+
+Start a fresh Codex task after reinstalling so the new skill definitions are
+loaded. The setup generator has no upgrade-in-place or merge mode. To adopt a
+new Hub template, generate a new Hub, compare stable configuration and ignored
+local state deliberately, validate it, and verify its exact saved project path
+before retiring the old Hub.
+
+## Uninstalling
+
+Remove the plugin:
+
+```sh
+codex plugin remove flightdeck@flightdeck-team
+```
+
+If the marketplace is no longer needed:
+
+```sh
+codex plugin marketplace remove flightdeck-team
+```
+
+Uninstalling the plugin does not delete generated Hubs, repositories, ignored
+local state, program workspaces, or artifacts. Remove those separately only
+after reviewing their contents and backups.
+
+## Troubleshooting
+
+- `target must be absent or empty`: choose a new directory; setup never merges.
+- Missing `python3`, `ruby`, or `git`: install the named prerequisite and rerun
+  preflight.
+- Missing Word, PDF, or spreadsheet capability: core setup may continue, but
+  that artifact workflow remains blocked until the capability is installed.
+- Marketplace name or path conflict: inspect `codex plugin marketplace list`;
+  do not replace a marketplace that points elsewhere until the conflict is
+  understood.
+- Project path not verified: use the one manual open-folder action returned
+  after the supported registration path has been retried.
+- Existing override or bridge target: inspect ownership; Flightdeck will not
+  overwrite it.
+- Bridge drift: compare recorded and current digests and use a separately
+  reviewed migration.
+- `doctor` reports `ok: false`: findings were detected; the command itself may
+  still have run correctly.
+- Ahead/behind counts look stale: Doctor does not fetch and uses existing local
+  tracking refs.
+- A task was dispatched but no result appeared in the Hub: expected behavior;
+  Flightdeck stops after the receipt. Open the owning task or ask later to
+  consolidate it.
+
+## Contributor validation
+
+Read [AGENTS.md](AGENTS.md) before changing the plugin. The repository
+`Makefile` exposes a self-contained `make validate` suite and a source-backed
+release suite. For the required full comparison against a read-only reference
+Hub, run:
+
+```sh
+make release-validate \
+  SOURCE_HUB=/absolute/path/to/read-only-reference-hub \
+  PRIVATE_NEUTRALIZATION_MAP=.flightdeck-local/private-neutralization.json
+```
+
+The release target validates the plugin and all skills, parses structured
+files, runs Ruby and Python tests, generates and validates a fresh synthetic
+Hub, checks links and de-branding, runs the local acceptance harness, and
+executes strict source inventory plus semantic parity. Optional
+`SOURCE_HUB_SKILL` and `SOURCE_STIG_SKILL` paths add active-skill comparisons.
+The private-neutralization map is a required ignored local input for
+source-backed validation. It supplies source-only vocabulary at runtime and
+must never be committed, packaged, installed, or copied into generated Hubs.
+
+Installed-plugin project registration and real task create/resume behavior are
+fresh-task runtime acceptance checks. Local tests cannot satisfy them, and this
+repository must not claim otherwise.

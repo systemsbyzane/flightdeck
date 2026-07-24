@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/compliance-artifact.schema.json",
+  "title": "Flightdeck Compliance Artifact Sidecar",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "artifact_id",
+    "artifact_type",
+    "program",
+    "source_human_artifact",
+    "status",
+    "sensitivity",
+    "inputs",
+    "outputs",
+    "claims",
+    "evidence_refs",
+    "reviewer_actions"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "artifact_id": {"$ref": "#/$defs/id"},
+    "artifact_type": {
+      "enum": [
+        "control_workbook",
+        "control_assessment",
+        "poam_analysis",
+        "policy",
+        "evidence_index",
+        "risk_summary",
+        "package_note"
+      ]
+    },
+    "program": {"type": "string", "minLength": 1},
+    "source_human_artifact": {"$ref": "#/$defs/relativePath"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "generated_by": {"type": "string", "minLength": 1},
+    "status": {"const": "draft_for_human_review"},
+    "sensitivity": {"type": "string", "minLength": 1},
+    "inputs": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/input"}
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fields_generated", "fields_skipped"],
+      "properties": {
+        "fields_generated": {"type": "array", "items": {"type": "string"}},
+        "fields_skipped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["field", "reason"],
+            "properties": {
+              "field": {"type": "string", "minLength": 1},
+              "reason": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    "claims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supported_facts", "reasonable_inferences", "assumptions", "gaps"],
+      "properties": {
+        "supported_facts": {"type": "array", "items": {"type": "object"}},
+        "reasonable_inferences": {"type": "array", "items": {"type": "object"}},
+        "assumptions": {"type": "array", "items": {"type": "string"}},
+        "gaps": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/evidence"}
+    },
+    "reviewer_actions": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "type"],
+      "properties": {
+        "path": {"$ref": "#/$defs/relativePath"},
+        "type": {"type": "string", "minLength": 1},
+        "location": {"type": "string"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "path", "tier"],
+      "properties": {
+        "evidence_id": {"$ref": "#/$defs/id"},
+        "path": {"$ref": "#/$defs/relativePath"},
+        "location": {"type": "string"},
+        "tier": {
+          "enum": ["direct_current", "direct_stale", "indirect", "assertion", "conflict"]
+        }
+      }
+    }
+  }
+}

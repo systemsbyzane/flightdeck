@@ -1,0 +1,26 @@
+api_version: flightdeck.dev/v1alpha1
+kind: AutomationTemplate
+metadata:
+  name: daily-repository-ci-monitor
+  display_name: Daily Repository and CI Monitor
+enabled: false
+activation:
+  policy: explicit_user_enablement
+  required_confirmation: [repository_scope, provider_access, schedule, timezone]
+schedule:
+  type: cron
+  expression: "30 8 * * 1-5"
+  timezone: Etc/UTC
+task:
+  workflow: daily-ops
+  outcome: Report pull request and CI state without changing repositories or provider state.
+authorization:
+  profile: read_only
+  prohibited_actions: [edit, commit, push, pull_request_write, comment, rerun, cancel]
+output_contract:
+  schema: flightdeck.automation-report/v1
+  source_freshness_required: true
+  stable_finding_key: category_and_scope
+  delta_states: [new, resolved, persistent, blocked]
+  nonzero_diagnostic_policy: finding_not_job_failure
+

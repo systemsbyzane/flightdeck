@@ -1,0 +1,20 @@
+{
+  "name": "flightdeck-team",
+  "interface": {
+    "displayName": "Flightdeck Team"
+  },
+  "plugins": [
+    {
+      "name": "flightdeck",
+      "source": {
+        "source": "local",
+        "path": "./plugins/flightdeck"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

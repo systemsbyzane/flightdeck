@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/project-verifications.schema.json",
+  "title": "Codex Project Verifications",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_version", "kind", "projects"],
+  "properties": {
+    "api_version": {"const": "flightdeck.dev/v1alpha1"},
+    "kind": {"const": "CodexProjectVerifications"},
+    "projects": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "logical_key",
+          "runtime_project_id",
+          "path",
+          "verified",
+          "verification_source",
+          "verified_at"
+        ],
+        "properties": {
+          "logical_key": {
+            "type": "string",
+            "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
+          },
+          "runtime_project_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "description": "Opaque projectId returned by the refreshed live Codex project list."
+          },
+          "path": {"type": "string", "pattern": "^/"},
+          "verified": {"const": true},
+          "verification_source": {"const": "live_project_list_exact_path"},
+          "verified_at": {"type": "string", "format": "date-time"}
+        }
+      }
+    }
+  }
+}

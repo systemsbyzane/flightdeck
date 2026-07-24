@@ -1,0 +1,4 @@
+interface:
+  display_name: "Flightdeck Doctor"
+  short_description: "Inspect Flightdeck health and drift"
+  default_prompt: "Use $flightdeck-doctor to run a read-only health check and summarize actionable findings."

@@ -1,0 +1,226 @@
+api_version: flightdeck.dev/v1alpha1
+kind: WorkflowAdapter
+
+metadata:
+  name: research
+  display_name: Research and Implementation Trace
+  description: >-
+    Produce durable, source-ledger-backed research that separates repository
+    intent, live observations, inference, assumptions, contradictions, and gaps.
+
+task_type: research
+supported_workloads:
+  - development
+  - charts
+  - patching
+  - research
+  - environments
+  - compliance
+initial_state: intake
+
+required_fields:
+  - metadata.id
+  - metadata.title
+  - spec.type
+  - spec.workload_id
+  - spec.outcome.description
+  - status.state
+  - status.history
+
+task_defaults:
+  spec:
+    type: research
+    workload_id: null
+    outcome:
+      success_criteria: []
+    scope:
+      targets: []
+    authorization:
+      actions: []
+    execution:
+      context: hub
+      implementation_mode: none
+      source_preference: primary_and_authoritative
+      freshness_required: true
+    policies:
+      commit: prohibited
+      push: prohibited
+      pull_request: prohibited
+      mutation: prohibited
+  status:
+    evidence: []
+    blockers: []
+
+states:
+  intake:
+    description: Capture the question, decision supported, audience, and desired depth.
+    exit_gates: [research-question-bounded]
+  scoped:
+    description: Define repositories, environments, external sources, freshness, and explicit non-goals.
+    exit_gates: [source-plan-complete]
+  designed:
+    description: Split independent research tracks and define the claim/evidence model.
+    exit_gates: [research-plan-ready]
+  authorized:
+    description: Confirm access to authenticated, remote, live, or sensitive sources.
+    exit_gates: [source-access-authorized]
+  executing:
+    description: Trace actual repository entrypoints and gather authoritative external or live evidence.
+    exit_gates: [source-ledger-complete]
+  validating:
+    description: Cross-check material claims, contradictions, dates, scope, and implementation ownership.
+    exit_gates: [claims-reviewed]
+  review_ready:
+    description: Produce a decision brief, detailed findings, open questions, and linked follow-up tasks.
+    exit_gates: [research-package-complete]
+  closed:
+    description: Record the decision, freshness window, and follow-up ownership.
+    terminal: true
+  blocked:
+    description: Required source access, boundary, or authority is unavailable.
+  cancelled:
+    description: Research was intentionally stopped.
+    terminal: true
+
+transitions:
+  intake: [scoped, blocked, cancelled]
+  scoped: [designed, intake, blocked, cancelled]
+  designed: [authorized, scoped, blocked, cancelled]
+  authorized: [executing, designed, blocked, cancelled]
+  executing: [validating, scoped, blocked, cancelled]
+  validating: [review_ready, executing, blocked]
+  review_ready: [closed, executing, validating, blocked]
+  blocked: [scoped, authorized, executing, cancelled]
+
+default_repo_roles:
+  subject_repository:
+    required: conditional
+    condition: question_depends_on_implementation
+    selector: repository_owning_subject
+    execution_context: hub_worker
+    persistent_task: false
+    responsibilities:
+      - trace entrypoints and configuration flow
+      - cite exact files and ownership boundaries
+  deployment_composition:
+    required: conditional
+    condition: question_depends_on_deployment_or_airgap_flow
+    selector: deployment_composition_repository
+    execution_context: hub_worker
+    persistent_task: false
+    responsibilities:
+      - trace package, registry, install, and upgrade flow
+      - identify declared security boundaries
+  charts:
+    required: conditional
+    condition: helm_or_kubernetes_behavior_is_material
+    selector: charts
+    execution_context: hub_worker
+    persistent_task: false
+    responsibilities:
+      - trace values, templates, dependencies, and rendered behavior
+  live_environment:
+    required: conditional
+    condition: user_requests_current_deployed_state
+    selector: authorized_target_environment
+    execution_context: remote_environment
+    persistent_task: conditional
+    responsibilities:
+      - collect bounded live observations
+      - compare declared and deployed behavior
+  external_sources:
+    required: conditional
+    condition: current_or_external_facts_are_material
+    selector: primary_authoritative_sources
+    execution_context: web_or_connector
+    persistent_task: false
+    responsibilities:
+      - record source URL, publisher, publication date, and access date
+      - flag secondary or conflicting claims
+
+gates:
+  research-question-bounded:
+    blocking: true
+    required_fields: [spec.outcome.description]
+    requires:
+      - concrete question and decision supported
+      - intended audience and acceptable freshness
+  source-plan-complete:
+    blocking: true
+    required_fields: [spec.scope.targets]
+    requires:
+      - relevant local repos and documents
+      - authoritative external source plan when needed
+      - live-versus-declared distinction
+  research-plan-ready:
+    blocking: true
+    required_fields: [status.units]
+    requires:
+      - independent tracks with no ambiguous ownership
+      - claim classification and citation format
+  source-access-authorized:
+    blocking: true
+    required_fields: [spec.authorization.actions]
+    requires:
+      - authenticated, live, remote, and sensitive access explicitly classified
+  source-ledger-complete:
+    blocking: true
+    required_fields: [status.evidence]
+    requires:
+      - every material source recorded with date and scope
+      - unavailable or inaccessible sources recorded as gaps
+  claims-reviewed:
+    blocking: true
+    required_fields: [status.evidence, status.checks]
+    requires:
+      - facts separated from inference, assumptions, and unknowns
+      - conflicting sources reconciled or exposed
+      - source configuration not represented as live runtime proof
+  research-package-complete:
+    blocking: true
+    required_fields: [status.evidence, status.risks]
+    requires:
+      - concise decision brief
+      - detailed implementation trace or findings
+      - source ledger, confidence, gaps, and refresh recommendation
+
+approval_boundaries:
+  read_local_sources: {policy: automatic, rationale: Read-only repository research is within task scope.}
+  browse_public_sources: {policy: automatic, rationale: Current authoritative sources are required for changing facts.}
+  access_authenticated_source: {policy: explicit_user_authorization, rationale: Use logged-in or restricted systems only when authorized.}
+  inspect_live_environment: {policy: explicit_user_authorization, rationale: Live inspection can expose sensitive operational state.}
+  write_repo_or_environment: {policy: prohibited, rationale: Research is read-only; create a linked implementation task instead.}
+  contact_external_people: {policy: explicit_user_authorization, rationale: External communications are separate actions.}
+
+expected_evidence:
+  source_ledger:
+    category: source_ledger
+    required: true
+    producer_role: coordinator
+    description: Sources with ownership, location, date, authority, scope, and access state.
+  claim_matrix:
+    category: research_analysis
+    required: true
+    producer_role: coordinator
+    description: Material claims classified as observed fact, inference, assumption, or unknown.
+  implementation_trace:
+    category: repository_trace
+    required: conditional
+    producer_role: subject_repository
+    description: End-to-end code, configuration, chart, and ownership path.
+  live_comparison:
+    category: runtime_observation
+    required: conditional
+    producer_role: live_environment
+    description: Declared-versus-deployed comparison with exact observation time.
+  contradiction_log:
+    category: research_analysis
+    required: true
+    producer_role: coordinator
+    description: Conflicts, uncertainty, gaps, and how each affects confidence.
+  decision_brief:
+    category: report
+    required: true
+    producer_role: coordinator
+    description: Answer, implications, recommended next action, and refresh date.
+

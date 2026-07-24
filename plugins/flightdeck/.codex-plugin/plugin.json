@@ -1,0 +1,26 @@
+{
+  "name": "flightdeck",
+  "version": "0.1.0+codex.20260724172520",
+  "description": "Coordinate portable multi-repository engineering, operations, research, artifacts, and compliance work.",
+  "author": {
+    "name": "Flightdeck Maintainers"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Flightdeck",
+    "shortDescription": "Portable multi-project engineering coordination",
+    "longDescription": "Generates a local control plane, bulk-configures safe repository bridges, resolves exact project paths to opaque runtime IDs without conflating logical keys, preserves approval boundaries, validates workspace health, and provides reusable engineering, automation, artifact, compliance, and STIG workflows.",
+    "developerName": "Flightdeck Maintainers",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Set up a portable Flightdeck workspace.",
+      "Configure bridge repos from the Hub declarations.",
+      "Route this task to its owning project."
+    ]
+  }
+}

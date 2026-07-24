@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/local-repositories.schema.json",
+  "title": "Local Repository Registry",
+  "type": "object",
+  "required": ["api_version", "kind", "repositories"],
+  "properties": {
+    "api_version": {"const": "flightdeck.dev/v1alpha1"},
+    "kind": {"const": "LocalRepositoryRegistry"},
+    "repositories": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "local_path",
+          "provider",
+          "locator",
+          "owner",
+          "default_branch",
+          "default_branch_verified",
+          "workload_ids",
+          "bridge_profile",
+          "bridge_mode",
+          "codex_project_key",
+          "codex_project_expectation"
+        ],
+        "properties": {
+          "default_branch_verified": {"const": true},
+          "bridge_mode": {"enum": ["reference", "materialized", "repo-native"]},
+          "codex_project_key": {
+            "type": "string",
+            "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
+          },
+          "codex_project_expectation": {"const": "saved_exact_path"}
+        }
+      }
+    }
+  }
+}

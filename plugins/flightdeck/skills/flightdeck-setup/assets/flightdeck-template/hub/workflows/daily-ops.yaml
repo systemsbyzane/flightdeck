@@ -1,0 +1,210 @@
+api_version: flightdeck.dev/v1alpha1
+kind: WorkflowAdapter
+
+metadata:
+  name: daily-ops
+  display_name: Daily Operations
+  description: >-
+    Produce one read-only operational view of repository, GitHub, instruction,
+    task, VM, cluster, patch, and research health before any corrective action.
+
+task_type: daily-ops
+supported_workloads:
+  - development
+  - charts
+  - patching
+  - research
+  - environments
+  - operations
+  - compliance
+initial_state: intake
+
+required_fields:
+  - metadata.id
+  - metadata.title
+  - spec.type
+  - spec.workload_id
+  - spec.outcome.description
+  - status.state
+  - status.history
+
+task_defaults:
+  spec:
+    type: daily-ops
+    workload_id: null
+    outcome:
+      success_criteria: []
+    scope:
+      targets: []
+    authorization:
+      actions: []
+    execution:
+      context: hub
+      implementation_mode: none
+      output_mode: status_report
+    policies:
+      commit: prohibited
+      push: prohibited
+      pull_request: prohibited
+      mutation: prohibited
+  status:
+    evidence: []
+    blockers: []
+
+states:
+  intake:
+    description: Select whole-hub or workload-scoped health coverage.
+    exit_gates: [scope-selected]
+  scoped:
+    description: Resolve repositories, GitHub surfaces, tasks, VM, and cluster checks.
+    exit_gates: [checks-planned]
+  authorized:
+    description: Confirm access to remote, GitHub, or sensitive program status sources.
+    exit_gates: [read-access-authorized]
+  executing:
+    description: Collect repository, PR, CI, task, bridge, VM, and cluster state without mutation.
+    exit_gates: [inventory-collected]
+  validating:
+    description: Cross-check stale, contradictory, failed, blocked, and actionable state.
+    exit_gates: [status-reconciled]
+  review_ready:
+    description: Rank actionable findings and propose linked tasks without performing mutations.
+    exit_gates: [daily-report-complete]
+  closed:
+    description: Publish the timestamped operational snapshot and owner queue.
+    terminal: true
+  blocked:
+    description: Required read access or a critical inventory source is unavailable.
+  cancelled:
+    description: The operations sweep was intentionally stopped.
+    terminal: true
+
+transitions:
+  intake: [scoped, cancelled]
+  scoped: [authorized, intake, blocked, cancelled]
+  authorized: [executing, scoped, blocked, cancelled]
+  executing: [validating, blocked, cancelled]
+  validating: [review_ready, executing, blocked]
+  review_ready: [closed, executing, blocked]
+  blocked: [authorized, executing, cancelled]
+
+default_repo_roles:
+  workspace_inventory:
+    required: true
+    selector: registered_repositories
+    execution_context: hub
+    persistent_task: false
+    responsibilities:
+      - branch, upstream, dirty, ahead, behind, and unpushed-commit discovery
+      - instruction and bridge health
+  github_inventory:
+    required: conditional
+    condition: github_access_available
+    selector: registered_github_repositories
+    execution_context: github
+    persistent_task: false
+    responsibilities:
+      - open PR, CI, review-thread, and workflow health
+  task_inventory:
+    required: true
+    selector: hub_task_records
+    execution_context: hub
+    persistent_task: false
+    responsibilities:
+      - active, blocked, stale, and approval-waiting tasks
+  remote_health:
+    required: conditional
+    condition: remote_environment_checks_in_scope
+    selector: configured_remote_environment
+    execution_context: remote_environment
+    persistent_task: false
+    responsibilities:
+      - connectivity, disk, Docker, kind, Kubernetes, and validation-lease health
+  patch_research_inventory:
+    required: conditional
+    condition: patching_or_research_in_scope
+    selector: registered_scan_and_research_records
+    execution_context: hub
+    persistent_task: false
+    responsibilities:
+      - latest scan age and critical fixable findings
+      - stale research and follow-up state
+
+gates:
+  scope-selected:
+    blocking: true
+    required_fields: [spec.scope.targets]
+    requires:
+      - whole-hub or explicit workload selection
+      - status cutoff time
+  checks-planned:
+    blocking: true
+    required_fields: [status.units]
+    requires:
+      - repositories and external surfaces enumerated
+      - inaccessible checks marked optional or blocking
+  read-access-authorized:
+    blocking: true
+    required_fields: [spec.authorization.actions]
+    requires:
+      - GitHub, VM, cluster, and sensitive program access classified
+  inventory-collected:
+    blocking: true
+    required_fields: [status.evidence]
+    requires:
+      - both dirty files and unpushed commits checked
+      - failures distinguished from unavailable checks
+      - observations timestamped
+  status-reconciled:
+    blocking: true
+    required_fields: [status.evidence, status.checks]
+    requires:
+      - contradictions and stale state exposed
+      - findings ranked by impact and urgency
+  daily-report-complete:
+    blocking: true
+    required_fields: [status.evidence, status.risks]
+    requires:
+      - concise summary and detailed evidence
+      - explicit waiting-on-user queue
+      - proposed linked tasks for mutations
+
+approval_boundaries:
+  read_local_state: {policy: automatic, rationale: Daily operations is read-only by default.}
+  read_github_state: {policy: automatic_when_connected, rationale: Repository health requires current remote state.}
+  inspect_remote_environment: {policy: task_authorization, rationale: Remote operational inspection should be in scope.}
+  inspect_cluster: {policy: task_authorization, rationale: Cluster reads may expose operational details.}
+  modify_files_or_git: {policy: prohibited, rationale: Open a linked maintenance or implementation task.}
+  modify_github_or_cluster: {policy: prohibited, rationale: Findings do not authorize remediation.}
+
+expected_evidence:
+  repository_status:
+    category: repository_inventory
+    required: true
+    producer_role: workspace_inventory
+    description: Branch, upstream, dirty, ahead/behind, and unpushed-commit state per repo.
+  instruction_health:
+    category: governance_check
+    required: true
+    producer_role: workspace_inventory
+    description: Active instruction file, shadowing, bridge hash, and required-policy reachability.
+  github_status:
+    category: github_inventory
+    required: conditional
+    producer_role: github_inventory
+    description: Open PRs, checks, unresolved review threads, and failed workflows.
+  task_status:
+    category: task_inventory
+    required: true
+    producer_role: task_inventory
+    description: Active, blocked, stale, approval-waiting, and incomplete tasks.
+  remote_runtime_status:
+    category: runtime_observation
+    required: conditional
+    producer_role: remote_health
+    description: Timestamped connectivity, disk, runtime, cluster, and lease state.
+  action_queue:
+    category: report
+    required: true
+    producer_role: coordinator
+    description: Prioritized findings, owners, blockers, and proposed linked tasks.

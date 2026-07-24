@@ -1,0 +1,4 @@
+interface:
+  display_name: "Flightdeck Research"
+  short_description: "Run evidence-led technical research"
+  default_prompt: "Use $flightdeck-research to produce a source-ledger-backed decision brief."

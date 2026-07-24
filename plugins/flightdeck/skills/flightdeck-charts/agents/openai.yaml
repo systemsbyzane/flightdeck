@@ -1,0 +1,4 @@
+interface:
+  display_name: "Flightdeck Charts"
+  short_description: "Review Helm and manifest changes safely"
+  default_prompt: "Use $flightdeck-charts to review and route this Helm or manifest change with explicit deployment gates."

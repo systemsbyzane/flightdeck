@@ -1,0 +1,257 @@
+api_version: flightdeck.dev/v1alpha1
+kind: FlightdeckRegistry
+schema: hub/schemas/flightdeck.schema.json
+
+metadata:
+  name: flightdeck
+  description: Portable workspace topology, ownership, routing, and safety policy.
+
+workspace:
+  root: "__FLIGHTDECK_ROOT__"
+  coordination_project_key: flightdeck
+  task_records_root: hub/tasks
+  report_root: hub/reports
+  policy_root: docs
+  local_registry: hub/state/repositories.yaml
+  bridge_registry: hub/state/bridges.yaml
+  repository_declarations: hub/repositories.yaml
+  project_registry: hub/state/projects.yaml
+  bridge_setup_receipt: hub/state/bridge-repos.json
+  implementation_policy: repository_project_only
+  runtime_state_policy: discover_and_record_in_task
+  sensitive_artifact_roots:
+    - compliance
+
+workloads:
+  development:
+    display_name: Development
+    path: development
+    default_project_key: development
+    description: Application, service, backend, frontend, and multi-repository work.
+    repository_ids: []
+    default_workflows: [development, research, daily-ops]
+    implementation_boundary: owning_repository
+    dynamic_repositories:
+      allowed: true
+      clone_root: development
+      registration_required: true
+      project_per_repository: true
+  charts:
+    display_name: Charts and Manifests
+    path: charts
+    default_project_key: charts
+    description: Helm, YAML, deployment, and rendered manifest work.
+    repository_ids: []
+    default_workflows: [charts, research, daily-ops]
+    implementation_boundary: owning_repository
+    dynamic_repositories:
+      allowed: true
+      clone_root: charts
+      registration_required: true
+      project_per_repository: true
+  patching:
+    display_name: Image Patching
+    path: patching
+    default_project_key: patching
+    description: Image source, dependency, SBOM, and vulnerability remediation work.
+    repository_ids: []
+    default_workflows: [patching, research, daily-ops]
+    implementation_boundary: owning_repository
+    dynamic_repositories:
+      allowed: true
+      clone_root: patching
+      registration_required: true
+      project_per_repository: true
+  research:
+    display_name: Research
+    path: research
+    default_project_key: research
+    description: Durable source-ledger-backed technical research.
+    repository_ids: []
+    default_workflows: [research, daily-ops]
+    implementation_boundary: program_workspace
+  environments:
+    display_name: Environments
+    path: environments
+    default_project_key: environments
+    description: Platform, runtime, and remote validation coordination.
+    repository_ids: []
+    default_workflows: [research, daily-ops]
+    implementation_boundary: owning_repository
+  operations:
+    display_name: Daily Operations
+    path: operations
+    default_project_key: operations
+    description: Read-only workspace, task, repository, and governance health.
+    repository_ids: []
+    default_workflows: [daily-ops]
+    implementation_boundary: coordination_only
+  compliance:
+    display_name: Compliance
+    path: compliance
+    default_project_key: compliance
+    description: Isolated evidence-backed program workspaces.
+    repository_ids: []
+    default_workflows: [compliance, research, daily-ops]
+    implementation_boundary: program_workspace
+    dynamic_programs:
+      allowed: true
+      template_path: compliance/_program-template
+      program_root: compliance
+      project_per_program: true
+
+repositories: {}
+
+codex_projects:
+  flightdeck:
+    display_name: Flightdeck
+    context: local
+    path: "__FLIGHTDECK_ROOT__"
+    role: coordination
+    required: true
+  development:
+    display_name: Development
+    context: local
+    path: "__FLIGHTDECK_ROOT__/development"
+    role: workload_coordination
+    workload_id: development
+    required: false
+  charts:
+    display_name: Charts and Manifests
+    context: local
+    path: "__FLIGHTDECK_ROOT__/charts"
+    role: workload_coordination
+    workload_id: charts
+    required: false
+  patching:
+    display_name: Image Patching
+    context: local
+    path: "__FLIGHTDECK_ROOT__/patching"
+    role: workload_coordination
+    workload_id: patching
+    required: false
+  research:
+    display_name: Research
+    context: local
+    path: "__FLIGHTDECK_ROOT__/research"
+    role: program_workspace
+    workload_id: research
+    required: false
+  environments:
+    display_name: Environments
+    context: local
+    path: "__FLIGHTDECK_ROOT__/environments"
+    role: workload_coordination
+    workload_id: environments
+    required: false
+  operations:
+    display_name: Daily Operations
+    context: local
+    path: "__FLIGHTDECK_ROOT__/operations"
+    role: workload_coordination
+    workload_id: operations
+    required: false
+  compliance:
+    display_name: Compliance
+    context: local
+    path: "__FLIGHTDECK_ROOT__/compliance"
+    role: workload_coordination
+    workload_id: compliance
+    required: false
+
+providers:
+  github:
+    kind: github
+    host: github.com
+    locator_format: namespace/name
+    metadata_tool: gh
+    clone_transport: git
+  gitlab:
+    kind: gitlab
+    host: gitlab.com
+    locator_format: namespace/name
+    metadata_tool: glab
+    clone_transport: git
+  bitbucket:
+    kind: bitbucket
+    host: bitbucket.org
+    locator_format: workspace/name
+    metadata_tool: api_or_git
+    clone_transport: git
+  git:
+    kind: git
+    locator_format: absolute_git_url
+    metadata_tool: git
+    clone_transport: git
+  existing-local:
+    kind: existing_local
+    locator_format: absolute_path
+    metadata_tool: git
+    clone_transport: none
+  remote-validation:
+    kind: remote_validation
+    locator_format: configured_remote_project
+    metadata_tool: codex_project
+    clone_transport: none
+
+environments:
+  local:
+    display_name: Local Workstation
+    kind: workstation
+    purpose: [source_authoring, git_operations, local_validation]
+    connection:
+      type: local
+  remote-validation:
+    display_name: Remote Validation
+    kind: remote_host
+    purpose: [image_build, runtime_inspection, deployment_validation]
+    connection:
+      type: configured_project
+
+workflow_adapters:
+  development: hub/workflows/development.yaml
+  charts: hub/workflows/charts.yaml
+  patching: hub/workflows/patching.yaml
+  research: hub/workflows/research.yaml
+  daily-ops: hub/workflows/daily-ops.yaml
+  compliance: hub/workflows/compliance.yaml
+
+automation_templates:
+  root: hub/automations
+  activation_policy: explicit_user_enablement
+  default_enabled: false
+
+routing:
+  default_coordination_project_key: flightdeck
+  task_launch_policy: automatic
+  dispatch_gate: before_project_work
+  dispatch_receipt_policy: required
+  post_dispatch_policy: return_without_monitoring
+  monitoring_policy: user_initiated_only
+  existing_task_policy: resume_matching
+  project_registration_policy: capability_detect_then_verify
+  dynamic_repository_policy: resolve_clone_verify_bridge_register_launch
+  launch_failure_policy: one_manual_action_after_verified_retry
+  mode_defaults:
+    read_only: local
+    repository_implementation: worktree
+    workload_implementation: local
+    program_workspace: local
+    runtime_validation: local
+    coordination: local
+  rules:
+    - id: implementation-in-owning-repository
+      match: implementation_change
+      route: repository_project
+    - id: isolated-repository-change
+      match: isolated_or_parallel_implementation
+      route: repository_worktree
+    - id: program-workspace-artifact
+      match: compliance_or_program_artifact
+      route: program_workspace
+    - id: runtime-validation
+      match: durable_runtime_validation
+      route: remote_environment
+    - id: coordination-only
+      match: ownership_routing_and_sequencing
+      route: hub_worker

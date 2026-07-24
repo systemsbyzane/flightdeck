@@ -1,0 +1,35 @@
+api_version: flightdeck.dev/v1alpha1
+kind: ProjectHandoff
+metadata:
+  id: example-handoff
+  title: Example owning-project handoff
+route:
+  workflow_id: development
+  target_project: Example Project
+  target_path: /absolute/path/to/project
+  mode: worktree
+  existing_task_search: required
+request:
+  outcome: Replace with the concrete desired outcome.
+  scope: []
+  non_goals: []
+  primary_evidence: []
+authorization:
+  allowed_local_actions: []
+  external_actions_requiring_approval:
+    - commit
+    - push
+    - pull_request
+    - deployment
+    - external_communication
+prompt:
+  read_first: []
+  instructions: Replace with a self-contained owning-project prompt.
+  return_contract: Replace with exact evidence and status expected by the Hub.
+linking:
+  bootstrap: capability_detect_register_verify_then_launch
+  fallback: one_manual_action_after_verified_retry
+  post_dispatch: return_without_monitoring
+  monitoring: user_initiated_only
+  runtime_registry: hub/state/thread-links.yaml
+

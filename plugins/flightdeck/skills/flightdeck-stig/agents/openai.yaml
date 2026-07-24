@@ -1,0 +1,4 @@
+interface:
+  display_name: "Flightdeck STIG"
+  short_description: "Evaluate STIGs and manage CKL files"
+  default_prompt: "Use $flightdeck-stig to evaluate this rule read-only and produce conservative CKL-ready evidence."

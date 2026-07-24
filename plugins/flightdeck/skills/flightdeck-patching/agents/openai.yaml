@@ -1,0 +1,4 @@
+interface:
+  display_name: "Flightdeck Patching"
+  short_description: "Patch images without contract regressions"
+  default_prompt: "Use $flightdeck-patching to plan this patch while preserving downstream runtime contracts."

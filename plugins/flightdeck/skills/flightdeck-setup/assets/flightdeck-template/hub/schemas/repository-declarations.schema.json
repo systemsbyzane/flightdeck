@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/repository-declarations.schema.json",
+  "title": "Repository Declarations",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_version", "kind", "schema", "repositories"],
+  "properties": {
+    "api_version": {"const": "flightdeck.dev/v1alpha1"},
+    "kind": {"const": "RepositoryDeclarations"},
+    "schema": {"const": "hub/schemas/repository-declarations.schema.json"},
+    "repositories": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/repository"}
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "workload",
+        "provider",
+        "locator",
+        "local_path",
+        "owner",
+        "default_branch",
+        "default_branch_verified",
+        "bridge",
+        "codex_project"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "workload": {"$ref": "#/$defs/id"},
+        "provider": {
+          "enum": ["github", "gitlab", "bitbucket", "git", "existing-local"]
+        },
+        "locator": {"type": "string", "minLength": 1},
+        "local_path": {"$ref": "#/$defs/relativePath"},
+        "owner": {"type": "string", "minLength": 1},
+        "default_branch": {"type": "string", "minLength": 1},
+        "default_branch_verified": {"const": true},
+        "bridge": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["profile", "mode"],
+          "properties": {
+            "profile": {"$ref": "#/$defs/id"},
+            "mode": {"enum": ["reference", "materialized", "repo-native"]}
+          }
+        },
+        "codex_project": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["expectation", "logical_key"],
+          "properties": {
+            "expectation": {"const": "saved_exact_path"},
+            "logical_key": {
+              "$ref": "#/$defs/id",
+              "description": "Stable Hub-owned key. This is never a Codex runtime projectId."
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "findings": [
+    {
+      "comments": "Synthetic evidence: the configured value was inspected.",
+      "finding_details": [
+        "Synthetic fixture only",
+        "No operational claim"
+      ],
+      "status": "NotAFinding",
+      "vuln_id": "V-000001"
+    },
+    {
+      "comments": "Synthetic evidence was unavailable.",
+      "finding_details": "Manual follow-up is required.",
+      "status": "Not_Reviewed",
+      "vuln_id": "V-000002"
+    }
+  ]
+}

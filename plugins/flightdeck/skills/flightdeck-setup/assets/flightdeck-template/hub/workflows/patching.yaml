@@ -1,0 +1,263 @@
+api_version: flightdeck.dev/v1alpha1
+kind: WorkflowAdapter
+
+metadata:
+  name: patching
+  display_name: Image Patching
+  description: >-
+    Trace, patch, validate, and prepare delivery of a vulnerable image while
+    preserving downstream runtime contracts and repository ownership.
+
+task_type: patching
+supported_workloads:
+  - patching
+initial_state: intake
+
+required_fields:
+  - metadata.id
+  - metadata.title
+  - spec.type
+  - spec.workload_id
+  - spec.outcome.description
+  - status.state
+  - status.history
+
+task_defaults:
+  spec:
+    type: patching
+    workload_id: patching
+    outcome:
+      success_criteria: []
+    scope:
+      targets: []
+    authorization:
+      actions: []
+    execution:
+      context: hub
+      implementation_mode: worktree
+      restore_validation_environment: true
+    policies:
+      commit: explicit_user_authorization
+      push: explicit_user_authorization
+      pull_request: explicit_user_authorization
+  status:
+    evidence: []
+    blockers: []
+
+states:
+  intake:
+    description: Capture the vulnerable image, scan source, desired outcome, and authorization boundary.
+    exit_gates:
+      - patch-target-known
+  scoped:
+    description: Resolve image ownership, Dockerfile/build context, fixed package path, and consumers.
+    exit_gates:
+      - source-ownership-resolved
+      - vulnerability-reproduced
+  designed:
+    description: Select the smallest safe patch and document runtime-contract and downstream impact.
+    exit_gates:
+      - compatibility-plan-approved
+  authorized:
+    description: Confirm permitted edits, builds, scans, commits, pushes, PRs, and deployments.
+    exit_gates:
+      - mutation-scope-authorized
+  executing:
+    description: Patch in the owning repo and prepare conditional downstream changes.
+    exit_gates:
+      - source-change-complete
+  validation_ready:
+    description: Pin exact candidate inputs and prepare an isolated validation run.
+    exit_gates:
+      - validation-inputs-pinned
+  validating:
+    description: Build, rescan, compare SBOM and runtime contracts, and run required smoke tests.
+    exit_gates:
+      - patch-validation-passed
+      - validation-environment-dispositioned
+  review_ready:
+    description: Assemble the patch evidence packet and identify residual or unfixed risk.
+    exit_gates:
+      - review-evidence-complete
+  closed:
+    description: Record final outcome, delivery state, and follow-up ownership.
+    terminal: true
+  blocked:
+    description: Progress cannot continue without missing authority, source, fix, or external state.
+  cancelled:
+    description: The patch task was intentionally stopped without delivery.
+    terminal: true
+  rollback_required:
+    description: Validation or rollout exposed a regression requiring restoration or remediation.
+
+transitions:
+  intake: [scoped, blocked, cancelled]
+  scoped: [designed, blocked, cancelled]
+  designed: [authorized, scoped, blocked, cancelled]
+  authorized: [executing, designed, blocked, cancelled]
+  executing: [validation_ready, blocked, cancelled]
+  validation_ready: [validating, executing, blocked, cancelled]
+  validating: [review_ready, executing, rollback_required, blocked]
+  review_ready: [closed, executing, validating, blocked]
+  rollback_required: [executing, closed, blocked]
+  blocked: [scoped, designed, authorized, executing, validating, cancelled]
+
+default_repo_roles:
+  image_source:
+    required: true
+    selector: repository_that_builds_target_image
+    execution_context: repository_worktree
+    persistent_task: true
+    responsibilities:
+      - Dockerfile and source patch
+      - build and repository tests
+      - SBOM and vulnerability rescan
+      - runtime-contract comparison
+  chart_consumer:
+    required: conditional
+    condition: chart_or_image_metadata_changes
+    selector: repository_with_consuming_chart
+    execution_context: repository_worktree
+    persistent_task: true
+    responsibilities:
+      - image tag or digest update
+      - rendered manifest review
+      - upgrade compatibility
+  product_consumer:
+    required: conditional
+    condition: product_or_program_pin_changes
+    selector: repository_with_product_or_program_pin
+    execution_context: repository_worktree
+    persistent_task: true
+    responsibilities:
+      - product composition update
+      - airgap or customer pin coordination
+  runtime_validation:
+    required: conditional
+    condition: runtime_behavior_cannot_be_proven_locally
+    selector: compatible_validation_environment
+    execution_context: remote_environment
+    persistent_task: true
+    responsibilities:
+      - exact-input image build
+      - isolated rollout and smoke tests
+      - baseline capture and restoration
+
+gates:
+  patch-target-known:
+    blocking: true
+    required_fields: [spec.scope.targets]
+    requires:
+      - target image name and current tag or digest
+      - source scan artifact or reproducible finding
+  source-ownership-resolved:
+    blocking: true
+    required_fields: [status.evidence]
+    requires:
+      - owning repository or explicit external-image decision
+      - Dockerfile and build context when the organization builds the image
+      - chart, product, program, and airgap consumers considered
+  vulnerability-reproduced:
+    blocking: true
+    required_fields: [status.evidence]
+    requires:
+      - vulnerable package and installed version
+      - fixed version or documented no-fix state
+  compatibility-plan-approved:
+    blocking: true
+    required_fields: [status.risks]
+    requires:
+      - base family and runtime-version impact
+      - UID/GID, entrypoint, ports, paths, probes, and trust-store impact
+      - rollback image or restoration path
+  mutation-scope-authorized:
+    blocking: true
+    required_fields: [spec.authorization.actions]
+    requires:
+      - explicit task authorization for every mutation category
+  source-change-complete:
+    blocking: true
+    required_fields: [status.units, status.checks]
+    requires:
+      - smallest coherent owning-repo change
+      - required conditional consumer tasks created or ruled out
+  validation-inputs-pinned:
+    blocking: true
+    required_fields: [status.units]
+    requires:
+      - exact repository refs and candidate image identity in the task record
+      - isolated validation plan
+  patch-validation-passed:
+    blocking: true
+    required_fields: [status.evidence, status.checks]
+    requires:
+      - successful image build
+      - before and after scan comparison
+      - SBOM generated or justified
+      - repository and runtime checks passed or explicitly risk-accepted
+  validation-environment-dispositioned:
+    blocking: true
+    required_fields: [status.evidence]
+    requires:
+      - prior deployment restored or retained with owner and expiry
+  review-evidence-complete:
+    blocking: true
+    required_fields: [status.evidence, status.risks]
+    requires:
+      - residual vulnerabilities and compatibility risks
+      - exact checks, artifacts, digests, and downstream changes
+
+approval_boundaries:
+  read_local_sources: {policy: automatic, rationale: Read-only discovery is within task scope.}
+  read_public_advisories: {policy: automatic, rationale: Authoritative research supports triage.}
+  clone_repository: {policy: task_authorization, rationale: Clone only the resolved owning repository under patching.}
+  edit_files: {policy: task_authorization, rationale: Limit edits to owning repositories recorded by the task.}
+  build_and_scan: {policy: task_authorization, rationale: Builds and scans may consume local or VM resources.}
+  commit: {policy: explicit_user_authorization, rationale: Hub policy never infers commit authority.}
+  push: {policy: explicit_user_authorization, rationale: Pushing changes external state.}
+  open_or_update_pr: {policy: explicit_user_authorization, rationale: PR publication is an external write.}
+  mutate_cluster: {policy: explicit_user_authorization, rationale: Shared runtime state requires an explicit gate.}
+  accept_residual_risk: {policy: explicit_human_approval, rationale: Risk acceptance is not an agent decision.}
+
+expected_evidence:
+  ownership_trace:
+    category: ownership
+    required: true
+    producer_role: image_source
+    description: Image-to-repo-to-Dockerfile-to-consumer ownership map.
+  source_scan:
+    category: scan_artifact
+    required: true
+    producer_role: image_source
+    description: Original vulnerability evidence with package, version, severity, and fixability.
+  compatibility_matrix:
+    category: contract_review
+    required: true
+    producer_role: image_source
+    description: Before and after runtime-contract comparison.
+  patched_build:
+    category: build_result
+    required: true
+    producer_role: image_source
+    description: Build command, result, image tag, immutable digest, and architecture.
+  patched_sbom:
+    category: sbom
+    required: conditional
+    producer_role: image_source
+    description: Candidate SBOM or documented reason it cannot be generated.
+  scan_comparison:
+    category: scan_artifact
+    required: true
+    producer_role: image_source
+    description: Before and after vulnerability counts and residual findings.
+  consumer_changes:
+    category: downstream_trace
+    required: conditional
+    producer_role: chart_consumer
+    description: Chart, product, customer, and airgap pin changes or explicit no-change evidence.
+  runtime_validation:
+    category: runtime_observation
+    required: conditional
+    producer_role: runtime_validation
+    description: Smoke tests, logs, probes, exact deployed digest, and environment restoration.
+

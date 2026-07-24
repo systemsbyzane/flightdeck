@@ -1,0 +1,717 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/flightdeck.schema.json",
+  "title": "Flightdeck Registry",
+  "description": "Stable workspace topology and routing facts. Runtime branch, SHA, dirty-state, PR, and deployment data belong in task records or doctor output.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "api_version",
+    "kind",
+    "schema",
+    "metadata",
+    "workspace",
+    "workloads",
+    "repositories",
+    "codex_projects",
+    "providers",
+    "environments",
+    "workflow_adapters",
+    "automation_templates",
+    "routing"
+  ],
+  "properties": {
+    "api_version": {
+      "const": "flightdeck.dev/v1alpha1"
+    },
+    "kind": {
+      "const": "FlightdeckRegistry"
+    },
+    "schema": {
+      "const": "hub/schemas/flightdeck.schema.json"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "description"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "coordination_project_key",
+        "task_records_root",
+        "policy_root",
+        "bridge_registry",
+        "local_registry",
+        "repository_declarations",
+        "project_registry",
+        "bridge_setup_receipt",
+        "report_root",
+        "implementation_policy",
+        "runtime_state_policy",
+        "sensitive_artifact_roots"
+      ],
+      "properties": {
+        "root": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "coordination_project_key": {
+          "type": "string",
+          "$ref": "#/$defs/id"
+        },
+        "task_records_root": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "policy_root": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "implementation_policy": {
+          "const": "repository_project_only"
+        },
+        "runtime_state_policy": {
+          "const": "discover_and_record_in_task"
+        },
+        "sensitive_artifact_roots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "uniqueItems": true
+        },
+        "report_root": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "local_registry": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "bridge_registry": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "repository_declarations": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "project_registry": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "bridge_setup_receipt": {
+          "$ref": "#/$defs/relativePath"
+        }
+      }
+    },
+    "workloads": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/workload"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/id"
+      }
+    },
+    "repositories": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/repository"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/id"
+      }
+    },
+    "codex_projects": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/codexProject"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/id"
+      }
+    },
+    "environments": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/environment"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/id"
+      }
+    },
+    "workflow_adapters": {
+      "type": "object",
+      "required": [
+        "development",
+        "charts",
+        "patching",
+        "research",
+        "daily-ops",
+        "compliance"
+      ],
+      "additionalProperties": {
+        "$ref": "#/$defs/relativePath"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/id"
+      }
+    },
+    "automation_templates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "activation_policy",
+        "default_enabled"
+      ],
+      "properties": {
+        "root": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "activation_policy": {
+          "const": "explicit_user_enablement"
+        },
+        "default_enabled": {
+          "const": false
+        }
+      }
+    },
+    "routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "default_coordination_project_key",
+        "task_launch_policy",
+        "dispatch_gate",
+        "dispatch_receipt_policy",
+        "post_dispatch_policy",
+        "monitoring_policy",
+        "existing_task_policy",
+        "project_registration_policy",
+        "dynamic_repository_policy",
+        "launch_failure_policy",
+        "mode_defaults",
+        "rules"
+      ],
+      "properties": {
+        "default_coordination_project_key": {
+          "$ref": "#/$defs/id"
+        },
+        "task_launch_policy": {
+          "const": "automatic"
+        },
+        "dispatch_gate": {
+          "const": "before_project_work"
+        },
+        "dispatch_receipt_policy": {
+          "const": "required"
+        },
+        "post_dispatch_policy": {
+          "const": "return_without_monitoring"
+        },
+        "monitoring_policy": {
+          "const": "user_initiated_only"
+        },
+        "existing_task_policy": {
+          "const": "resume_matching"
+        },
+        "project_registration_policy": {
+          "const": "capability_detect_then_verify"
+        },
+        "dynamic_repository_policy": {
+          "const": "resolve_clone_verify_bridge_register_launch"
+        },
+        "launch_failure_policy": {
+          "const": "one_manual_action_after_verified_retry"
+        },
+        "mode_defaults": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "read_only",
+            "repository_implementation",
+            "workload_implementation",
+            "program_workspace",
+            "runtime_validation",
+            "coordination"
+          ],
+          "properties": {
+            "read_only": {
+              "enum": [
+                "local",
+                "worktree"
+              ]
+            },
+            "repository_implementation": {
+              "enum": [
+                "local",
+                "worktree"
+              ]
+            },
+            "workload_implementation": {
+              "enum": [
+                "local",
+                "worktree"
+              ]
+            },
+            "program_workspace": {
+              "enum": [
+                "local",
+                "worktree"
+              ]
+            },
+            "runtime_validation": {
+              "enum": [
+                "local",
+                "worktree"
+              ]
+            },
+            "coordination": {
+              "enum": [
+                "local",
+                "worktree"
+              ]
+            }
+          }
+        },
+        "rules": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "match",
+              "route"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/id"
+              },
+              "match": {
+                "type": "string",
+                "minLength": 1
+              },
+              "route": {
+                "enum": [
+                  "repository_project",
+                  "repository_worktree",
+                  "hub_worker",
+                  "child_project_task",
+                  "remote_environment",
+                  "program_workspace"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "providers": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/provider"
+      },
+      "required": [
+        "github",
+        "gitlab",
+        "bitbucket",
+        "git",
+        "existing-local",
+        "remote-validation"
+      ],
+      "propertyNames": {
+        "$ref": "#/$defs/id"
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "display_name",
+        "path",
+        "description",
+        "repository_ids",
+        "default_workflows",
+        "implementation_boundary"
+      ],
+      "properties": {
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "default_project_key": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repository_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "uniqueItems": true
+        },
+        "default_workflows": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "uniqueItems": true
+        },
+        "implementation_boundary": {
+          "enum": [
+            "owning_repository",
+            "program_workspace",
+            "coordination_only"
+          ]
+        },
+        "dynamic_repositories": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "allowed",
+            "clone_root",
+            "registration_required",
+            "project_per_repository"
+          ],
+          "properties": {
+            "allowed": {
+              "type": "boolean"
+            },
+            "clone_root": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "registration_required": {
+              "type": "boolean"
+            },
+            "project_per_repository": {
+              "type": "boolean"
+            }
+          }
+        },
+        "dynamic_programs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "allowed",
+            "template_path",
+            "program_root",
+            "project_per_program"
+          ],
+          "properties": {
+            "allowed": {
+              "type": "boolean"
+            },
+            "template_path": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "program_root": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "project_per_program": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "display_name",
+        "local_path",
+        "remote_url",
+        "provider",
+        "kind",
+        "workload_ids",
+        "roles",
+        "instructions",
+        "codex_project_key"
+      ],
+      "properties": {
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "local_path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "remote_url": {
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "application",
+            "helm_monorepo",
+            "deployment_composition",
+            "image_collection",
+            "product_composition",
+            "repository"
+          ]
+        },
+        "workload_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "uniqueItems": true
+        },
+        "roles": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "instructions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repo_policy_path",
+            "hub_bridge_required"
+          ],
+          "properties": {
+            "repo_policy_path": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "hub_bridge_required": {
+              "type": "boolean"
+            }
+          }
+        },
+        "codex_project_key": {
+          "$ref": "#/$defs/id"
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "default_branch": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bridge_profile": {
+          "$ref": "#/$defs/id"
+        }
+      }
+    },
+    "codexProject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "display_name",
+        "context",
+        "path",
+        "role",
+        "required"
+      ],
+      "properties": {
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "context": {
+          "enum": [
+            "local",
+            "remote"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "role": {
+          "enum": [
+            "coordination",
+            "workload_coordination",
+            "implementation",
+            "program_workspace",
+            "build_validation",
+            "deployment_validation",
+            "cluster_validation",
+            "runtime_validation"
+          ]
+        },
+        "repository_id": {
+          "$ref": "#/$defs/id"
+        },
+        "workload_id": {
+          "$ref": "#/$defs/id"
+        },
+        "environment_id": {
+          "$ref": "#/$defs/id"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "registration_expectation": {
+          "enum": [
+            "managed",
+            "optional_not_registered"
+          ]
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "display_name",
+        "kind",
+        "purpose",
+        "connection"
+      ],
+      "properties": {
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "workstation",
+            "remote_host",
+            "kubernetes",
+            "service"
+          ]
+        },
+        "purpose": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "connection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "local",
+                "ssh",
+                "kubernetes",
+                "connector_or_cli",
+                "configured_project"
+              ]
+            },
+            "alias": {
+              "type": "string",
+              "minLength": 1
+            },
+            "via_environment": {
+              "$ref": "#/$defs/id"
+            },
+            "cluster_name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "context": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default_namespace": {
+              "type": "string",
+              "minLength": 1
+            },
+            "host": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "locator_format",
+        "metadata_tool",
+        "clone_transport"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "github",
+            "gitlab",
+            "bitbucket",
+            "git",
+            "existing_local",
+            "remote_validation"
+          ]
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1
+        },
+        "locator_format": {
+          "type": "string",
+          "minLength": 1
+        },
+        "metadata_tool": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clone_transport": {
+          "enum": [
+            "git",
+            "none"
+          ]
+        }
+      }
+    }
+  }
+}

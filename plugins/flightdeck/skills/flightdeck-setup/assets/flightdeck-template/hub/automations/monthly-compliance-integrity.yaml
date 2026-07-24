@@ -1,0 +1,26 @@
+api_version: flightdeck.dev/v1alpha1
+kind: AutomationTemplate
+metadata:
+  name: monthly-compliance-integrity
+  display_name: Monthly Compliance Integrity
+enabled: false
+activation:
+  policy: explicit_user_enablement
+  required_confirmation: [program_scope, handling_authority, schedule, timezone]
+schedule:
+  type: cron
+  expression: "0 9 1 * *"
+  timezone: Etc/UTC
+task:
+  workflow: compliance
+  outcome: Report evidence freshness, sidecar parity, and artifact validation gaps.
+authorization:
+  profile: authorized_metadata_only
+  prohibited_actions: [retrieve_unapproved_evidence, change_status, submit, claim_effectiveness, claim_closure]
+output_contract:
+  schema: flightdeck.automation-report/v1
+  source_freshness_required: true
+  stable_finding_key: category_and_scope
+  delta_states: [new, resolved, persistent, blocked]
+  nonzero_diagnostic_policy: finding_not_job_failure
+

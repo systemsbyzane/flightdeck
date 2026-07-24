@@ -1,0 +1,231 @@
+api_version: flightdeck.dev/v1alpha1
+kind: WorkflowAdapter
+
+metadata:
+  name: charts
+  display_name: Helm And Manifest Engineering
+  description: >-
+    Design, render, inspect, validate, and review deployment configuration
+    without weakening repository ownership or shared-environment authority.
+
+task_type: charts
+supported_workloads:
+  - charts
+  - environments
+initial_state: intake
+
+required_fields:
+  - metadata.id
+  - metadata.title
+  - spec.type
+  - spec.workload_id
+  - spec.outcome.description
+  - status.state
+  - status.history
+
+task_defaults:
+  spec:
+    type: charts
+    workload_id: charts
+    outcome:
+      success_criteria: []
+    scope:
+      targets: []
+    authorization:
+      actions: []
+    execution:
+      context: repository_worktree
+      implementation_mode: worktree
+    policies:
+      commit: explicit_user_authorization
+      push: explicit_user_authorization
+      pull_request: explicit_user_authorization
+      cluster_mutation: explicit_user_authorization
+  status:
+    evidence: []
+    blockers: []
+
+states:
+  intake:
+    description: Capture intended deployment outcome, affected releases, environments, and non-goals.
+    exit_gates: [manifest-intent-complete]
+  scoped:
+    description: Resolve owning chart, values, consumers, dependencies, and rollout boundary.
+    exit_gates: [ownership-and-consumers-resolved]
+  designed:
+    description: Review configuration contract, security boundaries, compatibility, upgrade, and rollback.
+    exit_gates: [manifest-design-reviewed]
+  authorized:
+    description: Confirm file-edit and shared-environment mutation boundaries.
+    exit_gates: [manifest-change-authorized]
+  executing:
+    description: Implement the smallest repository-native values or template change.
+    exit_gates: [source-change-complete]
+  validation_ready:
+    description: Pin exact chart, dependency, values, and candidate source inputs.
+    exit_gates: [render-inputs-pinned]
+  validating:
+    description: Lint, render, inspect, test, and compare the exact candidate.
+    exit_gates: [manifest-validation-passed]
+  review_ready:
+    description: Assemble the rendered diff, security review, upgrade evidence, and residual risk.
+    exit_gates: [manifest-review-complete]
+  closed:
+    description: Record delivered source state, evidence, residual risk, and follow-up.
+    terminal: true
+  blocked:
+    description: Progress requires missing ownership, dependency, authority, or environment state.
+  cancelled:
+    description: Manifest work was intentionally stopped.
+    terminal: true
+  rollback_required:
+    description: Candidate validation exposed a compatibility, security, or rollout regression.
+
+transitions:
+  intake: [scoped, blocked, cancelled]
+  scoped: [designed, intake, blocked, cancelled]
+  designed: [authorized, scoped, blocked, cancelled]
+  authorized: [executing, designed, blocked, cancelled]
+  executing: [validation_ready, blocked, cancelled]
+  validation_ready: [validating, executing, blocked]
+  validating: [review_ready, executing, rollback_required, blocked]
+  review_ready: [closed, executing, validating, blocked]
+  rollback_required: [executing, validating, closed, blocked]
+  blocked: [scoped, designed, authorized, executing, validating, cancelled]
+
+default_repo_roles:
+  chart_source:
+    required: true
+    selector: repository_owning_chart_or_manifest
+    execution_context: repository_worktree
+    persistent_task: true
+    responsibilities:
+      - values, schemas, templates, dependencies, and tests
+      - lint, render, semantic diff, and upgrade compatibility
+  application_contract:
+    required: conditional
+    condition: service_contract_or_image_metadata_is_affected
+    selector: application_or_image_owner
+    execution_context: repository_project
+    persistent_task: true
+    responsibilities:
+      - ports, probes, paths, identity, images, and configuration contract
+      - application-side validation and compatibility evidence
+  deployment_composition:
+    required: conditional
+    condition: downstream_values_or_packaging_is_affected
+    selector: deployment_composition_owner
+    execution_context: repository_project
+    persistent_task: true
+    responsibilities:
+      - downstream pins, overlays, packaging, and airgap inputs
+  runtime_validation:
+    required: conditional
+    condition: integrated_runtime_behavior_is_material
+    selector: configured_runtime_environment
+    execution_context: remote_environment
+    persistent_task: true
+    responsibilities:
+      - exact-input rollout inspection and user-flow validation
+      - logs, health, and restoration evidence
+
+gates:
+  manifest-intent-complete:
+    blocking: true
+    required_fields: [spec.outcome.description, spec.outcome.success_criteria]
+    requires:
+      - intended deployment outcome and non-goals
+      - affected release, environment class, and success criteria
+  ownership-and-consumers-resolved:
+    blocking: true
+    required_fields: [spec.scope.targets, status.units]
+    requires:
+      - owning chart or manifest source
+      - affected values, consumers, dependencies, and execution order
+  manifest-design-reviewed:
+    blocking: true
+    required_fields: [status.evidence, status.risks]
+    requires:
+      - values and template contract
+      - identity, RBAC, secrets, network, storage, image, probe, resource, and scheduling review
+      - upgrade, rollback, compatibility, and failure behavior
+  manifest-change-authorized:
+    blocking: true
+    required_fields: [spec.authorization.actions]
+    requires:
+      - explicit edit, commit, push, pull request, and environment mutation policies
+  source-change-complete:
+    blocking: true
+    required_fields: [status.units, status.checks]
+    requires:
+      - repository-native focused checks
+      - generated-file policy honored
+      - skipped checks recorded with impact
+  render-inputs-pinned:
+    blocking: true
+    required_fields: [status.units]
+    requires:
+      - exact candidate ref, dependencies, values, release, and namespace
+      - render inputs derived from candidate source
+  manifest-validation-passed:
+    blocking: true
+    required_fields: [status.evidence, status.checks]
+    requires:
+      - lint, schema, and repository tests
+      - every affected manifest rendered and inspected
+      - semantic diff and security review
+      - runtime validation or explicit documented disposition
+  manifest-review-complete:
+    blocking: true
+    required_fields: [status.evidence, status.risks]
+    requires:
+      - exact source and rendered diff
+      - downstream and upgrade impact
+      - validation evidence, rollback, and residual risk
+
+approval_boundaries:
+  read_and_render: {policy: automatic, rationale: Local source inspection and rendering are read-only.}
+  edit_files: {policy: task_authorization, rationale: Edit only the resolved owning repository.}
+  update_dependencies: {policy: task_authorization, rationale: Dependency changes remain inside the authorized source scope.}
+  commit: {policy: explicit_user_authorization, rationale: Hub policy never infers commit authority.}
+  push: {policy: explicit_user_authorization, rationale: Pushing changes external state.}
+  open_or_update_pr: {policy: explicit_user_authorization, rationale: Pull request publication is an external write.}
+  mutate_environment: {policy: explicit_user_authorization, rationale: Shared runtime state requires an explicit gate.}
+  publish_package: {policy: explicit_user_authorization, rationale: Registry publication is an external write.}
+
+expected_evidence:
+  ownership_trace:
+    category: ownership
+    required: true
+    producer_role: chart_source
+    description: Chart, values, dependency, application, and downstream ownership map.
+  design_review:
+    category: design
+    required: true
+    producer_role: chart_source
+    description: Configuration contract, security boundaries, compatibility, upgrade, and rollback.
+  source_validation:
+    category: test_result
+    required: true
+    producer_role: chart_source
+    description: Lint, schema, unit, and repository-native checks.
+  rendered_manifests:
+    category: manifest_review
+    required: true
+    producer_role: chart_source
+    description: Exact render command, inputs, outputs, semantic diff, and visual or structural inspection.
+  security_review:
+    category: security_review
+    required: true
+    producer_role: chart_source
+    description: Identity, RBAC, secrets, network, storage, image, probe, pod security, and resource review.
+  downstream_validation:
+    category: downstream_trace
+    required: conditional
+    producer_role: deployment_composition
+    description: Affected overlays, pins, packages, environments, and no-change evidence.
+  runtime_validation:
+    category: runtime_observation
+    required: conditional
+    producer_role: runtime_validation
+    description: Exact inputs, rollout, health, logs, user-flow checks, and restoration.

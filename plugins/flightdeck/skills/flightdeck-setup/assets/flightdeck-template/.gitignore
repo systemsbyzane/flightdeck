@@ -1,0 +1,39 @@
+# Generated local control-plane state
+/.flightdeck-local/
+/hub/cache/
+/hub/reports/
+/hub/state/
+/hub/tasks/
+/hub/tmp/
+/handoffs/
+/STATUS.md
+
+# Real workload content is not part of the control-plane repository
+/development/*
+!/development/README.md
+/charts/*
+!/charts/README.md
+/patching/*
+!/patching/README.md
+/research/*
+!/research/README.md
+/environments/*
+!/environments/README.md
+/operations/*
+!/operations/README.md
+/compliance/*
+!/compliance/README.md
+!/compliance/_program-template/
+!/compliance/_program-template/**
+
+# Common local or sensitive files
+**/.DS_Store
+**/.env
+**/.env.*
+**/*.key
+**/*.pem
+**/kubeconfig*
+**/*.log
+**/scan-artifacts/
+**/generated-evidence/
+

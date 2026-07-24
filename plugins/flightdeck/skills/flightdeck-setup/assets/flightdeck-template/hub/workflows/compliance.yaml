@@ -1,0 +1,251 @@
+api_version: flightdeck.dev/v1alpha1
+kind: WorkflowAdapter
+
+metadata:
+  name: compliance
+  display_name: Flexible Program Compliance
+  description: >-
+    Build program-specific compliance drafts from available local, connected,
+    externally held, inaccessible, or missing evidence without inventing claims.
+
+task_type: compliance
+supported_workloads:
+  - compliance
+initial_state: intake
+
+required_fields:
+  - metadata.id
+  - metadata.title
+  - spec.type
+  - spec.workload_id
+  - spec.outcome.description
+  - status.state
+  - status.history
+
+task_defaults:
+  spec:
+    type: compliance
+    workload_id: compliance
+    outcome:
+      success_criteria: []
+    scope:
+      targets: []
+    authorization:
+      actions: []
+    execution:
+      context: program_workspace
+      implementation_mode: local
+      author_reviewer_separation: true
+    policies:
+      commit: explicit_user_authorization
+      push: explicit_user_authorization
+      pull_request: explicit_user_authorization
+      assertion: evidence_required
+      external_submission: explicit_human_approval
+  status:
+    evidence: []
+    blockers: []
+
+states:
+  intake:
+    description: Capture program, desired artifacts, baseline, source templates, and handling constraints.
+    exit_gates: [program-request-complete]
+  scoped:
+    description: Establish authorization boundary, environments, roles, evidence cutoff, and external sources.
+    exit_gates: [program-context-established]
+  designed:
+    description: Select control work units, OSCAL models/version, narrative fields, and QA plan.
+    exit_gates: [artifact-plan-reviewed]
+  authorized:
+    description: Confirm processing authority for each evidence class and connected source.
+    exit_gates: [evidence-processing-authorized]
+  executing:
+    description: Inventory evidence, research implementation, map requirements, and author supported drafts.
+    exit_gates: [draft-package-complete]
+  validating:
+    description: Run independent assessment, workbook QA, sidecar equivalence, and OSCAL schema validation.
+    exit_gates: [independent-qa-passed]
+  review_ready:
+    description: Produce program review packet with supported results, gaps, requests, and human decisions.
+    exit_gates: [human-review-package-complete]
+  closed:
+    description: Record reviewed artifact state without implying authorization or external acceptance.
+    terminal: true
+  blocked:
+    description: Required handling authority, template, context, or external evidence decision is unavailable.
+  cancelled:
+    description: Compliance work was intentionally stopped.
+    terminal: true
+
+transitions:
+  intake: [scoped, blocked, cancelled]
+  scoped: [designed, intake, blocked, cancelled]
+  designed: [authorized, scoped, blocked, cancelled]
+  authorized: [executing, designed, blocked, cancelled]
+  executing: [validating, scoped, blocked, cancelled]
+  validating: [review_ready, executing, blocked]
+  review_ready: [closed, executing, validating, blocked]
+  blocked: [scoped, authorized, executing, cancelled]
+
+default_repo_roles:
+  program_workspace:
+    required: true
+    selector: compliance_program_workspace
+    execution_context: program_workspace
+    persistent_task: true
+    responsibilities:
+      - program facts, templates, evidence state, drafts, and generated artifacts
+      - machine-readable sidecars and source hashes
+  technical_implementation:
+    required: conditional
+    condition: technical_controls_require_repository_trace
+    selector: repositories_implementing_program_capabilities
+    execution_context: hub_worker
+    persistent_task: false
+    responsibilities:
+      - trace actual code, config, chart, infrastructure, and tests
+      - separate declared implementation from deployed proof
+  external_evidence:
+    required: conditional
+    condition: evidence_is_not_local
+    selector: approved_connected_or_human_held_sources
+    execution_context: connector_or_reference
+    persistent_task: false
+    responsibilities:
+      - record externally accessible, held, requested, inaccessible, or missing evidence
+      - preserve provenance and handling boundaries
+  narrative_author:
+    required: conditional
+    condition: control_narratives_requested
+    selector: control_or_assessment_procedure_work_units
+    execution_context: program_workspace
+    persistent_task: true
+    responsibilities:
+      - requirement-specific, responsibility-aware, evidence-traceable narratives
+      - explicit gaps and reviewer actions
+  independent_reviewer:
+    required: true
+    selector: separate_review_pass
+    execution_context: hub_worker
+    persistent_task: false
+    responsibilities:
+      - requirement coverage and evidence applicability
+      - unsupported-claim, inheritance, currency, and status review
+  artifact_generator:
+    required: conditional
+    condition: oscal_workbook_or_sidecars_requested
+    selector: requested_artifact_models
+    execution_context: program_workspace
+    persistent_task: true
+    responsibilities:
+      - OSCAL generation and schema validation
+      - workbook preservation and visual QA
+      - canonical JSON and derived equivalent YAML
+
+gates:
+  program-request-complete:
+    blocking: true
+    required_fields: [spec.scope.targets, spec.outcome.description]
+    requires:
+      - program and desired deliverables
+      - source template or explicit artifact model
+      - data sensitivity and handling question answered
+  program-context-established:
+    blocking: true
+    required_fields: [status.evidence]
+    requires:
+      - authorization boundary and environment variants
+      - baseline, common-control providers, roles, and evidence cutoff
+      - known versus unresolved program facts
+  artifact-plan-reviewed:
+    blocking: true
+    required_fields: [status.units]
+    requires:
+      - workbook field and row decomposition when applicable
+      - selected OSCAL models and exact schema version
+      - author and independent-review separation
+  evidence-processing-authorized:
+    blocking: true
+    required_fields: [spec.authorization.actions]
+    requires:
+      - processing authority by evidence class and source
+      - local, accessible, externally held, requested, inaccessible, and missing states
+  draft-package-complete:
+    blocking: true
+    required_fields: [status.evidence]
+    requires:
+      - claims trace to evidence or are labeled as inference or gap
+      - source configuration not represented as deployed effectiveness
+      - organization-defined values not invented
+  independent-qa-passed:
+    blocking: true
+    required_fields: [status.evidence, status.checks]
+    requires:
+      - requirement-specific independent review
+      - workbook structure and visual QA where applicable
+      - JSON/YAML equivalence and identifier type preservation
+      - OSCAL schema and reference validation where applicable
+  human-review-package-complete:
+    blocking: true
+    required_fields: [status.evidence, status.risks]
+    requires:
+      - generated artifacts and validation reports
+      - evidence gaps, collection requests, assessor decisions, and residual uncertainty
+      - no claim of authorization, upload acceptance, effectiveness, or POA&M closure
+
+approval_boundaries:
+  read_authorized_local_evidence: {policy: task_authorization, rationale: Processing depends on program handling approval.}
+  access_connected_evidence: {policy: explicit_user_authorization, rationale: Connected systems may contain sensitive evidence.}
+  record_external_reference: {policy: task_authorization, rationale: Externally held evidence may be tracked without claiming review.}
+  generate_local_drafts: {policy: task_authorization, rationale: Drafts remain inside the program workspace.}
+  submit_or_upload_artifact: {policy: explicit_human_approval, rationale: External submission is a consequential action.}
+  assert_control_effectiveness: {policy: explicit_human_authority, rationale: The Hub cannot assume assessor authority.}
+  claim_authorization_or_poam_closure: {policy: prohibited, rationale: Only the designated authority can make these determinations.}
+
+expected_evidence:
+  program_context:
+    category: program_context
+    required: true
+    producer_role: program_workspace
+    description: Boundary, environments, baseline, roles, providers, cutoff, sensitivity, and processing authority.
+  evidence_inventory:
+    category: evidence_index
+    required: true
+    producer_role: program_workspace
+    description: Evidence provenance, date, applicability, hash, sensitivity, and access state.
+  implementation_trace:
+    category: repository_trace
+    required: conditional
+    producer_role: technical_implementation
+    description: Actual source/config implementation with declared-versus-runtime distinction.
+  narrative_records:
+    category: control_assessment
+    required: conditional
+    producer_role: narrative_author
+    description: Requirement-specific facts, responsibility, environment, evidence, gaps, and reviewer action.
+  independent_review:
+    category: review
+    required: true
+    producer_role: independent_reviewer
+    description: Coverage, applicability, currentness, inheritance, unsupported claims, and status justification.
+  oscal_validation:
+    category: schema_validation
+    required: conditional
+    producer_role: artifact_generator
+    description: Exact OSCAL version, schema result, UUID/reference consistency, and unresolved errors.
+  workbook_validation:
+    category: artifact_validation
+    required: conditional
+    producer_role: artifact_generator
+    description: Formula, hidden-sheet, validation, formatting, cell-change, and visual QA evidence.
+  sidecar_validation:
+    category: schema_validation
+    required: conditional
+    producer_role: artifact_generator
+    description: Canonical JSON, derived YAML, deep equivalence, identifiers, paths, and source hashes.
+  program_review_packet:
+    category: report
+    required: true
+    producer_role: coordinator
+    description: Ready artifacts, blockers, external evidence needs, assessor decisions, and human approval gates.
+

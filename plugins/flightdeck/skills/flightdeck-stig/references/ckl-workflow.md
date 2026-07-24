@@ -1,0 +1,56 @@
+# CKL And Batch Workflows
+
+Use this reference when the user provides CKL files, asks for STIG Viewer import/export, wants batch evaluation, or asks about the legacy external batch loops.
+
+## Bundled CKL Scripts
+
+Parse CKL to JSON:
+
+```bash
+python3 scripts/ckl_parser.py input.ckl -o .stigs/input.json
+```
+
+Generate an evaluated CKL from findings JSON and a template CKL:
+
+```bash
+python3 scripts/ckl_generator.py findings.json template.ckl output.ckl
+```
+
+Expected findings format:
+
+```json
+{
+  "findings": [
+    {
+      "vuln_id": "V-242376",
+      "status": "Not a Finding",
+      "finding_details": ["Evidence bullet"],
+      "comments": "Status summary paragraph"
+    }
+  ]
+}
+```
+
+The parser preserves asset and STIG metadata, the reusable vulnerability
+attribute set, current status, details, comments, and severity overrides. It
+omits observation timestamps and records only the input basename so identical
+input produces identical JSON across machines.
+
+The generator normalizes common status variants into CKL values and accepts
+string, list, or structured finding details. It refuses duplicate IDs, unknown
+statuses, and findings that do not exist in the template. Output has no
+timestamp by default; use `--timestamp <text>` only when the caller explicitly
+needs a stable supplied timestamp. `--dry-run`, `--no-timestamp`, and verbose
+mode remain available for workflow compatibility.
+
+## Batch Evaluation
+
+For Codex-native batch work:
+
+1. Parse the CKL with `scripts/ckl_parser.py`.
+2. Evaluate one vulnerability at a time using `references/evaluator.md`.
+3. Persist after each finding to `.stigs/<basename>_findings.json`.
+4. Track progress in `.stigs/<basename>_progress.json`.
+5. Generate the evaluated CKL with `scripts/ckl_generator.py`.
+
+Keep batches small enough that evidence can be reviewed before continuing.

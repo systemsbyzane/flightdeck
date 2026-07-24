@@ -1,0 +1,4 @@
+interface:
+  display_name: "Flightdeck Development"
+  short_description: "Coordinate secure application development"
+  default_prompt: "Use $flightdeck-development to scope and dispatch this implementation to its owning repository."

@@ -1,0 +1,33 @@
+schema_version: "1.0"
+bridge_version: "1.0.0"
+overwrite_policy: refuse
+profiles:
+  application:
+    template: hub/bridges/templates/application/AGENTS.override.md
+    required_docs:
+      - docs/workflows/operations.md
+      - docs/architecture/design-review.md
+      - docs/security/secure-code-preflight.md
+      - docs/templates/validation-evidence.md
+  charts:
+    template: hub/bridges/templates/charts/AGENTS.override.md
+    required_docs:
+      - docs/workflows/operations.md
+      - docs/architecture/manifest-architecture.md
+      - docs/security/secure-code-preflight.md
+      - docs/templates/validation-evidence.md
+  patching:
+    template: hub/bridges/templates/patching/AGENTS.override.md
+    required_docs:
+      - docs/workflows/operations.md
+      - docs/patching/image-compatibility.md
+      - docs/security/secure-code-preflight.md
+      - docs/templates/validation-evidence.md
+  environments:
+    template: hub/bridges/templates/environments/AGENTS.override.md
+    required_docs:
+      - docs/workflows/operations.md
+      - docs/workflows/remote-validation.md
+      - docs/security/secure-code-preflight.md
+      - docs/templates/validation-evidence.md
+

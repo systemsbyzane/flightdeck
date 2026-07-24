@@ -1,0 +1,10 @@
+{
+  "status": "Not a Finding",
+  "confidence": "HIGH",
+  "status_summary": "The system enforces the required access restriction. It may also use an unverified secondary control.",
+  "finding_details": [
+    "The rendered workload manifest sets the required security value.",
+    "The setting probably applies to every runtime instance.",
+    "Raw evidence was collected from /Users/example/private/output.txt."
+  ]
+}

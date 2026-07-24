@@ -1,0 +1,262 @@
+api_version: flightdeck.dev/v1alpha1
+kind: WorkflowAdapter
+
+metadata:
+  name: development
+  display_name: Secure Product Engineering
+  description: >-
+    Coordinate backend, frontend, charts, review readiness, and exact-input
+    runtime validation without weakening repository ownership or trust boundaries.
+
+task_type: development
+supported_workloads:
+  - development
+initial_state: intake
+
+required_fields:
+  - metadata.id
+  - metadata.title
+  - spec.type
+  - spec.workload_id
+  - spec.outcome.description
+  - status.state
+  - status.history
+
+task_defaults:
+  spec:
+    type: development
+    workload_id: development
+    outcome:
+      success_criteria: []
+    scope:
+      targets: []
+    authorization:
+      actions: []
+    execution:
+      context: hub
+      implementation_mode: worktree
+      backend_is_authorization_boundary: true
+    policies:
+      commit: explicit_user_authorization
+      push: explicit_user_authorization
+      pull_request: explicit_user_authorization
+  status:
+    evidence: []
+    blockers: []
+
+states:
+  intake:
+    description: Capture user outcome, affected workflow, non-goals, and definition of done.
+    exit_gates: [feature-intent-complete]
+  scoped:
+    description: Determine backend, frontend, chart, migration, and runtime ownership.
+    exit_gates: [repo-split-complete]
+  designed:
+    description: Define API contract, authorization, threat model, data flow, failure behavior, and rollout.
+    exit_gates: [secure-design-reviewed]
+  authorized:
+    description: Confirm implementation and environment mutation boundaries.
+    exit_gates: [implementation-authorized]
+  executing:
+    description: Implement the smallest coherent change in each owning repository.
+    exit_gates: [repo-implementation-complete]
+  integration_ready:
+    description: Reconcile API types, auth semantics, config, migration, images, and cross-repo tests.
+    exit_gates: [cross-repo-contracts-aligned]
+  validation_ready:
+    description: Freeze the candidate diff and exact source inputs for runtime validation.
+    exit_gates: [candidate-pinned]
+  validating:
+    description: Run repo checks, security/review passes, image builds, rollout, and user-flow validation.
+    exit_gates: [candidate-validation-passed]
+  review_ready:
+    description: Assemble PR evidence and independently review the exact candidate diff.
+    exit_gates: [codex-review-readiness-passed]
+  closed:
+    description: Record delivered state, PRs, evidence, residual risk, and follow-up work.
+    terminal: true
+  blocked:
+    description: Progress requires missing authority, contract decision, dependency, or external state.
+  cancelled:
+    description: Feature work was intentionally stopped.
+    terminal: true
+  rollback_required:
+    description: Runtime validation or rollout exposed a regression requiring restoration.
+
+transitions:
+  intake: [scoped, blocked, cancelled]
+  scoped: [designed, intake, blocked, cancelled]
+  designed: [authorized, scoped, blocked, cancelled]
+  authorized: [executing, designed, blocked, cancelled]
+  executing: [integration_ready, blocked, cancelled]
+  integration_ready: [validation_ready, executing, blocked]
+  validation_ready: [validating, integration_ready, blocked]
+  validating: [review_ready, executing, integration_ready, rollback_required, blocked]
+  review_ready: [closed, executing, validating, blocked]
+  rollback_required: [executing, validating, closed, blocked]
+  blocked: [scoped, designed, authorized, executing, integration_ready, validating, cancelled]
+
+default_repo_roles:
+  backend:
+    required: conditional
+    condition: api_auth_data_or_privileged_behavior_affected
+    selector: owning_backend_repository
+    execution_context: repository_worktree
+    persistent_task: true
+    responsibilities:
+      - API and validation contract
+      - authentication, tenant scope, and authorization enforcement
+      - persistence, migration, audit, and allowed/denied tests
+  frontend:
+    required: conditional
+    condition: user_interface_or_client_contract_affected
+    selector: owning_frontend_repository
+    execution_context: repository_worktree
+    persistent_task: true
+    responsibilities:
+      - user flow and typed client contract
+      - loading, error, empty, and partial states
+      - accessibility, form validation, and focused tests
+  charts:
+    required: conditional
+    condition: environment_secret_rbac_route_probe_resource_or_image_metadata_affected
+    selector: charts
+    execution_context: repository_worktree
+    persistent_task: true
+    responsibilities:
+      - values and templates
+      - rendered manifest and upgrade review
+      - secret, RBAC, networking, identity, and scheduling review
+  runtime_validation:
+    required: conditional
+    condition: integrated_runtime_behavior_is_material
+    selector: configured_runtime_environment
+    execution_context: remote_environment
+    persistent_task: true
+    responsibilities:
+      - exact-input image builds
+      - leased rollout and integration validation
+      - logs, user-flow evidence, and restoration
+  independent_review:
+    required: true
+    selector: exact_candidate_diff
+    execution_context: hub_worker
+    persistent_task: false
+    responsibilities:
+      - correctness and security diff review
+      - cross-repo contract and test-gap review
+      - GitHub Codex review readiness assessment
+
+gates:
+  feature-intent-complete:
+    blocking: true
+    required_fields: [spec.outcome.description, spec.outcome.success_criteria]
+    requires:
+      - intended user outcome and non-goals
+      - affected system, trust boundaries, and success criteria
+  repo-split-complete:
+    blocking: true
+    required_fields: [status.units]
+    requires:
+      - backend, frontend, charts, and validation ownership decisions
+      - execution mode and dependency order
+  secure-design-reviewed:
+    blocking: true
+    required_fields: [status.evidence, status.risks]
+    requires:
+      - API and data contract
+      - backend authorization and tenant boundary
+      - threat model for security-sensitive behavior
+      - failure, compatibility, migration, rollout, and rollback behavior
+  implementation-authorized:
+    blocking: true
+    required_fields: [spec.authorization.actions]
+    requires:
+      - explicit edit, commit, push, PR, and deployment policies
+  repo-implementation-complete:
+    blocking: true
+    required_fields: [status.units, status.checks]
+    requires:
+      - repository-native focused checks
+      - allowed and denied security-path tests where applicable
+      - skipped checks recorded with impact
+  cross-repo-contracts-aligned:
+    blocking: true
+    required_fields: [status.evidence]
+    requires:
+      - backend routes and frontend clients align
+      - auth, errors, config, migrations, images, and manifests align
+  candidate-pinned:
+    blocking: true
+    required_fields: [status.units]
+    requires:
+      - exact base and candidate refs recorded in the task
+      - runtime inputs derived from the candidate, not dirty VM state
+  candidate-validation-passed:
+    blocking: true
+    required_fields: [status.evidence, status.checks]
+    requires:
+      - repo-native checks and builds
+      - security, secret, migration, and manifest review as applicable
+      - exact-input runtime validation or explicit risk acceptance
+  codex-review-readiness-passed:
+    blocking: true
+    required_fields: [status.evidence, status.risks]
+    requires:
+      - independent review of exact final PR diff
+      - mandatory instructions visible in owning repositories
+      - PR evidence packet, reviewer focus, and residual risk
+
+approval_boundaries:
+  read_and_design: {policy: automatic, rationale: Discovery and design remain read-only.}
+  edit_files: {policy: task_authorization, rationale: Edit only owning repositories in the accepted design.}
+  create_repo_task: {policy: task_authorization, rationale: Durable implementation belongs in repo-scoped tasks.}
+  commit: {policy: explicit_user_authorization, rationale: Hub policy never infers commit authority.}
+  push: {policy: explicit_user_authorization, rationale: Pushing changes external state.}
+  open_or_update_pr: {policy: explicit_user_authorization, rationale: PR publication is an external write.}
+  request_codex_review: {policy: explicit_user_authorization, rationale: Request only after readiness gates pass.}
+  mutate_cluster: {policy: explicit_user_authorization, rationale: Shared cluster state requires an explicit gate.}
+  retain_test_deployment: {policy: explicit_user_authorization, rationale: Retention must have an owner and expiry.}
+
+expected_evidence:
+  feature_design:
+    category: design
+    required: true
+    producer_role: coordinator
+    description: Outcome, non-goals, architecture, contracts, threat model, risks, and rollback.
+  backend_validation:
+    category: test_result
+    required: conditional
+    producer_role: backend
+    description: Focused checks including allowed and denied authorization paths.
+  frontend_validation:
+    category: test_result
+    required: conditional
+    producer_role: frontend
+    description: Focused UI, client, state, validation, and accessibility checks.
+  chart_validation:
+    category: manifest_review
+    required: conditional
+    producer_role: charts
+    description: Lint, rendered manifest, identity, security, and upgrade evidence.
+  contract_reconciliation:
+    category: contract_review
+    required: true
+    producer_role: coordinator
+    description: Cross-repo API, auth, config, migration, image, and error alignment.
+  runtime_validation:
+    category: runtime_observation
+    required: conditional
+    producer_role: runtime_validation
+    description: Exact inputs, image digests, rollout, logs, user-flow checks, and restoration.
+  independent_review:
+    category: review
+    required: true
+    producer_role: independent_review
+    description: Exact-diff correctness, security, migration, manifest, secret, and test-gap review.
+  pr_evidence_packet:
+    category: report
+    required: true
+    producer_role: coordinator
+    description: Checks, findings, runtime evidence, residual risk, and reviewer focus.
+

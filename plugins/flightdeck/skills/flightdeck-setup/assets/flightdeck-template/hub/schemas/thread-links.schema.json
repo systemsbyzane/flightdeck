@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/thread-links.schema.json",
+  "title": "Flightdeck Codex Task Links",
+  "description": "Local runtime links between Hub coordination work and user-owned Codex project tasks.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_version", "kind", "updated_at", "links"],
+  "properties": {
+    "api_version": {"const": "flightdeck.dev/v1alpha1"},
+    "kind": {"const": "ThreadLinkRegistry"},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "links": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/link"}
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
+    },
+    "link": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "workflow_id",
+        "project_path",
+        "thread_id",
+        "host_id",
+        "mode",
+        "state",
+        "title",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "hub_task_id": {"$ref": "#/$defs/id"},
+        "workflow_id": {
+          "enum": ["patching", "research", "development", "charts", "daily-ops", "compliance"]
+        },
+        "project_path": {"type": "string", "pattern": "^/"},
+        "thread_id": {"type": "string", "minLength": 1},
+        "host_id": {"type": "string", "minLength": 1},
+        "mode": {"enum": ["local", "worktree", "remote"]},
+        "state": {"enum": ["active", "blocked", "completed", "cancelled", "superseded"]},
+        "title": {"type": "string", "minLength": 1},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"},
+        "notes": {"type": "string"}
+      }
+    }
+  }
+}
+

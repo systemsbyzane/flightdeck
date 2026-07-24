@@ -1,0 +1,26 @@
+api_version: flightdeck.dev/v1alpha1
+kind: AutomationTemplate
+metadata:
+  name: weekly-research-refresh
+  display_name: Weekly Research Refresh
+enabled: false
+activation:
+  policy: explicit_user_enablement
+  required_confirmation: [record_root, freshness_thresholds, schedule, timezone]
+schedule:
+  type: cron
+  expression: "0 11 * * 5"
+  timezone: Etc/UTC
+task:
+  workflow: research
+  outcome: Flag stale claims and propose bounded source refresh work.
+authorization:
+  profile: read_only
+  prohibited_actions: [authenticated_access, live_environment_access, edit, external_communication]
+output_contract:
+  schema: flightdeck.automation-report/v1
+  source_freshness_required: true
+  stable_finding_key: category_and_scope
+  delta_states: [new, resolved, persistent, blocked]
+  nonzero_diagnostic_policy: finding_not_job_failure
+
