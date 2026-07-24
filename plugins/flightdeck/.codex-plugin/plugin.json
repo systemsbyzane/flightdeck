@@ -1,6 +1,6 @@
 {
   "name": "flightdeck",
-  "version": "0.1.0+codex.20260724202443",
+  "version": "0.1.0+codex.20260724204522",
   "description": "Coordinate portable multi-repository engineering, operations, research, artifacts, and compliance work.",
   "author": {
     "name": "Flightdeck Maintainers",
@@ -32,6 +32,12 @@
       "Set up a portable Flightdeck workspace.",
       "Configure bridge repos from the Hub declarations.",
       "Route this task to its owning project."
+    ],
+    "brandColor": "#0A1829",
+    "composerIcon": "./assets/flightdeck-icon.png",
+    "logo": "./assets/flightdeck-icon.png",
+    "screenshots": [
+      "./assets/flightdeck-routing.png"
     ]
   }
 }

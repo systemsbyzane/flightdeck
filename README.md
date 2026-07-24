@@ -1,55 +1,163 @@
-# Flightdeck for Codex
+<p align="center">
+  <img src="docs/assets/flightdeck-hero.png" alt="Flightdeck routes work from one control deck to separate engineering workspaces through explicit approval gates." width="100%">
+</p>
 
-Portable multi-project coordination for Codex.
+<h1 align="center">Flightdeck for Codex</h1>
 
-Flightdeck gives Codex one safe control plane for work that belongs in many
-different repositories, environments, research spaces, and compliance
-workspaces—without turning those projects into a monorepo or hiding where the
-work actually belongs.
+<p align="center">
+  <strong>One control plane. Many projects. Exact ownership.</strong>
+</p>
 
-The simplest mental model is:
+<p align="center">
+  <a href="#install-in-two-commands"><img src="https://img.shields.io/badge/Codex-plugin-19b8b2?style=flat-square" alt="Codex plugin"></a>
+  <a href="https://github.com/systemsbyzane/flightdeck"><img src="https://img.shields.io/github/last-commit/systemsbyzane/flightdeck?style=flat-square&color=2aa8ff" alt="Last commit"></a>
+  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-8b6cff?style=flat-square" alt="Pull requests welcome"></a>
+</p>
 
-```text
-plugin source -> setup skill -> generated Hub -> owning project
-```
+<p align="center">
+  <a href="#install-in-two-commands">Install</a> ·
+  <a href="#see-it-route">Live tour</a> ·
+  <a href="#choose-your-path">Quick starts</a> ·
+  <a href="#safety-and-approvals">Safety</a>
+</p>
 
-- This repository contains the installable plugin, its skills, setup tools, and
-  the template used to generate a Hub.
-- The setup skill creates a separate local Flightdeck Hub. The Hub holds stable
-  routing policy, workflow guides, schemas, bridge definitions, and disabled
-  automation specifications.
-- Each real repository or program workspace stays a separate Codex project with
-  its own instructions, Git history, tests, and artifacts.
-- The Hub resolves the owner, verifies the exact saved project path, searches
-  for an existing task, creates or resumes it, returns the receipt, and stops.
+Flightdeck gives Codex a safe way to coordinate work spread across repositories,
+environments, research spaces, and compliance workspaces. It finds the exact
+owner, verifies the saved project path, creates or resumes the right task,
+returns a receipt, and stops.
 
-Flightdeck is a coordinator, not a monorepo and not a background task monitor.
+Your repositories stay separate. Their instructions, Git history, tests, and
+artifacts remain authoritative.
 
-## Install from GitHub
+## Install in two commands
 
-Add this repository as a Codex plugin marketplace, then install Flightdeck:
+Add the public GitHub repository as a Codex marketplace, then install:
 
 ```sh
 codex plugin marketplace add systemsbyzane/flightdeck
 codex plugin add flightdeck@flightdeck-team
 ```
 
-No repository clone or local build is required. Start a fresh Codex task so the
-new skills are loaded, then ask:
+No clone, build, or installer script is required. Start a fresh Codex task so
+the new skills are loaded, then ask:
 
 ```text
 Use $flightdeck-setup to create a new Flightdeck at /absolute/path/to/my-hub.
 ```
-
-The target must be absent or empty. Flightdeck validates the machine, generates
-the Hub atomically, runs its local checks, and then attempts to register or open
-that exact path as a Codex project.
 
 Confirm the plugin is visible with:
 
 ```sh
 codex plugin list
 ```
+
+> [!NOTE]
+> The target Hub directory must be absent or empty. Setup validates the machine,
+> generates atomically, runs local checks, and then attempts to register or open
+> that exact path as a Codex project.
+
+## See it route
+
+The animation below is the coordinator contract—not a marketing-only happy
+path. Flightdeck resolves ownership, verifies the exact project, creates or
+resumes one task, returns the receipt, and does not monitor the child task.
+
+![Animated Flightdeck routing tour](docs/assets/flightdeck-routing-demo.svg)
+
+<table>
+  <tr>
+    <td width="33%">
+      <strong>Exact ownership</strong><br>
+      Resolve the real owner before reading or changing project code.
+    </td>
+    <td width="33%">
+      <strong>Portable coordination</strong><br>
+      Keep reusable policy in the Hub while each repository stays independent.
+    </td>
+    <td width="33%">
+      <strong>Explicit boundaries</strong><br>
+      Preserve approval gates for commits, publication, deployment, and closure.
+    </td>
+  </tr>
+</table>
+
+## Choose your path
+
+<details open>
+<summary><strong>Create a new Flightdeck</strong></summary>
+
+```text
+Use $flightdeck-setup to create a new Flightdeck at /absolute/path/to/my-hub.
+```
+
+Setup is atomic and non-merging. It generates the Hub, validates it, and
+verifies the exact Codex project path when the installed runtime supports that
+operation.
+
+</details>
+
+<details>
+<summary><strong>Connect existing repositories</strong></summary>
+
+Declare verified repositories in `hub/repositories.yaml`, then ask:
+
+```text
+Configure bridge repos.
+```
+
+Flightdeck plans every repository first, preserves dirty state, refuses
+unmanaged conflicts, and records ignored local receipts.
+
+</details>
+
+<details>
+<summary><strong>Route real engineering work</strong></summary>
+
+```text
+Use $flightdeck to route this change to its owning project:
+add pagination to the example API without changing its response contract.
+```
+
+Flightdeck returns the logical project key, opaque runtime project ID, exact
+path, task ID, execution mode, and authorization boundary—then stops.
+
+</details>
+
+<details>
+<summary><strong>Check workspace health</strong></summary>
+
+```text
+Use $flightdeck-doctor to run a read-only workspace health check.
+```
+
+Doctor reports deterministic findings without fetching, repairing, or
+rewriting local state.
+
+</details>
+
+## The 30-second mental model
+
+```text
+GitHub plugin
+    ↓
+setup skill
+    ↓
+generated Flightdeck Hub
+    ↓
+verified owning project
+    ↓
+task receipt → stop
+```
+
+- This repository contains the plugin, focused skills, setup tools, and the Hub
+  template.
+- Setup creates a separate local Flightdeck Hub with routing policy, workflow
+  guides, schemas, bridge definitions, and disabled automation specifications.
+- Each real repository or program workspace stays a separate Codex project.
+- The Hub coordinates ownership and handoff; the owning project performs the
+  work.
+
+Flightdeck is a coordinator, not a monorepo and not a background task monitor.
 
 ## What gets installed
 

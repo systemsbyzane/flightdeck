@@ -1,0 +1,180 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="title description">
+  <title id="title">Flightdeck routing demonstration</title>
+  <desc id="description">An animated request moves through owner resolution, exact project verification, task dispatch, and a receipt that stops without monitoring.</desc>
+
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07111f"/>
+      <stop offset="0.5" stop-color="#0a1829"/>
+      <stop offset="1" stop-color="#10132c"/>
+    </linearGradient>
+    <linearGradient id="route" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#28d7d0"/>
+      <stop offset="0.55" stop-color="#2aa8ff"/>
+      <stop offset="1" stop-color="#8b6cff"/>
+    </linearGradient>
+    <linearGradient id="active-card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14283d"/>
+      <stop offset="1" stop-color="#171a38"/>
+    </linearGradient>
+    <filter id="glow" x="-200%" y="-200%" width="400%" height="400%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="soft-shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#020713" flood-opacity="0.75"/>
+    </filter>
+    <style>
+      .eyebrow {
+        fill: #79a8c9;
+        font: 600 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        letter-spacing: 2.4px;
+      }
+      .headline {
+        fill: #f2f8ff;
+        font: 700 25px ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        letter-spacing: 0.2px;
+      }
+      .step {
+        fill: #72a2c5;
+        font: 700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        letter-spacing: 1.5px;
+      }
+      .label {
+        fill: #f4f8ff;
+        font: 700 17px ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      .detail {
+        fill: #9ab3c8;
+        font: 500 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      .receipt-key {
+        fill: #7896ae;
+        font: 600 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        letter-spacing: 0.4px;
+      }
+      .receipt-value {
+        fill: #dfeeff;
+        font: 600 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      .card {
+        animation: card-pulse 8s ease-in-out infinite;
+        transform-box: fill-box;
+        transform-origin: center;
+      }
+      .card-2 { animation-delay: 1.35s; }
+      .card-3 { animation-delay: 2.7s; }
+      .card-4 { animation-delay: 4.05s; }
+      .card-5 { animation-delay: 5.4s; }
+      .route-dash {
+        stroke-dasharray: 10 12;
+        animation: route-flow 1.2s linear infinite;
+      }
+      .stop-light {
+        animation: stop-pulse 2.2s ease-in-out infinite;
+      }
+      @keyframes route-flow {
+        to { stroke-dashoffset: -44; }
+      }
+      @keyframes card-pulse {
+        0%, 12%, 100% { opacity: 0.72; transform: translateY(0); }
+        4%, 8% { opacity: 1; transform: translateY(-5px); }
+      }
+      @keyframes stop-pulse {
+        0%, 100% { opacity: 0.5; }
+        50% { opacity: 1; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .card, .route-dash, .stop-light { animation: none; opacity: 1; }
+      }
+    </style>
+  </defs>
+
+  <rect width="1200" height="430" rx="24" fill="url(#background)"/>
+  <path d="M0 112 C210 45 425 165 640 82 C835 7 1005 82 1200 25" fill="none" stroke="#1a3450" stroke-width="1" opacity="0.6"/>
+  <path d="M0 390 C220 325 448 448 675 367 C894 289 1055 382 1200 320" fill="none" stroke="#242954" stroke-width="1" opacity="0.75"/>
+
+  <text x="54" y="48" class="eyebrow">LIVE ROUTING TOUR</text>
+  <text x="54" y="82" class="headline">Ask once. Route exactly. Stop cleanly.</text>
+  <text x="1144" y="65" text-anchor="end" class="detail">one request → one verified owner</text>
+
+  <path id="motion-route" d="M150 208 C245 208 255 208 350 208 S455 208 550 208 S655 208 750 208 S855 208 950 208"
+        fill="none" stroke="#214661" stroke-width="4" stroke-linecap="round"/>
+  <path d="M150 208 C245 208 255 208 350 208 S455 208 550 208 S655 208 750 208 S855 208 950 208"
+        class="route-dash" fill="none" stroke="url(#route)" stroke-width="3" stroke-linecap="round" opacity="0.9"/>
+
+  <circle r="7" fill="#f7fbff" filter="url(#glow)">
+    <animateMotion dur="8s" repeatCount="indefinite" path="M150 208 C245 208 255 208 350 208 S455 208 550 208 S655 208 750 208 S855 208 950 208"/>
+    <animate attributeName="fill" values="#28d7d0;#2aa8ff;#8b6cff;#28d7d0" dur="8s" repeatCount="indefinite"/>
+  </circle>
+
+  <g class="card card-1" filter="url(#soft-shadow)">
+    <rect x="54" y="128" width="192" height="160" rx="16" fill="url(#active-card)" stroke="#24506b"/>
+    <circle cx="86" cy="160" r="15" fill="#15384a" stroke="#28d7d0"/>
+    <path d="M79 156h14M79 161h10M79 166h7" stroke="#7df3ea" stroke-width="2" stroke-linecap="round"/>
+    <text x="112" y="157" class="step">STEP 01</text>
+    <text x="76" y="207" class="label">You ask</text>
+    <text x="76" y="235" class="detail">“Patch the API”</text>
+    <text x="76" y="258" class="detail">scope stays intact</text>
+  </g>
+
+  <g class="card card-2" filter="url(#soft-shadow)">
+    <rect x="254" y="128" width="192" height="160" rx="16" fill="url(#active-card)" stroke="#24506b"/>
+    <circle cx="286" cy="160" r="15" fill="#15384a" stroke="#28d7d0"/>
+    <path d="M280 153v14M280 156h10M290 156v11M280 164h10" fill="none" stroke="#7df3ea" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="312" y="157" class="step">STEP 02</text>
+    <text x="276" y="207" class="label">Resolve owner</text>
+    <text x="276" y="235" class="detail">workload: development</text>
+    <text x="276" y="258" class="detail">owner: example-api</text>
+  </g>
+
+  <g class="card card-3" filter="url(#soft-shadow)">
+    <rect x="454" y="128" width="192" height="160" rx="16" fill="url(#active-card)" stroke="#2c4e78"/>
+    <circle cx="486" cy="160" r="15" fill="#152e4f" stroke="#2aa8ff"/>
+    <path d="M480 160l4 4 8-9" fill="none" stroke="#8ed7ff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="512" y="157" class="step">STEP 03</text>
+    <text x="476" y="207" class="label">Verify project</text>
+    <text x="476" y="235" class="detail">exact path matched</text>
+    <text x="476" y="258" class="detail">runtime ID confirmed</text>
+  </g>
+
+  <g class="card card-4" filter="url(#soft-shadow)">
+    <rect x="654" y="128" width="192" height="160" rx="16" fill="url(#active-card)" stroke="#423f79"/>
+    <circle cx="686" cy="160" r="15" fill="#272552" stroke="#8b6cff"/>
+    <path d="M679 160h12M687 155l5 5-5 5" fill="none" stroke="#c2b4ff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="712" y="157" class="step">STEP 04</text>
+    <text x="676" y="207" class="label">Create or resume</text>
+    <text x="676" y="235" class="detail">matching objective found</text>
+    <text x="676" y="258" class="detail">task receipt returned</text>
+  </g>
+
+  <g class="card card-5" filter="url(#soft-shadow)">
+    <rect x="854" y="128" width="292" height="160" rx="16" fill="url(#active-card)" stroke="#5a487d"/>
+    <circle cx="886" cy="160" r="15" fill="#30264f" stroke="#e4a957"/>
+    <path d="M880 160l4 4 8-9" fill="none" stroke="#ffd697" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="912" y="157" class="step">RECEIPT</text>
+    <text x="876" y="202" class="receipt-key">project</text>
+    <text x="948" y="202" class="receipt-value">example-api</text>
+    <text x="876" y="225" class="receipt-key">task</text>
+    <text x="948" y="225" class="receipt-value">task_01H…</text>
+    <text x="876" y="248" class="receipt-key">mode</text>
+    <text x="948" y="248" class="receipt-value">worktree</text>
+    <text x="876" y="271" class="receipt-key">monitor</text>
+    <text x="948" y="271" class="receipt-value">stopped</text>
+  </g>
+
+  <rect x="54" y="326" width="1092" height="58" rx="14" fill="#091522" stroke="#1d3850"/>
+  <circle class="stop-light" cx="82" cy="355" r="6" fill="#e4a957" filter="url(#glow)"/>
+  <text x="102" y="359" class="detail">Coordinator boundary preserved</text>
+  <path d="M320 343v24" stroke="#29435a"/>
+  <text x="344" y="359" class="detail">repositories stay separate</text>
+  <path d="M584 343v24" stroke="#29435a"/>
+  <text x="608" y="359" class="detail">approval gates stay explicit</text>
+  <path d="M888 343v24" stroke="#29435a"/>
+  <text x="912" y="359" class="detail">no background monitoring</text>
+
+  <text x="54" y="414" class="eyebrow">FLIGHTDECK • PORTABLE MULTI-PROJECT COORDINATION</text>
+</svg>
