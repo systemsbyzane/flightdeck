@@ -12,8 +12,8 @@ repo-local marketplace entry under `.agents/plugins/`.
   or change a plugin cache unless the user explicitly authorizes that action.
 - Treat any external source Hub supplied for comparison as read-only. Store
   path-bearing comparison output only under ignored `.flightdeck-local/`.
-- Do not add a license. This private personal-use distribution intentionally
-  does not require one.
+- Do not add a license. This public source-available distribution intentionally
+  does not include one.
 
 ## Change rules
 

@@ -1,8 +1,11 @@
 # Flightdeck for Codex
 
-Flightdeck gives Codex one safe place to coordinate work that belongs in many
+Portable multi-project coordination for Codex.
+
+Flightdeck gives Codex one safe control plane for work that belongs in many
 different repositories, environments, research spaces, and compliance
-workspaces.
+workspaces—without turning those projects into a monorepo or hiding where the
+work actually belongs.
 
 The simplest mental model is:
 
@@ -21,6 +24,32 @@ plugin source -> setup skill -> generated Hub -> owning project
   for an existing task, creates or resumes it, returns the receipt, and stops.
 
 Flightdeck is a coordinator, not a monorepo and not a background task monitor.
+
+## Install from GitHub
+
+Add this repository as a Codex plugin marketplace, then install Flightdeck:
+
+```sh
+codex plugin marketplace add systemsbyzane/flightdeck
+codex plugin add flightdeck@flightdeck-team
+```
+
+No repository clone or local build is required. Start a fresh Codex task so the
+new skills are loaded, then ask:
+
+```text
+Use $flightdeck-setup to create a new Flightdeck at /absolute/path/to/my-hub.
+```
+
+The target must be absent or empty. Flightdeck validates the machine, generates
+the Hub atomically, runs its local checks, and then attempts to register or open
+that exact path as a Codex project.
+
+Confirm the plugin is visible with:
+
+```sh
+codex plugin list
+```
 
 ## What gets installed
 
@@ -55,7 +84,7 @@ private evidence, runtime IDs, task history, findings, or deployment state.
 
 Required:
 
-- Codex with local plugin marketplace support;
+- Codex with Git plugin marketplace support;
 - Python 3;
 - Ruby with its standard JSON, YAML, Open3, and Minitest libraries;
 - Git;
@@ -72,28 +101,16 @@ Credentials stay in the user’s existing credential stores. Flightdeck never
 puts them in plugin files, Hub configuration, task prompts, receipts, or Git
 history.
 
-## Five-minute path
+## Source checkout and setup preview
 
-Clone or open this private repository, then run:
+End users do not need to clone this repository. Contributors and reviewers can
+run the source preflight directly:
 
 ```sh
+git clone https://github.com/systemsbyzane/flightdeck.git
 cd /absolute/path/to/flightdeck
 python3 plugins/flightdeck/skills/flightdeck-setup/scripts/preflight.py --json
-codex plugin marketplace add "$PWD"
-codex plugin add flightdeck@flightdeck-team
 ```
-
-Start a fresh Codex task so the newly installed skills are loaded. Then ask:
-
-```text
-Use $flightdeck-setup to create a new Flightdeck at /absolute/path/to/my-hub.
-```
-
-The target must be absent or empty. The setup skill validates prerequisites,
-generates atomically without merging, runs the local test and validation suite,
-checks Doctor and de-branding, and then tries to register or open the exact Hub
-path as a Codex project. Registration is successful only when a refreshed live
-project list returns that normalized path and its opaque runtime project ID.
 
 For source-only setup before installing the plugin, preview and apply the
 repo-managed bootstrap:
@@ -296,11 +313,10 @@ Contributor parity and release contracts live in
 
 ## Updating
 
-Updates are explicit:
+Refresh the GitHub marketplace snapshot, then reinstall the plugin:
 
 ```sh
-cd /absolute/path/to/flightdeck
-git pull --ff-only
+codex plugin marketplace upgrade flightdeck-team
 codex plugin remove flightdeck@flightdeck-team
 codex plugin add flightdeck@flightdeck-team
 ```
@@ -336,9 +352,9 @@ after reviewing their contents and backups.
   preflight.
 - Missing Word, PDF, or spreadsheet capability: core setup may continue, but
   that artifact workflow remains blocked until the capability is installed.
-- Marketplace name or path conflict: inspect `codex plugin marketplace list`;
-  do not replace a marketplace that points elsewhere until the conflict is
-  understood.
+- Marketplace name or source conflict: inspect
+  `codex plugin marketplace list`; do not replace a marketplace that points
+  elsewhere until the conflict is understood.
 - Project path not verified: use the one manual open-folder action returned
   after the supported registration path has been retried.
 - Existing override or bridge target: inspect ownership; Flightdeck will not

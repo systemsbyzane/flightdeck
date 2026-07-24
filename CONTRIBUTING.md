@@ -3,6 +3,11 @@
 Changes must preserve portable behavior and evidence. Start by reading
 `AGENTS.md`.
 
+Use a branch or fork and open a pull request against `main`. Direct changes to
+`main` are not the contribution path. Keep each pull request focused, describe
+the user-visible behavior it changes, and include the validation evidence
+required below.
+
 The plugin source is `plugins/flightdeck/`. The generated workspace is an asset
 of `flightdeck-setup`; changes to its CLI, schemas, workflows, docs, bridges, or
 tests must be validated both in place and after fresh generation.
@@ -22,4 +27,5 @@ For a behavioral change:
 
 Do not contribute credentials, private URLs, live topology, real evidence,
 program artifacts, task history, or generated findings. Do not add a license
-unless the owner later changes the current private-distribution decision.
+unless the owner explicitly changes the current no-license distribution
+decision.

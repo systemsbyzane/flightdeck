@@ -1,7 +1,8 @@
-# Personal/private repository and plugin readiness
+# Public repository and plugin readiness
 
-Version `0.1.0` is a local development release until every mandatory item below
-is satisfied.
+The repository is publicly readable and can serve the plugin directly through
+Codex's Git marketplace support. A Flightdeck version is release-ready only
+when every mandatory item below is satisfied.
 
 ## Portable content
 
@@ -43,8 +44,9 @@ predecessor evidence is invalid. Local tests cannot satisfy these checks.
 
 ## External decisions and dependencies
 
-- No license file is intentionally required for this private personal-use
-  distribution. Do not add one unless the owner later changes that decision.
+- No license file is intentionally included in this public source-available
+  distribution. Do not add one unless the owner explicitly changes that
+  decision.
 - Provider metadata and authentication tools are optional runtime dependencies.
 - Codex project registration depends on the capabilities available in the
   installed runtime; supported UI open-folder is the fallback.
@@ -53,8 +55,8 @@ predecessor evidence is invalid. Local tests cannot satisfy these checks.
 - Remote validation depends on a separately configured, authorized project.
 
 Do not claim plugin readiness while any mandatory local probe is unresolved or
-runtime acceptance remains unexecuted. Public publication and broader access
-remain separate decisions.
+runtime acceptance remains unexecuted. Public GitHub availability and
+successful source installation do not replace those acceptance checks.
 
 Run the source-backed local gate with:
 
