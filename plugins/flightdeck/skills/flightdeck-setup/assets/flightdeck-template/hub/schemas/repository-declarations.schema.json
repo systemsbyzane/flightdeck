@@ -32,7 +32,6 @@
         "workload",
         "provider",
         "locator",
-        "local_path",
         "owner",
         "default_branch",
         "default_branch_verified",
@@ -41,6 +40,7 @@
       ],
       "properties": {
         "id": {"$ref": "#/$defs/id"},
+        "placement": {"enum": ["managed", "attached"]},
         "workload": {"$ref": "#/$defs/id"},
         "provider": {
           "enum": ["github", "gitlab", "bitbucket", "git", "existing-local"]
@@ -49,7 +49,7 @@
         "local_path": {"$ref": "#/$defs/relativePath"},
         "owner": {"type": "string", "minLength": 1},
         "default_branch": {"type": "string", "minLength": 1},
-        "default_branch_verified": {"const": true},
+        "default_branch_verified": {"type": "boolean"},
         "bridge": {
           "type": "object",
           "additionalProperties": false,
@@ -71,7 +71,24 @@
             }
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["placement"],
+            "properties": {"placement": {"const": "attached"}}
+          },
+          "then": {
+            "not": {"required": ["local_path"]}
+          },
+          "else": {
+            "required": ["local_path"],
+            "properties": {
+              "default_branch_verified": {"const": true}
+            }
+          }
+        }
+      ]
     }
   }
 }

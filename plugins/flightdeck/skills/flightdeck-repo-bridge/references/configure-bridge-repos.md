@@ -1,9 +1,11 @@
 # Configure bridge repositories runbook
 
-This runbook is mandatory when the user asks to “configure bridge repos”,
-“configure repository bridges”, “set up all repos”, or makes an equivalent
-request. Execute it from the generated Hub. Bridge setup configures checkouts,
-bridges, and saved projects; it does not create implementation tasks.
+This runbook is mandatory for advanced bridge configuration in an existing
+Flightdeck: mode changes, migration, drift repair, or manually declared bulk
+sets. Execute it from the generated Hub. Initial discovery and ordinary
+repository connection belong to `flightdeck-setup`. Bridge work configures
+checkouts, bridges, and saved projects; it does not create implementation
+tasks.
 
 ## 1. Read authority and declarations
 
@@ -13,10 +15,13 @@ bridges, and saved projects; it does not create implementation tasks.
    `docs/workflows/configure-bridge-repos.md`, and
    `docs/workflows/repo-onboarding.md`.
 4. Validate that every declaration contains:
-   repository ID, workload, provider, credential-free locator, Hub-relative
-   local path, owner, verified default branch, bridge profile/mode, and a
+   repository ID, placement, workload, provider, credential-free locator,
+   owner, verified default branch, bridge profile/mode, and a
    `saved_exact_path` Codex project expectation with a stable logical project
    key. The declaration never requires or stores a Codex runtime project ID.
+   Managed declarations require a Hub-relative `local_path`; attached
+   declarations omit it and resolve the exact absolute path only from ignored
+   local state.
 5. Refuse duplicate IDs, escaping paths, unknown providers/workloads,
    unverified default branches, credentials, or missing project expectations.
 
@@ -38,21 +43,23 @@ that repository blocked and do not clone or install its bridge.
 
 ## 3. Prepare or onboard checkouts
 
-For each declared local path:
+For each declared checkout:
 
-1. If the checkout exists, verify its exact Git root, origin when applicable,
+1. Resolve managed paths from the Hub-relative declaration and attached paths
+   from ignored `hub/state/repositories.yaml`.
+2. If the checkout exists, verify its exact Git root, origin when applicable,
    branch, SHA, and status. Preserve dirty, untracked, ignored, ahead, and
    behind state. Do not reset, clean, stash, switch branches, fetch, or pull as
    part of bridge setup.
-2. If it is absent and clone authorization is within the user's request, run
+3. If it is absent and clone authorization is within the user's request, run
    `bin/flightdeck repo plan` with the verified facts, inspect the plan, then run
    `bin/flightdeck repo onboard` under the declared workload root.
-3. If an existing checkout is not registered, use `repo onboard` with the
+4. If an existing checkout is not registered, use `repo onboard` with the
    `existing-local` adapter and the exact resolved path.
-4. Pass the declared safe bridge mode/profile to onboarding. A bridge already
+5. Pass the declared safe bridge mode/profile to onboarding. A bridge already
    installed by onboarding must later appear as an idempotent no-op in the bulk
    apply.
-5. For repo-native mode, stop and obtain explicit per-repository authorization
+6. For repo-native mode, stop and obtain explicit per-repository authorization
    after showing the tracked `AGENTS.md` target and expected portable policy
    change.
 

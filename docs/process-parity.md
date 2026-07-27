@@ -76,8 +76,9 @@ and outside plugin, template, and generated-Hub content.
 | Research | Source ledger, freshness, fact/inference separation, contradictions, gaps, and decision briefs |
 | Artifact workflows | Routing to installed Word, PDF, and spreadsheet capabilities with render/inspect/iterate gates |
 | Compliance and POA&M | Isolated program workspaces, evidence classification, workbook preservation, supported weakness candidates, sidecars, and human review |
-| STIG | Read-only evidence, conservative statuses, Helm planning, summary extraction, and deterministic CKL round trips |
+| STIG | Adaptive read-only evaluation, evidence provenance, applicability and inherited-control checks, draft/export readiness, remediation routing, summaries, and deterministic CKL round trips |
 | Setup | Preview-first credential-free bootstrap, atomic empty-target generation, idempotent validation-only reruns, and exact project registration |
+| Plugin lifecycle | Exact installed/target version planning, deterministic release notes, supported same-plugin reinstall, preservation checks, and explicit separation from generated-Hub migration |
 
 Semantic parity remains a second gate. The strict inventory proves that every
 surface is classified and present; `compare_hubs.py` separately probes schema,
@@ -110,14 +111,18 @@ private instances.
 
 Local validation can prove generation, schemas, CLI behavior, bridge
 idempotence, transition gates, no-fetch Doctor behavior, de-branding, artifact
-gates, and deterministic CKL tools. It cannot prove live Codex project
-registration or real task creation/resume behavior.
+gates, deterministic CKL tools, release-ledger integrity, and read-only upgrade
+planning. It cannot prove live Codex project registration, real task
+creation/resume behavior, or an installed plugin update.
 
 Installed runtime evidence remains unresolved unless a fresh task records the
 exact plugin version, current candidate root, a preserved synthetic generated
 Hub, exact-path project match, distinct logical and opaque runtime IDs, bridge
 configuration behavior, task create/resume identity, and confirmation that the
 Hub stopped without monitoring. Stale or cross-plugin evidence must fail.
+Installed upgrade acceptance separately requires explicit authorization,
+before/after exact versions, structured command results, preserved synthetic
+Hub and repository state, and a fresh task that loads the target build.
 
 ## Audit command
 

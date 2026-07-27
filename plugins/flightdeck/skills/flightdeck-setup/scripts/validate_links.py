@@ -18,6 +18,12 @@ SOURCE_REPOSITORY = (
     else None
 )
 BRIDGE_SKILL = ROOT.parent / "flightdeck-repo-bridge"
+PLAN_SKILL = ROOT.parent / "flightdeck-plan"
+REVIEW_SKILL = ROOT.parent / "flightdeck-review"
+CI_SKILL = ROOT.parent / "flightdeck-ci"
+PLATFORM_SKILL = ROOT.parent / "flightdeck-platform"
+STIG_SKILL = ROOT.parent / "flightdeck-stig"
+UPGRADE_SKILL = ROOT.parent / "flightdeck-upgrade"
 REQUIRED = (
     ROOT / "references" / "setup-runbook.md",
     ROOT / "references" / "setup-contract.md",
@@ -33,11 +39,24 @@ REQUIRED = (
     TEMPLATE / "docs" / "codex-ui-workflow.md",
     TEMPLATE / "docs" / "workflows" / "thread-routing.md",
     TEMPLATE / "docs" / "workflows" / "repo-onboarding.md",
+    TEMPLATE / "docs" / "workflows" / "planning.md",
+    TEMPLATE / "docs" / "workflows" / "ci-cd.md",
+    TEMPLATE / "docs" / "workflows" / "platform.md",
+    TEMPLATE / "docs" / "workflows" / "plugin-lifecycle.md",
+    TEMPLATE / "docs" / "compliance" / "stig-evaluation.md",
     TEMPLATE / "docs" / "workflows" / "configure-bridge-repos.md",
+    TEMPLATE / "docs" / "review" / "change-review.md",
     TEMPLATE / "hub" / "repositories.yaml",
     TEMPLATE / "hub" / "schemas" / "repository-declarations.schema.json",
     TEMPLATE / "hub" / "schemas" / "project-verifications.schema.json",
     BRIDGE_SKILL / "references" / "configure-bridge-repos.md",
+    PLAN_SKILL / "references" / "planning-method.md",
+    REVIEW_SKILL / "references" / "review-method.md",
+    CI_SKILL / "references" / "delivery-method.md",
+    PLATFORM_SKILL / "references" / "platform-method.md",
+    STIG_SKILL / "references" / "evidence-contract.md",
+    UPGRADE_SKILL / "references" / "upgrade-contract.md",
+    PLUGIN / "releases.json",
     PLUGIN / "process-parity.json",
 )
 
@@ -84,21 +103,33 @@ def main() -> int:
     if "references/setup-runbook.md" not in skill or "mandatory" not in skill.lower():
         failures.append("SKILL.md must mandate references/setup-runbook.md")
 
-    triggers = (
-        "configure bridge repos",
-        "configure repository bridges",
-        "set up all repos",
+    setup_triggers = (
+        "set up flightdeck",
+        "connect repositories",
     )
-    trigger_paths = (
-        TEMPLATE / "AGENTS.md",
-        TEMPLATE / "docs" / "workflows" / "configure-bridge-repos.md",
+    setup_trigger_paths = (
+        ROOT / "SKILL.md",
+        TEMPLATE / "README.md",
         PLUGIN / "skills" / "flightdeck" / "SKILL.md",
+    )
+    for path in setup_trigger_paths:
+        text = path.read_text(encoding="utf-8").casefold()
+        for trigger in setup_triggers:
+            if trigger not in text:
+                failures.append(f"{display(path)} missing trigger: {trigger}")
+
+    bridge_triggers = (
+        "reference",
+        "repo-native",
+        "drift",
+    )
+    bridge_trigger_paths = (
         BRIDGE_SKILL / "SKILL.md",
         BRIDGE_SKILL / "references" / "configure-bridge-repos.md",
     )
-    for path in trigger_paths:
+    for path in bridge_trigger_paths:
         text = path.read_text(encoding="utf-8").casefold()
-        for trigger in triggers:
+        for trigger in bridge_triggers:
             if trigger not in text:
                 failures.append(f"{display(path)} missing trigger: {trigger}")
 
@@ -115,6 +146,57 @@ def main() -> int:
     bridge_skill = (BRIDGE_SKILL / "SKILL.md").read_text(encoding="utf-8")
     if "references/configure-bridge-repos.md" not in bridge_skill or "mandatory" not in bridge_skill.lower():
         failures.append("flightdeck-repo-bridge/SKILL.md must mandate configure-bridge-repos.md")
+
+    focused_skills = (
+        (
+            PLAN_SKILL,
+            ("natural planning intent", "explicit invocation is optional"),
+            "references/planning-method.md",
+        ),
+        (
+            REVIEW_SKILL,
+            ("natural review intent", "explicit invocation is optional"),
+            "references/review-method.md",
+        ),
+        (
+            CI_SKILL,
+            ("natural ci/cd intent", "explicit invocation is optional"),
+            "references/delivery-method.md",
+        ),
+        (
+            PLATFORM_SKILL,
+            ("natural platform intent", "explicit invocation is optional"),
+            "references/platform-method.md",
+        ),
+        (
+            STIG_SKILL,
+            ("natural stig intent", "explicit invocation is optional"),
+            "references/evidence-contract.md",
+        ),
+        (
+            UPGRADE_SKILL,
+            ("natural flightdeck upgrade", "explicit invocation is optional"),
+            "references/upgrade-contract.md",
+        ),
+    )
+    for skill_root, anchors, reference in focused_skills:
+        text = (skill_root / "SKILL.md").read_text(encoding="utf-8").casefold()
+        for anchor in anchors:
+            if anchor not in text:
+                failures.append(
+                    f"{display(skill_root / 'SKILL.md')} missing natural trigger anchor: {anchor}"
+                )
+        if reference not in text:
+            failures.append(
+                f"{display(skill_root / 'SKILL.md')} missing reference: {reference}"
+            )
+        metadata = (skill_root / "agents" / "openai.yaml").read_text(
+            encoding="utf-8"
+        ).casefold()
+        if "allow_implicit_invocation: true" not in metadata:
+            failures.append(
+                f"{display(skill_root / 'agents' / 'openai.yaml')} must allow implicit invocation"
+            )
 
     for path in (TEMPLATE / "hub" / "bridges" / "templates").glob("*/AGENTS.override.md"):
         text = path.read_text(encoding="utf-8")

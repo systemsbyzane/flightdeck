@@ -30,8 +30,16 @@ when every mandatory item below is satisfied.
   validates recognized generated Hubs without overwriting them;
 - DOCX, PDF, and XLSX integrations verify installed system capabilities and
   their render/inspect/iterate gates without copying implementations;
-- STIG evaluation, Helm remediation planning, conservative summary extraction,
-  CKL generation, parsing, and deterministic round trip pass.
+- adaptive STIG evaluation, evidence/applicability and inherited-control
+  validation, draft-versus-export readiness, Helm remediation planning,
+  conservative summary extraction, CKL generation, parsing, and deterministic
+  round trip pass.
+- the release ledger latest version matches the plugin manifest, patch-note
+  ranges never invent unknown history, and upgrade planning distinguishes local
+  from Git marketplace refresh behavior;
+- the plugin lifecycle contract uses a supported same-plugin reinstall without
+  uninstalling first, protects generated Hubs and repositories, and keeps Hub
+  migration separate and explicit.
 
 ## Runtime acceptance
 
@@ -41,6 +49,12 @@ project verification and a real create/resume dispatch receipt. Confirm the Hub
 stops without monitoring. Evidence must match the current Flightdeck runtime
 schema, plugin version, candidate root, and preserved synthetic Hub; stale
 predecessor evidence is invalid. Local tests cannot satisfy these checks.
+
+An installed plugin-upgrade check is also runtime acceptance. With explicit
+authorization, record the exact prior and target versions, marketplace source,
+structured refresh/reinstall results, unchanged synthetic Hub and attached
+repository state, and a fresh task that exposes the target skills. Source tests
+or patch-note output alone cannot satisfy it.
 
 ## External decisions and dependencies
 

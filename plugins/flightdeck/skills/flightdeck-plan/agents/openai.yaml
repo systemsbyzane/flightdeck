@@ -1,0 +1,6 @@
+interface:
+  display_name: "Flightdeck Plan"
+  short_description: "Create right-sized multi-project plans"
+  default_prompt: "Use $flightdeck-plan to turn this request into a right-sized, executable plan."
+policy:
+  allow_implicit_invocation: true

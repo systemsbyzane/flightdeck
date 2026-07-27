@@ -25,14 +25,38 @@
           "codex_project_expectation"
         ],
         "properties": {
-          "default_branch_verified": {"const": true},
+          "placement": {"enum": ["managed", "attached"]},
+          "local_path": {"type": "string", "minLength": 1},
+          "default_branch_verified": {"type": "boolean"},
           "bridge_mode": {"enum": ["reference", "materialized", "repo-native"]},
           "codex_project_key": {
             "type": "string",
             "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
           },
           "codex_project_expectation": {"const": "saved_exact_path"}
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": ["placement"],
+              "properties": {"placement": {"const": "attached"}}
+            },
+            "then": {
+              "properties": {
+                "local_path": {
+                  "pattern": "^(?:/|[A-Za-z]:[\\\\/])"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "local_path": {
+                  "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+                }
+              }
+            }
+          }
+        ]
       }
     }
   }

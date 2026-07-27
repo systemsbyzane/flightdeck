@@ -1,0 +1,6 @@
+interface:
+  display_name: "Flightdeck Review"
+  short_description: "Review changes with ownership context"
+  default_prompt: "Use $flightdeck-review to review this change and lead with actionable findings."
+policy:
+  allow_implicit_invocation: true

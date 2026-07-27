@@ -42,7 +42,8 @@ No clone, build, or installer script is required. Start a fresh Codex task so
 the new skills are loaded, then ask:
 
 ```text
-Use $flightdeck-setup to create a new Flightdeck at /absolute/path/to/my-hub.
+Set up Flightdeck at /absolute/path/to/my-hub for the Git repositories
+under /absolute/path/to/my-repositories.
 ```
 
 Confirm the plugin is visible with:
@@ -87,26 +88,28 @@ resumes one task, returns the receipt, and does not monitor the child task.
 <summary><strong>Create a new Flightdeck</strong></summary>
 
 ```text
-Use $flightdeck-setup to create a new Flightdeck at /absolute/path/to/my-hub.
+Set up Flightdeck at /absolute/path/to/my-hub for the Git repositories
+under /absolute/path/to/my-repositories.
 ```
 
 Setup is atomic and non-merging. It generates the Hub, validates it, and
-verifies the exact Codex project path when the installed runtime supports that
-operation.
+connects existing repositories in place with safe local bridges. Users do not
+need to name a skill or edit YAML. If the repository folder is omitted,
+Flightdeck finishes core setup and asks one question for it.
 
 </details>
 
 <details>
 <summary><strong>Connect existing repositories</strong></summary>
 
-Declare verified repositories in `hub/repositories.yaml`, then ask:
-
 ```text
-Configure bridge repos.
+Connect the Git repositories under /absolute/path/to/my-repositories.
 ```
 
-Flightdeck plans every repository first, preserves dirty state, refuses
-unmanaged conflicts, and records ignored local receipts.
+Flightdeck discovers and previews every repository first, preserves dirty
+state, connects safe checkouts in place, adds ignored reference bridges, skips
+unmanaged conflicts, and records portable declarations plus ignored local
+receipts.
 
 </details>
 
@@ -114,12 +117,84 @@ unmanaged conflicts, and records ignored local receipts.
 <summary><strong>Route real engineering work</strong></summary>
 
 ```text
-Use $flightdeck to route this change to its owning project:
+Route this change to its owning project:
 add pagination to the example API without changing its response contract.
 ```
 
 Flightdeck returns the logical project key, opaque runtime project ID, exact
 path, task ID, execution mode, and authorization boundary—then stops.
+
+</details>
+
+<details>
+<summary><strong>Plan work before changing anything</strong></summary>
+
+```text
+Plan the API and deployment changes for this feature. Identify owners,
+dependencies, risks, validation, and anything we still need to decide.
+```
+
+Flightdeck keeps planning read-only and scales the answer to the work. Small
+requests get a compact plan; cross-repository or high-risk requests include
+contracts, sequencing, rollout, rollback, and approval gates.
+
+</details>
+
+<details>
+<summary><strong>Review a change</strong></summary>
+
+```text
+Review this working tree for correctness, security, compatibility, and missing
+tests.
+```
+
+Flightdeck routes repository review to the exact owner and leads with
+evidence-backed findings. It does not fix findings or comment externally unless
+the user separately asks.
+
+</details>
+
+<details>
+<summary><strong>Diagnose or change CI/CD</strong></summary>
+
+```text
+Diagnose why this pipeline is failing. Trace the first causal failure and
+separate source fixes from any rerun, release, or deployment action.
+```
+
+Flightdeck correlates provider evidence with the workflow at the exact source
+revision, routes source changes to the owning repository, and keeps rerun,
+publication, promotion, and deployment as separate approval-gated actions.
+
+</details>
+
+<details>
+<summary><strong>Coordinate platform work</strong></summary>
+
+```text
+Coordinate this platform change across infrastructure source, deployment
+configuration, and the target environment.
+```
+
+Flightdeck separates declared configuration, generated plans, applied state,
+and observed runtime state. Source changes stay with their repository owner;
+live validation and mutations stay with the exact environment and authorization
+boundary.
+
+</details>
+
+<details>
+<summary><strong>Upgrade Flightdeck safely</strong></summary>
+
+```text
+Upgrade my Flightdeck plugin without changing my existing Hub or repositories.
+Show me what changed before applying anything.
+```
+
+Flightdeck compares the installed and marketplace versions, renders recorded
+patch notes, protects generated Hubs and attached repositories, and asks before
+refreshing or reinstalling anything. It never removes the plugin first or runs
+setup against an existing Hub.
 
 </details>
 
@@ -164,12 +239,16 @@ Flightdeck is a coordinator, not a monorepo and not a background task monitor.
 Installing the plugin makes these focused skills available:
 
 - coordination and exact-project dispatch;
+- adaptive, read-only planning and findings-first review;
+- CI/CD diagnosis, delivery workflow changes, and release gates;
+- platform, infrastructure, and environment coordination;
 - setup and Doctor;
 - repository bridge planning and installation;
 - development, charts, patching, and research workflows;
 - Word, PDF, and spreadsheet artifact routing;
 - compliance, POA&M, and machine-readable sidecar methods;
 - STIG evaluation and deterministic CKL tools;
+- safe plugin upgrade planning, preservation verification, and patch notes;
 - safe recurring-automation design and review.
 
 The plugin does not install repositories, credentials, scheduled jobs, document
@@ -225,18 +304,21 @@ repo-managed bootstrap:
 
 ```sh
 python3 plugins/flightdeck/skills/flightdeck-setup/scripts/bootstrap.py \
-  --target /absolute/path/to/my-hub
+  --target /absolute/path/to/my-hub \
+  --repositories-root /absolute/path/to/my-repositories
 
 python3 plugins/flightdeck/skills/flightdeck-setup/scripts/bootstrap.py \
   --target /absolute/path/to/my-hub \
+  --repositories-root /absolute/path/to/my-repositories \
   --apply
 ```
 
 Preview is the default. Apply generates only into an absent or empty target,
-runs local validation, and is an idempotent validation-only no-op when the same
-valid generated Hub already exists. It never installs the plugin, registers a
-project, configures credentials, stages or commits files, adds a remote, pushes,
-publishes, or deploys.
+runs local validation, and revalidates an existing generated Hub without
+overwriting managed files. With `--repositories-root`, reruns idempotently
+connect newly discovered safe repositories. It never installs the plugin,
+registers a project, configures credentials, stages or commits files, adds a
+remote, pushes, publishes, or deploys.
 
 ## What setup does
 
@@ -248,35 +330,46 @@ It:
 2. checks local commands and current Codex capabilities;
 3. verifies external document, PDF, and spreadsheet capability gates;
 4. copies the bundled Hub template through a staging directory;
-5. writes only the generated root and empty ignored local registries;
-6. runs Ruby tests, structured parsing, Doctor, link checks, and de-branding;
-7. registers or opens the Hub project and verifies it by exact path;
-8. reports blockers without claiming installed-runtime acceptance.
+5. discovers Git roots only under the user-authorized repository folder;
+6. attaches safe repositories in place, creates portable declarations, and
+   installs ignored reference bridges without changing tracked repository files;
+7. runs Ruby tests, structured parsing, Doctor, link checks, and de-branding;
+8. registers or opens the Hub and connected repository projects and verifies
+   each by exact path;
+9. reports only unresolved blockers without claiming installed-runtime acceptance.
 
-Setup never merges with a non-empty directory and never invents repository,
-program, branch, environment, or credential facts.
+Setup never merges with a non-empty directory, moves an existing checkout, or
+invents program, environment, or credential facts.
 
-## Why repository bridges are separate
+## How repository bridges work
 
 Opening a nested repository as its own Codex project does not make it inherit
 the Hub’s instructions. A bridge tells that repository where the shared
 Flightdeck policy lives while preserving the repository’s own `AGENTS.md` as
 the authority for layout, commands, tests, and implementation mechanics.
 
-Bridge setup is not automatic out of the box because it must first know and
-verify:
+Initial setup automatically installs a `reference` bridge after it verifies:
 
 - the exact repository checkout;
 - existing instruction and override files;
 - the selected bridge profile and mode;
 - local ignore protection;
 - the exact saved Codex project path;
-- whether tracked repository instructions may be changed.
+- that no tracked repository instructions need to change.
+
+An unmanaged override, bridge drift, credential-bearing origin, detached HEAD,
+or path/identity conflict is reported and left untouched. Materialized or
+tracked repo-native bridges remain an advanced, separately authorized change.
 
 ### Where repositories live
 
-Flightdeck repository declarations are intentionally Hub-relative. Each managed
-checkout lives under the generated Hub's matching workload root:
+Existing checkouts remain where they already live. Their absolute paths are
+stored only in ignored `hub/state/repositories.yaml`; tracked
+`hub/repositories.yaml` uses `placement: attached` and contains no
+machine-specific path.
+
+Flightdeck also supports intentionally managed checkouts under matching Hub
+workload roots:
 
 ```text
 <hub-root>/
@@ -288,21 +381,10 @@ checkout lives under the generated Hub's matching workload root:
 └── compliance/
 ```
 
-Bridge configuration never moves an existing checkout into the Hub. If a
-checkout already exists under its declared workload root, the `existing-local`
-adapter verifies it in place and preserves its dirty and untracked state. If
-the only checkout is outside the Hub, it may be inspected read-only to verify
-provider, owner, remote, and default-branch facts; after explicit clone
-authorization, Flightdeck creates a fresh checkout under the proper workload
-root and leaves the original untouched.
+Lower-level provider onboarding can still clone a deliberately managed
+checkout when explicitly requested. Ordinary one-prompt setup does not clone.
 
-A fresh clone does not include uncommitted or unpushed work. Preserve the
-original checkout until any required local work has been transferred
-deliberately. Paths outside the Hub cannot be used as declaration
-`local_path` values, and Flightdeck never relocates them implicitly.
-
-Declare repositories in the generated Hub’s `hub/repositories.yaml`, review the
-plan, then ask:
+Discovery creates a portable attached declaration like this:
 
 ```yaml
 api_version: flightdeck.dev/v1alpha1
@@ -310,10 +392,10 @@ kind: RepositoryDeclarations
 schema: hub/schemas/repository-declarations.schema.json
 repositories:
   - id: example-service
+    placement: attached
     workload: development
     provider: github
     locator: example-company/example-service
-    local_path: development/example-service
     owner: example-company
     default_branch: main
     default_branch_verified: true
@@ -325,14 +407,9 @@ repositories:
       logical_key: example-service
 ```
 
-Use verified values rather than copying the synthetic example unchanged. With
-an empty declaration list, bridge setup correctly has nothing to configure.
-
-```text
-configure bridge repos
-```
-
-That phrase routes to the mandatory
+Manual declaration editing remains an advanced option. Managed declarations
+use `placement: managed` and a Hub-relative `local_path`. Advanced mode changes,
+migration, or drift repair route to the mandatory
 [bridge configuration runbook](plugins/flightdeck/skills/flightdeck-repo-bridge/references/configure-bridge-repos.md).
 It plans every repository before applying anything, preserves dirty state,
 refuses unmanaged or drifting targets, verifies exact project paths, records
@@ -379,7 +456,8 @@ that genuinely belongs there.
 | `Research declared versus deployed configuration.` | Read-only owner or runtime project with a source ledger |
 | `Prepare a Word policy from approved Markdown.` | Program workspace plus documents capability and visual QA |
 | `Generate POA&M candidates from these supported weaknesses.` | Isolated compliance program workspace with JSON/YAML sidecars |
-| `Evaluate this CKL without changing a cluster.` | STIG workflow with read-only evidence |
+| `Evaluate this CKL without changing a cluster.` | Adaptive STIG workflow with read-only evidence |
+| `Review these STIG findings for evidence gaps and export readiness.` | Draft-friendly validation with strict final provenance |
 | `Create a weekly vulnerability review.` | Disabled automation specification until separately enabled |
 
 ## Safety and approvals
@@ -421,19 +499,26 @@ Contributor parity and release contracts live in
 
 ## Updating
 
-Refresh the GitHub marketplace snapshot, then reinstall the plugin:
+Ask Flightdeck to inspect the installed version, show the patch notes, and
+prepare a preservation-aware upgrade plan:
 
-```sh
-codex plugin marketplace upgrade flightdeck-team
-codex plugin remove flightdeck@flightdeck-team
-codex plugin add flightdeck@flightdeck-team
+```text
+Upgrade my Flightdeck plugin without changing my existing Hub or repositories.
+Show me what changed before applying anything.
 ```
 
-Start a fresh Codex task after reinstalling so the new skill definitions are
-loaded. The setup generator has no upgrade-in-place or merge mode. To adopt a
-new Hub template, generate a new Hub, compare stable configuration and ignored
-local state deliberately, validate it, and verify its exact saved project path
-before retiring the old Hub.
+Patch-note and preflight checks are read-only. Flightdeck asks for explicit
+approval before refreshing a Git marketplace or reinstalling the plugin, then
+uses the supported `codex plugin add flightdeck@flightdeck-team --json` path
+without an uninstall step. Start a fresh Codex task afterward so the new skill
+definitions load.
+
+Plugin upgrade does not run setup, modify attached repositories, or migrate an
+existing generated Hub. The setup generator has no merge or overwrite mode.
+Any future Hub-template migration is a separate, explicit plan-and-diff
+workflow. See the
+[upgrade contract](plugins/flightdeck/skills/flightdeck-upgrade/references/upgrade-contract.md)
+and the machine-readable [release ledger](plugins/flightdeck/releases.json).
 
 ## Uninstalling
 

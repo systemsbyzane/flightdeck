@@ -5,6 +5,14 @@ and runtime validation separated.
 
 - [Thread routing](thread-routing.md) chooses the owning Codex project,
   execution mode, and dispatch boundary.
+- [Planning](planning.md) creates a right-sized, read-only plan without forcing
+  every request through one template.
+- [CI/CD and delivery](ci-cd.md) correlates exact source revisions with
+  pipeline evidence and separates delivery actions.
+- [Platform and environments](platform.md) separates infrastructure source,
+  generated plans, applied state, and runtime observations.
+- [Plugin lifecycle](plugin-lifecycle.md) separates supported plugin updates
+  from generated-Hub migration and protects user-owned state.
 - [Repository onboarding](repo-onboarding.md) verifies or acquires an owning
   checkout without inventing provider or branch facts.
 - [Configure bridge repositories](configure-bridge-repos.md) plans and applies

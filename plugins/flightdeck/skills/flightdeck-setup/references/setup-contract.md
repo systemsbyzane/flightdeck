@@ -11,6 +11,18 @@ The generated Hub is a coordination workspace, not a source monorepo.
 - Resolve and record repository ownership and the verified default branch
   before cloning. Hosted provider hosts may be configured; generic Git requires
   an explicit owner and canonical URL.
+- For an attached checkout, prefer local `origin/HEAD`. If it is unavailable,
+  preserve usability by recording the checked-out branch with
+  `default_branch_verified: false` and report the pending provider-metadata
+  check; never present the fallback as verified.
+- Discover only under a user-authorized repository root. Existing checkouts
+  attach in place by default; setup never moves them into the Hub.
+- Store attached absolute paths only in ignored local repository state. Keep
+  tracked declarations portable with `placement: attached` and no
+  `local_path`.
+- Default initial setup to a non-destructive `reference` bridge. The setup
+  request authorizes its ignored `AGENTS.override.md` and Git-local exclude
+  entry, but never tracked repository-policy changes.
 - Automations remain disabled until explicit enablement.
 - Register each owning repository or program folder as a separate Codex project.
 - Keep its stable logical project key separate from Codex's opaque runtime

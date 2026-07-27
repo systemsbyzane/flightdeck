@@ -65,6 +65,39 @@ class BootstrapTest(unittest.TestCase):
             timeout=30,
         )
 
+    def initialize_repository(self, path: Path) -> None:
+        path.mkdir(parents=True)
+        subprocess.run(
+            ["git", "init", "--quiet", "--initial-branch=main", str(path)],
+            check=True,
+            timeout=30,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Synthetic Test"],
+            cwd=path,
+            check=True,
+            timeout=30,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.invalid"],
+            cwd=path,
+            check=True,
+            timeout=30,
+        )
+        (path / "AGENTS.md").write_text("# Repository policy\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "add", "AGENTS.md"],
+            cwd=path,
+            check=True,
+            timeout=30,
+        )
+        subprocess.run(
+            ["git", "commit", "--quiet", "-m", "Synthetic fixture"],
+            cwd=path,
+            check=True,
+            timeout=30,
+        )
+
     def test_debranding_uses_external_private_map_and_detects_obfuscation(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="flightdeck-private-map-"
@@ -349,6 +382,63 @@ class BootstrapTest(unittest.TestCase):
                 "unrecognized generated managed content",
                 tampered_report["error"]["message"],
             )
+
+    def test_one_prompt_setup_connects_existing_repositories_in_place(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="flightdeck-bootstrap-repos-") as directory:
+            root = Path(directory)
+            target = root / "generated"
+            repositories_root = root / "repositories"
+            repository = repositories_root / "sample-service"
+            self.initialize_repository(repository)
+            agents_before = (repository / "AGENTS.md").read_text(encoding="utf-8")
+
+            preview = self.run_bootstrap(
+                str(target),
+                "--repositories-root",
+                str(repositories_root),
+                "--json",
+            )
+            self.assertEqual(0, preview.returncode, preview.stderr)
+            preview_report = self.json_report(preview)
+            self.assertEqual(1, preview_report["repository_setup"]["plan"]["summary"]["discovered"])
+            self.assertEqual(1, preview_report["repository_setup"]["plan"]["summary"]["ready"])
+            self.assertFalse(target.exists())
+            self.assertFalse((repository / "AGENTS.override.md").exists())
+
+            applied = self.run_bootstrap(
+                str(target),
+                "--repositories-root",
+                str(repositories_root),
+                "--apply",
+                "--json",
+            )
+            self.assertEqual(0, applied.returncode, applied.stderr)
+            report = self.json_report(applied)
+            self.assertEqual("generated_connected_and_validated", report["status"])
+            self.assertEqual(1, report["repository_setup"]["connection"]["summary"]["connected"])
+            self.assertEqual(0, report["repository_setup"]["connection"]["summary"]["blocked"])
+            self.assertTrue(report["external_actions"]["safe_reference_bridges_installed"])
+            self.assertFalse(report["external_actions"]["tracked_repository_files_changed"])
+            declarations = (target / "hub" / "repositories.yaml").read_text(encoding="utf-8")
+            self.assertIn("placement: attached", declarations)
+            self.assertNotIn(str(repository.resolve()), declarations)
+            local_state = (target / "hub" / "state" / "repositories.yaml").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn(str(repository.resolve()), local_state)
+            self.assertTrue((repository / "AGENTS.override.md").is_file())
+            self.assertEqual(
+                agents_before,
+                (repository / "AGENTS.md").read_text(encoding="utf-8"),
+            )
+            tracked_diff = subprocess.run(
+                ["git", "diff", "--exit-code"],
+                cwd=repository,
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(0, tracked_diff.returncode, tracked_diff.stdout + tracked_diff.stderr)
 
 
 if __name__ == "__main__":

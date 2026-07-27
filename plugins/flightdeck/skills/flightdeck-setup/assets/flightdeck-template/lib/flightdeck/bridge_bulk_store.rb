@@ -114,11 +114,14 @@ module Flightdeck
 
     def plan_repository(declaration)
       id = declaration.fetch("id")
-      expected_root = config.root_path(declaration.fetch("local_path"), label: "declared repository path")
       repository = config.repository(id)
+      expected_root = declaration["placement"] == "attached" ?
+        (config.repository_path(repository) if repository) :
+        config.root_path(declaration.fetch("local_path"), label: "declared repository path")
       blockers = []
       registry_changes = []
       checkout = checkout_plan(expected_root, repository)
+      blockers << "attached checkout is missing from local connection state" if declaration["placement"] == "attached" && !repository
       blockers << "declared checkout is missing" unless checkout["exists"]
       blockers << "declared checkout is not the exact Git root" if checkout["exists"] && !checkout["git_root_verified"]
       if checkout["branch"] && checkout["branch"] != declaration["default_branch"]
@@ -126,14 +129,16 @@ module Flightdeck
       end
 
       if repository
-        registered_root = config.root_path(repository.fetch("path"), label: "registered repository path")
+        registered_root = config.repository_path(repository)
         unless File.expand_path(registered_root) == File.expand_path(expected_root)
           blockers << "registered path differs from declaration"
         end
         {
+          "placement" => declaration["placement"],
           "provider" => declaration["provider"],
           "owner" => declaration["owner"],
           "default_branch" => declaration["default_branch"],
+          "default_branch_verified" => declaration["default_branch_verified"],
           "workload" => declaration["workload"],
           "bridge_profile" => declaration.dig("bridge", "profile"),
           "bridge_mode" => declaration.dig("bridge", "mode"),
@@ -144,7 +149,13 @@ module Flightdeck
           blockers << "registered #{field} differs from declaration" if Support.present?(actual) && actual != expected
         end
       else
-        registry_changes << (Dir.exist?(expected_root) ? "register_existing_checkout" : "clone_and_register_checkout")
+        registry_changes << if declaration["placement"] == "attached"
+                              "connect_attached_checkout"
+                            elsif expected_root && Dir.exist?(expected_root)
+                              "register_existing_checkout"
+                            else
+                              "clone_and_register_checkout"
+                            end
         blockers << "repository is not registered"
       end
 
@@ -167,6 +178,7 @@ module Flightdeck
         "locator" => declaration["locator"],
         "owner" => declaration["owner"],
         "verified_default_branch" => declaration["default_branch"],
+        "default_branch_verified" => declaration["default_branch_verified"],
         "git_root" => expected_root,
         "checkout" => checkout,
         "existing_agents_files" => bridge_plan["agents_files"],
@@ -202,11 +214,11 @@ module Flightdeck
     def checkout_plan(path, repository)
       result = {
         "path" => path,
-        "exists" => Dir.exist?(path),
+        "exists" => path && Dir.exist?(path),
         "registered" => !repository.nil?,
         "git_root_verified" => false
       }
-      return result unless Dir.exist?(path)
+      return result unless path && Dir.exist?(path)
 
       root, error, status = Support.capture("git", "rev-parse", "--show-toplevel", chdir: path)
       result["git_root_verified"] = status.zero? && File.realpath(root) == File.realpath(path)
@@ -245,7 +257,7 @@ module Flightdeck
                 when "repo-native" then ["AGENTS.md"]
                 else []
                 end
-      files = if Dir.exist?(root)
+      files = if root && Dir.exist?(root)
                 Dir.glob(File.join(root, "**", "{AGENTS.md,AGENTS.override.md}"), File::FNM_DOTMATCH)
                    .reject { |path| path.split(File::SEPARATOR).include?(".git") }
                    .sort
@@ -253,7 +265,7 @@ module Flightdeck
               else
                 []
               end
-      existing = targets.select { |path| File.exist?(File.join(root, path)) }
+      existing = root ? targets.select { |path| File.exist?(File.join(root, path)) } : []
       blockers = if %w[reference materialized].include?(mode)
                    existing.map { |path| "refusing to overwrite unmanaged bridge target: #{path}" }
                  else
@@ -270,6 +282,18 @@ module Flightdeck
 
     def project_plan(declaration, expected_root)
       expected = declaration.fetch("codex_project")
+      unless expected_root
+        return {
+          "expectation" => "saved_exact_path",
+          "logical_key" => expected.fetch("logical_key"),
+          "runtime_project_id" => nil,
+          "status" => "pending",
+          "work" => "connect_checkout_then_register",
+          "recorded_path" => nil,
+          "exact_path_match" => false,
+          "verification_source" => nil
+        }
+      end
       config.project_verification(
         logical_key: expected.fetch("logical_key"),
         expected_path: expected_root

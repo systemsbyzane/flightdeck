@@ -50,6 +50,7 @@ def run(
     cwd: Path,
     stage: str,
     timeout: int = COMMAND_TIMEOUT,
+    allowed_exit_codes: tuple[int, ...] = (0,),
 ) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
@@ -63,7 +64,7 @@ def run(
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise BootstrapFailure(stage, f"command could not complete: {error}") from error
-    if result.returncode != 0:
+    if result.returncode not in allowed_exit_codes:
         details = (result.stderr or result.stdout).strip()
         suffix = f": {details}" if details else ""
         raise BootstrapFailure(
@@ -78,8 +79,14 @@ def json_result(
     *,
     cwd: Path,
     stage: str,
+    allowed_exit_codes: tuple[int, ...] = (0,),
 ) -> dict[str, Any]:
-    result = run(arguments, cwd=cwd, stage=stage)
+    result = run(
+        arguments,
+        cwd=cwd,
+        stage=stage,
+        allowed_exit_codes=allowed_exit_codes,
+    )
     try:
         value = json.loads(result.stdout)
     except json.JSONDecodeError as error:
@@ -123,6 +130,43 @@ def normalize_target(requested: Path) -> Path:
                 exit_code=2,
             )
     return target
+
+
+def normalize_repositories_root(requested: Path) -> Path:
+    expanded = requested.expanduser()
+    if not expanded.is_absolute():
+        raise BootstrapFailure(
+            "repositories-root",
+            f"repositories root must be absolute: {expanded}",
+            exit_code=2,
+        )
+    if expanded.is_symlink():
+        raise BootstrapFailure(
+            "repositories-root",
+            f"repositories root must not be a symlink: {expanded.absolute()}",
+            exit_code=2,
+        )
+    try:
+        root = expanded.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise BootstrapFailure(
+            "repositories-root",
+            f"repositories root cannot be normalized: {error}",
+            exit_code=2,
+        ) from error
+    if not root.is_dir():
+        raise BootstrapFailure(
+            "repositories-root",
+            f"repositories root must be a directory: {root}",
+            exit_code=2,
+        )
+    if root == Path(root.anchor) or root == Path.home().resolve():
+        raise BootstrapFailure(
+            "repositories-root",
+            f"repositories root is too broad: {root}",
+            exit_code=2,
+        )
+    return root
 
 
 def preflight() -> dict[str, Any]:
@@ -351,6 +395,7 @@ def base_report(target: Path, mode: str, preflight_report: dict[str, Any]) -> di
         "runtime_status": "agent_verification_required",
         "runtime_requirements": preflight_report.get("agent_runtime_requirements", []),
         "validation": None,
+        "repository_setup": None,
         "external_actions": {
             "plugin_installed": False,
             "git_staged": False,
@@ -359,18 +404,104 @@ def base_report(target: Path, mode: str, preflight_report: dict[str, Any]) -> di
             "secrets_configured": False,
             "projects_registered": False,
             "published": False,
+            "portable_repository_declarations_written": False,
+            "local_repository_state_written": False,
+            "safe_reference_bridges_installed": False,
+            "tracked_repository_files_changed": False,
         },
     }
 
 
-def bootstrap(target: Path, *, apply: bool) -> dict[str, Any]:
+def repository_setup_plan(
+    hub: Path,
+    ruby: str,
+    repositories_root: Path,
+) -> dict[str, Any]:
+    return json_result(
+        [
+            ruby,
+            str(hub / "bin" / "flightdeck"),
+            "setup",
+            "plan",
+            "--repositories-root",
+            str(repositories_root),
+            "--failure-policy",
+            "continue",
+            "--json",
+        ],
+        cwd=hub,
+        stage="repository-discovery",
+    )
+
+
+def repository_setup_connect(
+    hub: Path,
+    ruby: str,
+    repositories_root: Path,
+) -> dict[str, Any]:
+    return json_result(
+        [
+            ruby,
+            str(hub / "bin" / "flightdeck"),
+            "setup",
+            "connect",
+            "--repositories-root",
+            str(repositories_root),
+            "--failure-policy",
+            "continue",
+            "--json",
+        ],
+        cwd=hub,
+        stage="repository-connection",
+        allowed_exit_codes=(0, 1),
+    )
+
+
+def record_repository_connection(
+    report: dict[str, Any],
+    connection: dict[str, Any],
+) -> None:
+    report["repository_setup"]["connection"] = connection
+    bridge_summary = connection.get("bridge_receipt", {}).get("summary", {})
+    changed = connection.get("changed") is True
+    report["external_actions"]["portable_repository_declarations_written"] = changed
+    report["external_actions"]["local_repository_state_written"] = changed
+    report["external_actions"]["safe_reference_bridges_installed"] = (
+        bridge_summary.get("installed", 0) > 0
+    )
+
+
+def bootstrap(
+    target: Path,
+    *,
+    apply: bool,
+    repositories_root: Path | None = None,
+) -> dict[str, Any]:
     preflight_report = preflight()
     report = base_report(target, "apply" if apply else "preview", preflight_report)
     python3 = str(preflight_report["commands"]["python3"]["path"])
     ruby = str(preflight_report["commands"]["ruby"]["path"])
     state = target_state(target, ruby)
+    if repositories_root is not None:
+        plan_hub = target if state == "generated" else TEMPLATE
+        report["repository_setup"] = {
+            "repositories_root": str(repositories_root),
+            "plan": repository_setup_plan(plan_hub, ruby, repositories_root),
+            "connection": None,
+        }
 
     if state == "generated":
+        if apply and repositories_root is not None:
+            connection = repository_setup_connect(target, ruby, repositories_root)
+            record_repository_connection(report, connection)
+            report["validation"] = validate(target, python3, ruby)
+            report["status"] = (
+                "validated_and_connected"
+                if connection.get("ok") is True
+                else "validated_and_connected_with_blockers"
+            )
+            report["no_op"] = connection.get("changed") is not True
+            return report
         report["validation"] = validate(target, python3, ruby)
         report["status"] = "validated_noop"
         report["no_op"] = True
@@ -393,8 +524,16 @@ def bootstrap(target: Path, *, apply: bool) -> dict[str, Any]:
         )
     report["generated"] = True
     recognize_generated_target(target, ruby)
+    if repositories_root is not None:
+        connection = repository_setup_connect(target, ruby, repositories_root)
+        record_repository_connection(report, connection)
     report["validation"] = validate(target, python3, ruby)
-    report["status"] = "generated_and_validated"
+    if repositories_root is None:
+        report["status"] = "generated_and_validated"
+    elif report["repository_setup"]["connection"].get("ok") is True:
+        report["status"] = "generated_connected_and_validated"
+    else:
+        report["status"] = "generated_connected_with_blockers_and_validated"
     return report
 
 
@@ -414,6 +553,14 @@ def human_output(report: dict[str, Any]) -> str:
                 "No changes made. Re-run with --apply to generate and validate it.",
             ]
         )
+        repository_setup = report.get("repository_setup")
+        if repository_setup:
+            summary = repository_setup["plan"]["summary"]
+            lines.append(
+                "Repository preview: "
+                f"{summary['discovered']} discovered, {summary['ready']} ready, "
+                f"{summary['noop']} already connected, {summary['blocked']} blocked."
+            )
         return "\n".join(lines)
 
     validation = report["validation"]
@@ -423,8 +570,8 @@ def human_output(report: dict[str, Any]) -> str:
     debranding = validation["debranding"]
     links = validation["setup_links"]
     action = (
-        "Existing Flightdeck validated; no files were overwritten."
-        if report["status"] == "validated_noop"
+        "Existing Flightdeck validated."
+        if report["status"].startswith("validated")
         else "Flightdeck generated and validated."
     )
     lines.extend(
@@ -451,6 +598,27 @@ def human_output(report: dict[str, Any]) -> str:
             "project registration, or publication occurred.",
         ]
     )
+    repository_setup = report.get("repository_setup")
+    if repository_setup and repository_setup.get("connection"):
+        connection = repository_setup["connection"]
+        summary = connection["summary"]
+        lines.extend(
+            [
+                "Repository setup: "
+                f"{summary['discovered']} discovered, {summary['connected']} connected, "
+                f"{summary['blocked']} blocked, "
+                f"{summary['project_pending']} Codex project(s) pending exact-path verification.",
+                "Attached repositories stayed in place; no tracked repository files changed.",
+            ]
+        )
+    elif repository_setup:
+        summary = repository_setup["plan"]["summary"]
+        lines.append(
+            "Repository preview: "
+            f"{summary['discovered']} discovered, {summary['ready']} ready, "
+            f"{summary['noop']} already connected, {summary['blocked']} blocked; "
+            "no repository connection changes were made."
+        )
     return "\n".join(lines)
 
 
@@ -458,6 +626,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("target_path", nargs="?", type=Path)
     parser.add_argument("--target", dest="target_option", type=Path)
+    parser.add_argument(
+        "--repositories-root",
+        type=Path,
+        help="Discover and connect Git repositories under this authorized root",
+    )
     parser.add_argument(
         "--apply",
         action="store_true",
@@ -472,9 +645,16 @@ def main() -> int:
         parser.error("a target is required")
 
     target: Path | None = None
+    repositories_root: Path | None = None
     try:
         target = normalize_target(requested_target)
-        report = bootstrap(target, apply=args.apply)
+        if args.repositories_root is not None:
+            repositories_root = normalize_repositories_root(args.repositories_root)
+        report = bootstrap(
+            target,
+            apply=args.apply,
+            repositories_root=repositories_root,
+        )
     except BootstrapFailure as error:
         failure = {
             "schema_version": "flightdeck.bootstrap/v1",
@@ -484,6 +664,15 @@ def main() -> int:
                 else str(requested_target.expanduser())
             ),
             "mode": "apply" if args.apply else "preview",
+            "repositories_root": (
+                str(repositories_root)
+                if repositories_root is not None
+                else (
+                    str(args.repositories_root.expanduser())
+                    if args.repositories_root is not None
+                    else None
+                )
+            ),
             "status": "failed",
             "error": {"stage": error.stage, "message": str(error)},
         }

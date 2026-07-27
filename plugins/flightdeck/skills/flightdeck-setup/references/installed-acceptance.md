@@ -6,7 +6,9 @@ context.
 
 ## Setup acceptance
 
-1. Ask: `Set up a new Flightdeck at <empty-temporary-path>.`
+1. Create two synthetic Git repositories under one temporary folder, including
+   one dirty checkout. Ask: `Set up Flightdeck at <empty-temporary-path> for
+   the Git repositories under <temporary-repositories-root>.`
 2. Verify the agent reads the mandatory setup runbook before writing.
 3. Verify the target is generated only when absent or empty.
 4. Verify local prerequisites, artifact capabilities, tests, Doctor,
@@ -16,14 +18,20 @@ context.
    path match. A display-name match must fail.
 6. Exercise a forced registration failure. Verify one retry and exactly one
    manual action; no owner work may begin in the setup task.
+7. Verify setup previews repository discovery, connects the safe checkouts in
+   place, preserves dirty state, writes no attached absolute path to tracked
+   declarations, installs ignored reference bridges automatically, registers
+   exact repository projects, and changes no tracked repository file.
+8. Add an unmanaged `AGENTS.override.md` to one synthetic repository. Verify it
+   is skipped without overwrite while an independent safe repository connects.
 
-## Bridge configuration acceptance
+## Advanced bridge configuration acceptance
 
 Open the generated Hub project, add two synthetic repository declarations, and
-ask: `configure bridge repos`.
+ask to change one bridge to materialized mode and inspect drift in another.
 
-1. Verify that this exact phrase and the equivalent “configure repository
-   bridges” and “set up all repos” route to the mandatory bridge runbook.
+1. Verify advanced mode-change and drift intent routes to the mandatory bridge
+   runbook rather than rerunning initial setup.
 2. Verify the agent reads Hub instructions and declarations before mutation.
 3. Use one existing dirty synthetic checkout and one authorized missing
    synthetic checkout. Verify dirty state is preserved and the missing checkout
@@ -72,6 +80,80 @@ patching work whose owner is a synthetic repository.
 8. Verify the Hub returns logical project key, runtime project ID, task ID,
    mode, and authorization boundary, then stops without waiting, polling,
    reading, or monitoring.
+
+## Plugin upgrade acceptance
+
+Run this separately and only after the user explicitly authorizes mutation of
+the installed plugin and, when applicable, its Git marketplace snapshot.
+
+1. Preserve one synthetic generated Hub with an attached dirty synthetic
+   repository. Record exact Git status plus generated Doctor output.
+2. Record the installed plugin version, configured marketplace, source type,
+   and exact marketplace target from structured Codex CLI output.
+3. Ask: `Upgrade my Flightdeck plugin without changing my existing Hub or
+   repositories. Show me what changed before applying anything.`
+4. Verify the agent renders patch notes from `releases.json`, labels an unknown
+   starting version as incomplete, shows exact proposed commands, and obtains
+   approval before mutation.
+5. For a Git marketplace, verify an approved marketplace refresh occurs before
+   the final plan. For a local marketplace, verify no refresh command runs.
+6. Verify the plugin is reinstalled with `codex plugin add` without a preceding
+   remove, direct cache edit, setup, bootstrap, bridge command, or Hub migration.
+7. Verify the installed record is enabled and its exact version equals the
+   approved target.
+8. Verify the synthetic Hub Doctor output, Hub Git status, attached repository
+   status, ignored state, and task identities remain unchanged.
+9. Start a fresh task and verify the target plugin version and upgrade skill are
+   loaded. The source validator and pre-upgrade task cannot prove this.
+
+Record upgrade evidence separately:
+
+```json
+{
+  "schema_version": "flightdeck.upgrade-acceptance/v1",
+  "plugin_id": "flightdeck@<marketplace>",
+  "prior_version": "<exact installed version>",
+  "target_version": "<exact approved version>",
+  "installed_version": "<exact verified version>",
+  "marketplace_source_type": "<local-or-git>",
+  "approval_confirmed": true,
+  "commands": [
+    {
+      "arguments": [
+        "codex",
+        "plugin",
+        "add",
+        "flightdeck@<marketplace>",
+        "--json"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "preservation_checks": [
+    {
+      "name": "hub_doctor",
+      "status": "passed"
+    },
+    {
+      "name": "hub_git_status",
+      "status": "passed"
+    },
+    {
+      "name": "attached_repository_git_status",
+      "status": "passed"
+    },
+    {
+      "name": "ignored_state",
+      "status": "passed"
+    }
+  ],
+  "fresh_task_loaded_target": true
+}
+```
+
+Do not record credentials, private evidence, or repository contents. A missing
+exact version, failed preservation check, unknown command result, or stale-task
+verification is a failed or blocked result, never a successful upgrade.
 
 ## Runtime result
 

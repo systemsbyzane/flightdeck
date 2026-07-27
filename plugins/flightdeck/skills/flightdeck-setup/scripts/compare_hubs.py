@@ -42,6 +42,10 @@ EXPECTED_SKILLS = {
     "flightdeck-setup",
     "flightdeck-doctor",
     "flightdeck-repo-bridge",
+    "flightdeck-plan",
+    "flightdeck-review",
+    "flightdeck-ci",
+    "flightdeck-platform",
     "flightdeck-development",
     "flightdeck-charts",
     "flightdeck-patching",
@@ -50,6 +54,7 @@ EXPECTED_SKILLS = {
     "flightdeck-artifacts",
     "flightdeck-stig",
     "flightdeck-automations",
+    "flightdeck-upgrade",
 }
 
 TEXT_SUFFIXES = {
@@ -1079,10 +1084,10 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
             candidate / "hub" / "schemas" / "repository-declarations.schema.json",
         ],
         {
-            "natural_language_triggers": (
-                "configure bridge repos",
-                "configure repository bridges",
-                "set up all repos",
+            "advanced_bridge_scope": (
+                "advanced bridge",
+                "repo-native",
+                "drift",
             ),
             "bulk_commands": ("bridge plan --all", "bridge install --all"),
             "safe_default": ("default new declarations to `reference`",),
@@ -1227,6 +1232,264 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
         )
     )
 
+    planning_pass, planning_evidence = static_contains(
+        [
+            plugin / "skills" / "flightdeck-plan" / "SKILL.md",
+            plugin / "skills" / "flightdeck-plan" / "agents" / "openai.yaml",
+            plugin / "skills" / "flightdeck-plan" / "references" / "planning-method.md",
+            candidate / "AGENTS.md",
+            candidate / "docs" / "workflows" / "planning.md",
+        ],
+        {
+            "natural_trigger": (
+                "natural planning intent",
+                "allow_implicit_invocation: true",
+            ),
+            "planning_boundary": (
+                "read-only by default",
+                "does not edit files, create or resume tasks",
+            ),
+            "adaptive_depth": (
+                "infer depth",
+                "smallest useful executable plan",
+            ),
+            "coordinator_boundary": (
+                "registry and routing evidence",
+                "do not inspect owner code",
+            ),
+            "execution_gate": ("user separately asks to proceed",),
+        },
+    )
+    records.append(
+        surface(
+            "adaptive_planning_method",
+            status="added",
+            mandatory=True,
+            scope="local",
+            mapping="Natural planning intent maps to a read-only, right-sized method that separates Hub ownership planning from owning-repository analysis and execution.",
+            probe_name="planning skill and generated Hub semantic anchors",
+            passed=planning_pass,
+            evidence=planning_evidence,
+        )
+    )
+
+    review_pass, review_evidence = static_contains(
+        [
+            plugin / "skills" / "flightdeck-review" / "SKILL.md",
+            plugin / "skills" / "flightdeck-review" / "agents" / "openai.yaml",
+            plugin / "skills" / "flightdeck-review" / "references" / "review-method.md",
+            candidate / "AGENTS.md",
+            candidate / "docs" / "review" / "change-review.md",
+        ],
+        {
+            "natural_trigger": (
+                "natural review intent",
+                "allow_implicit_invocation: true",
+            ),
+            "review_boundary": (
+                "read-only by default",
+                "do not fix findings",
+            ),
+            "owner_dispatch": (
+                "before inspecting owner code",
+                "return the receipt without monitoring",
+            ),
+            "findings_first": (
+                "lead with actionable findings",
+                "path and tight line range",
+            ),
+            "honest_no_findings": (
+                "if no actionable findings",
+                "checks skipped",
+                "residual risk",
+            ),
+        },
+    )
+    records.append(
+        surface(
+            "findings_first_review_method",
+            status="added",
+            mandatory=True,
+            scope="local",
+            mapping="Natural review intent maps to exact-target, findings-first review in each owning project with evidence, validation gaps, and fixes kept separate.",
+            probe_name="review skill and generated Hub semantic anchors",
+            passed=review_pass,
+            evidence=review_evidence,
+        )
+    )
+
+    ci_pass, ci_evidence = static_contains(
+        [
+            plugin / "skills" / "flightdeck-ci" / "SKILL.md",
+            plugin / "skills" / "flightdeck-ci" / "agents" / "openai.yaml",
+            plugin / "skills" / "flightdeck-ci" / "references" / "delivery-method.md",
+            candidate / "AGENTS.md",
+            candidate / "docs" / "workflows" / "ci-cd.md",
+        ],
+        {
+            "natural_trigger": (
+                "natural ci/cd intent",
+                "allow_implicit_invocation: true",
+            ),
+            "exact_revision": (
+                "exact source revision",
+                "latest run matches the current checkout",
+            ),
+            "causal_diagnosis": (
+                "first causal failure",
+                "downstream symptoms",
+            ),
+            "action_separation": (
+                "inspection, source edits, workflow execution, publication, and deployment as distinct actions",
+                "build, publish, promote, deploy, and verify",
+            ),
+            "owner_and_authorization_boundary": (
+                "before inspecting pipeline source",
+                "do not authorize rerunning or cancelling workflows",
+                "return the receipt without monitoring",
+            ),
+        },
+    )
+    records.append(
+        surface(
+            "ci_cd_delivery_method",
+            status="added",
+            mandatory=True,
+            scope="local",
+            mapping="Natural CI/CD intent maps to exact-revision pipeline diagnosis and owning-repository source work while workflow execution, publication, promotion, and deployment remain separate gates.",
+            probe_name="CI/CD skill and generated Hub semantic anchors",
+            passed=ci_pass,
+            evidence=ci_evidence,
+        )
+    )
+
+    platform_pass, platform_evidence = static_contains(
+        [
+            plugin / "skills" / "flightdeck-platform" / "SKILL.md",
+            plugin / "skills" / "flightdeck-platform" / "agents" / "openai.yaml",
+            plugin / "skills" / "flightdeck-platform" / "references" / "platform-method.md",
+            candidate / "AGENTS.md",
+            candidate / "docs" / "workflows" / "platform.md",
+            candidate / "environments" / "README.md",
+        ],
+        {
+            "natural_trigger": (
+                "natural platform intent",
+                "allow_implicit_invocation: true",
+            ),
+            "source_runtime_split": (
+                "source, live state, and runtime validation without conflating them",
+                "source ownership and live environment ownership distinct",
+            ),
+            "exact_context": (
+                "exact account, project, subscription, region, cluster, namespace, and revision",
+            ),
+            "state_distinction": (
+                "declared configuration, generated plan, applied state, and observed runtime state distinct",
+                "successful plan or render is not evidence that a change was applied",
+            ),
+            "specialization_and_mutation_gate": (
+                "$flightdeck-charts",
+                "explicit authorization for each environment write",
+                "return the receipt without monitoring",
+            ),
+        },
+    )
+    records.append(
+        surface(
+            "platform_environment_method",
+            status="added",
+            mandatory=True,
+            scope="local",
+            mapping="Natural platform intent maps to distinct source, generated-plan, applied-state, and observed-runtime surfaces with exact environment context and explicit mutation gates.",
+            probe_name="platform skill and generated Hub semantic anchors",
+            passed=platform_pass,
+            evidence=platform_evidence,
+        )
+    )
+
+    upgrade_test = run(
+        [
+            "python3",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            str(plugin / "skills" / "flightdeck-upgrade" / "tests"),
+            "-p",
+            "test_*.py",
+            "-v",
+        ],
+        cwd=plugin.parent.parent,
+    )
+    upgrade_pass, upgrade_evidence = static_contains(
+        [
+            plugin / "releases.json",
+            plugin / "skills" / "flightdeck-upgrade" / "SKILL.md",
+            plugin / "skills" / "flightdeck-upgrade" / "agents" / "openai.yaml",
+            plugin
+            / "skills"
+            / "flightdeck-upgrade"
+            / "references"
+            / "upgrade-contract.md",
+            plugin
+            / "skills"
+            / "flightdeck-upgrade"
+            / "scripts"
+            / "patch_notes.py",
+            plugin
+            / "skills"
+            / "flightdeck-upgrade"
+            / "scripts"
+            / "upgrade_planner.py",
+            candidate / "AGENTS.md",
+            candidate / "docs" / "workflows" / "plugin-lifecycle.md",
+        ],
+        {
+            "natural_trigger": (
+                "natural flightdeck upgrade",
+                "allow_implicit_invocation: true",
+            ),
+            "exact_versions_and_patch_notes": (
+                "installed_version",
+                "target_version",
+                "target_release_ledger",
+                "flightdeck-releases/v1",
+                "complete_range",
+            ),
+            "product_native_update": (
+                "codex plugin marketplace upgrade",
+                "codex plugin add",
+                "do not run `codex plugin remove` first",
+                "does not edit a plugin cache directly",
+            ),
+            "preservation_boundary": (
+                "protected user state",
+                "existing hubs stay on their generated template version",
+                "does not run setup or bootstrap",
+            ),
+            "authorization_and_runtime_boundary": (
+                "explicit approval",
+                "fresh codex task",
+                "do not claim installed-runtime success",
+            ),
+        },
+    )
+    upgrade_evidence["tests_exit"] = upgrade_test.returncode
+    upgrade_pass = upgrade_pass and upgrade_test.returncode == 0
+    records.append(
+        surface(
+            "plugin_upgrade_method",
+            status="added",
+            mandatory=True,
+            scope="local",
+            mapping="Natural Flightdeck lifecycle intent maps to exact-version patch notes and a supported preservation-aware reinstall while generated Hubs and repositories remain protected user state.",
+            probe_name="upgrade semantic anchors and deterministic planner/patch-note tests",
+            passed=upgrade_pass,
+            evidence=upgrade_evidence,
+        )
+    )
+
     automation_paths = sorted((candidate / "hub" / "automations").glob("*.yaml"))
     automation_values = [load_yaml(path) for path in automation_paths]
     automation_pass = bool(automation_values) and all(
@@ -1290,12 +1553,14 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
     }
     stig_pass = stig_test.returncode == 0 and {
         "evaluator.md",
+        "evidence-contract.md",
         "ckl-workflow.md",
         "helm-remediation.md",
         "summary-extractor.md",
     }.issubset(stig_files) and {
         "ckl_parser.py",
         "ckl_generator.py",
+        "evaluation_validator.py",
         "summary_extractor.py",
     }.issubset(stig_scripts)
     stig_evidence: dict[str, Any] = {
@@ -1303,6 +1568,52 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
         "scripts": sorted(stig_scripts),
         "tests_exit": stig_test.returncode,
     }
+    stig_method_pass, stig_method_evidence = static_contains(
+        [
+            plugin / "skills" / "flightdeck-stig" / "SKILL.md",
+            plugin / "skills" / "flightdeck-stig" / "agents" / "openai.yaml",
+            plugin / "skills" / "flightdeck-stig" / "references" / "evidence-contract.md",
+            plugin / "skills" / "flightdeck-stig" / "scripts" / "evaluation_validator.py",
+            candidate / "AGENTS.md",
+            candidate / "docs" / "compliance" / "stig-evaluation.md",
+        ],
+        {
+            "natural_trigger": (
+                "natural stig intent",
+                "allow_implicit_invocation: true",
+                "users do not need to name a skill",
+            ),
+            "adaptive_depth": (
+                "fixed intake form",
+                "ask only for information that blocks an honest next step",
+                "draft",
+                "export",
+            ),
+            "evidence_and_applicability": (
+                "direct",
+                "inherited",
+                "declared",
+                "decide applicability before",
+            ),
+            "status_integrity": (
+                "Not a Finding",
+                "Open",
+                "Not Applicable",
+                "Not Reviewed",
+                "generated CKL does not prove",
+            ),
+            "ownership_and_gates": (
+                "$flightdeck-development",
+                "$flightdeck-charts",
+                "$flightdeck-ci",
+                "$flightdeck-platform",
+                "$flightdeck-compliance",
+                "does not authorize",
+            ),
+        },
+    )
+    stig_evidence["adaptive_method"] = stig_method_evidence
+    stig_pass = stig_pass and stig_method_pass
     if args.source_stig_skill:
         source_stig = args.source_stig_skill.resolve()
         stig_evidence["source_reference_count"] = len(list((source_stig / "references").glob("*.md")))
@@ -1361,8 +1672,8 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
             status="matched",
             mandatory=True,
             scope="local",
-            mapping="Active STIG evaluation, batch CKL, Helm planning, and conservative summary behavior map to neutral references and deterministic tools.",
-            probe_name="STIG coverage inventory and deterministic CKL/summary tests",
+            mapping="Natural STIG intent maps to adaptive rule, evidence-gap, applicability, inherited-control, draft/export, remediation-routing, Helm, and deterministic CKL workflows.",
+            probe_name="adaptive STIG method anchors and deterministic evidence/CKL tests",
             passed=stig_pass,
             evidence=stig_evidence,
         )
@@ -1686,6 +1997,240 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
         )
     )
 
+    upgrade_runtime_pass = False
+    upgrade_runtime_evidence: dict[str, Any] = {
+        "status": "not_run",
+        "required_procedure": "flightdeck-setup/references/installed-acceptance.md#plugin-upgrade-acceptance",
+        "validation_failures": [
+            "installed plugin upgrade acceptance evidence was not provided"
+        ],
+    }
+    if args.upgrade_acceptance:
+        upgrade_failures: list[str] = []
+        try:
+            loaded_upgrade_evidence = json.loads(
+                args.upgrade_acceptance.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError) as error:
+            loaded_upgrade_evidence = {}
+            upgrade_failures.append(
+                f"upgrade acceptance evidence is unreadable: {error}"
+            )
+        if not isinstance(loaded_upgrade_evidence, dict):
+            loaded_upgrade_evidence = {}
+            upgrade_failures.append(
+                "upgrade acceptance evidence must be a JSON object"
+            )
+        upgrade_runtime_evidence = dict(loaded_upgrade_evidence)
+        upgrade_runtime_evidence["evidence_path"] = str(
+            args.upgrade_acceptance.resolve()
+        )
+
+        try:
+            current_manifest = json.loads(
+                (plugin / ".codex-plugin" / "plugin.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+        except (OSError, json.JSONDecodeError) as error:
+            current_manifest = {}
+            upgrade_failures.append(f"current plugin manifest is unreadable: {error}")
+        current_version = (
+            current_manifest.get("version")
+            if isinstance(current_manifest, dict)
+            else None
+        )
+        if not isinstance(current_version, str) or not current_version:
+            upgrade_failures.append(
+                "current plugin manifest must declare a non-empty version"
+            )
+        plugin_id = upgrade_runtime_evidence.get("plugin_id")
+        if (
+            not isinstance(plugin_id, str)
+            or not plugin_id.startswith("flightdeck@")
+            or plugin_id == "flightdeck@"
+        ):
+            upgrade_failures.append(
+                "plugin_id must identify flightdeck at one configured marketplace"
+            )
+        prior_version = upgrade_runtime_evidence.get("prior_version")
+        target_version = upgrade_runtime_evidence.get("target_version")
+        installed_version = upgrade_runtime_evidence.get("installed_version")
+        expected_metadata = {
+            "schema_version": "flightdeck.upgrade-acceptance/v1",
+            "target_version": current_version,
+            "installed_version": current_version,
+            "approval_confirmed": True,
+            "fresh_task_loaded_target": True,
+        }
+        for field, expected in expected_metadata.items():
+            actual = upgrade_runtime_evidence.get(field)
+            if actual != expected:
+                upgrade_failures.append(
+                    f"{field} must equal {expected!r}; received {actual!r}"
+                )
+        if not isinstance(prior_version, str) or not prior_version:
+            upgrade_failures.append("prior_version must be a non-empty exact version")
+        elif prior_version == target_version:
+            upgrade_failures.append(
+                "prior_version must differ from target_version for upgrade acceptance"
+            )
+
+        source_type = upgrade_runtime_evidence.get("marketplace_source_type")
+        if source_type not in {"local", "git", "github"}:
+            upgrade_failures.append(
+                "marketplace_source_type must be local, git, or github"
+            )
+
+        commands = upgrade_runtime_evidence.get("commands")
+        if not isinstance(commands, list):
+            commands = []
+            upgrade_failures.append("commands must be a JSON array")
+        command_arguments: list[list[str]] = []
+        for index, command in enumerate(commands):
+            if not isinstance(command, dict):
+                upgrade_failures.append(f"commands[{index}] must be an object")
+                continue
+            arguments = command.get("arguments")
+            if (
+                not isinstance(arguments, list)
+                or not arguments
+                or not all(isinstance(item, str) for item in arguments)
+            ):
+                upgrade_failures.append(
+                    f"commands[{index}].arguments must be a non-empty string array"
+                )
+                continue
+            command_arguments.append(arguments)
+            if command.get("exit_code") != 0:
+                upgrade_failures.append(f"commands[{index}].exit_code must equal 0")
+            if "remove" in arguments:
+                upgrade_failures.append(
+                    f"commands[{index}] must not remove the plugin before reinstall"
+                )
+            if "setup" in arguments or "bootstrap" in arguments:
+                upgrade_failures.append(
+                    f"commands[{index}] must not run setup or bootstrap"
+                )
+
+        if isinstance(plugin_id, str):
+            expected_install = [
+                "codex",
+                "plugin",
+                "add",
+                plugin_id,
+                "--json",
+            ]
+            if expected_install not in command_arguments:
+                upgrade_failures.append(
+                    "commands must include the supported exact plugin add command"
+                )
+            marketplace_name = plugin_id.split("@", 1)[1] if "@" in plugin_id else ""
+            expected_refresh = [
+                "codex",
+                "plugin",
+                "marketplace",
+                "upgrade",
+                marketplace_name,
+                "--json",
+            ]
+            if source_type in {"git", "github"} and expected_refresh not in command_arguments:
+                upgrade_failures.append(
+                    "Git marketplace acceptance must include the exact refresh command"
+                )
+            if source_type == "local" and any(
+                arguments[:4]
+                == ["codex", "plugin", "marketplace", "upgrade"]
+                for arguments in command_arguments
+            ):
+                upgrade_failures.append(
+                    "local marketplace acceptance must not include a refresh command"
+                )
+
+        preservation_checks = upgrade_runtime_evidence.get("preservation_checks")
+        if not isinstance(preservation_checks, list):
+            preservation_checks = []
+            upgrade_failures.append("preservation_checks must be a JSON array")
+        preservation_by_name = {
+            item.get("name"): item
+            for item in preservation_checks
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        }
+        required_preservation = {
+            "hub_doctor",
+            "hub_git_status",
+            "attached_repository_git_status",
+            "ignored_state",
+        }
+        missing_preservation = required_preservation - preservation_by_name.keys()
+        if missing_preservation:
+            upgrade_failures.append(
+                "preservation_checks is missing required results: "
+                + ", ".join(sorted(missing_preservation))
+            )
+        for name in sorted(required_preservation & preservation_by_name.keys()):
+            if preservation_by_name[name].get("status") != "passed":
+                upgrade_failures.append(
+                    f"preservation check {name} status must be 'passed'"
+                )
+
+        upgrade_runtime_evidence["validation_failures"] = upgrade_failures
+        upgrade_runtime_pass = not upgrade_failures
+    records.append(
+        surface(
+            "installed_plugin_upgrade_acceptance",
+            status="matched" if upgrade_runtime_pass else "unresolved",
+            mandatory=True,
+            scope="runtime",
+            mapping="An installed upgrade must prove the approved exact target, supported same-plugin reinstall, unchanged synthetic Hub and repository state, and target skill loading in a fresh task.",
+            probe_name="installed plugin upgrade and preservation acceptance",
+            passed=upgrade_runtime_pass,
+            evidence=upgrade_runtime_evidence,
+        )
+    )
+
+    setup_connection_required = {
+        "setup_repository_discovery_read_only",
+        "setup_attached_reference_bridge_portable",
+        "setup_connect_idempotent_and_preserves_tracked_files",
+    }
+    setup_connection_static_pass, setup_connection_static = static_contains(
+        [
+            plugin / "skills" / "flightdeck-setup" / "SKILL.md",
+            plugin / "skills" / "flightdeck-setup" / "references" / "setup-runbook.md",
+            candidate / "AGENTS.md",
+            candidate / "README.md",
+            candidate / "lib" / "flightdeck" / "cli.rb",
+            candidate / "hub" / "schemas" / "repository-declarations.schema.json",
+        ],
+        {
+            "natural_language_setup": ("set up flightdeck", "connect repositories"),
+            "deterministic_commands": ("setup plan", "setup connect"),
+            "attached_portability": ("placement: attached", "ignored local state"),
+            "safe_bridge_default": ("reference", "tracked repository files"),
+        },
+    )
+    records.append(
+        surface(
+            "one_prompt_repository_connection",
+            status="added",
+            mandatory=True,
+            scope="local",
+            mapping="Initial setup now discovers repositories only under an authorized root, attaches them without moving checkout state, records portable declarations plus ignored exact paths, and installs safe local reference bridges.",
+            probe_name="setup discovery, attached portability, and idempotent bridge harness",
+            passed=(
+                acceptance_pass
+                and setup_connection_required.issubset(probe_names)
+                and setup_connection_static_pass
+            ),
+            evidence={
+                "required_probes": sorted(setup_connection_required),
+                "passed_probes": sorted(probe_names & setup_connection_required),
+                "static_contract": setup_connection_static,
+            },
+        )
+    )
+
     records.append(
         surface(
             "organization_operational_content",
@@ -1784,6 +2329,7 @@ def main() -> int:
         ),
     )
     parser.add_argument("--runtime-acceptance", type=Path)
+    parser.add_argument("--upgrade-acceptance", type=Path)
     parser.add_argument("--json", type=Path, required=True)
     parser.add_argument("--summary", type=Path, required=True)
     args = parser.parse_args()

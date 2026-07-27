@@ -75,10 +75,24 @@ full dispatch boundary.
   publishing an artifact, or deploying a candidate.
 
 Follow [remote validation](workflows/remote-validation.md) for the handoff and
-evidence contract.
+evidence contract. Use [CI/CD and delivery](workflows/ci-cd.md) for pipeline
+evidence and [platform and environments](workflows/platform.md) for the
+source-to-runtime boundary.
 
 ## Plugins And Skills
 
+- Ask for planning or review in natural language. Flightdeck infers the focused
+  skill and appropriate depth; explicit skill invocation is optional.
+- Ask about pipeline failures, releases, infrastructure, platform services, or
+  environments the same way. Flightdeck infers CI/CD or platform guidance
+  without requiring a skill name.
+- Ask about STIG rules, CKLs, evidence gaps, applicability, inherited controls,
+  or remediation naturally. Flightdeck infers the STIG workflow and keeps
+  unfinished assessments flexible while applying stricter checks only when
+  export readiness is requested.
+- Ask to update Flightdeck or show Flightdeck patch notes naturally. The
+  installed upgrade skill compares exact versions and treats generated Hubs and
+  attached repositories as protected state.
 - Use the connected source-control capability for pull request, issue, review,
   and CI context.
 - Use the security capability for diff scans, repository scans, finding

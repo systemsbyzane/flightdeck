@@ -1,9 +1,10 @@
 # Configure bridge repositories
 
-This is the mandatory Hub-local runbook for “configure bridge repos”,
-“configure repository bridges”, “set up all repos”, and equivalent requests.
-It configures declared checkouts, bridges, and Codex projects without creating
-implementation tasks.
+This is the Hub-local runbook for advanced bridge configuration after initial
+setup: mode changes, manually declared repository sets, migration, or drift
+repair. Initial setup and ordinary existing-repository connection use `setup
+plan` and `setup connect`. This workflow configures declared checkouts, bridges,
+and Codex projects without creating implementation tasks.
 
 ## Inputs and authority
 

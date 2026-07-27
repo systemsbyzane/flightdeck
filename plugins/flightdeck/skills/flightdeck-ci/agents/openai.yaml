@@ -1,0 +1,6 @@
+interface:
+  display_name: "Flightdeck CI/CD"
+  short_description: "Coordinate trustworthy delivery pipelines"
+  default_prompt: "Use $flightdeck-ci to diagnose or change this CI/CD pipeline with evidence and safe delivery gates."
+policy:
+  allow_implicit_invocation: true

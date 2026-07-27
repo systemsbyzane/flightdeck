@@ -44,7 +44,7 @@ module Flightdeck
       resolved_owner = resolve_owner(provider_kind, locator, owner)
       remote_url = resolve_url(provider, locator, url)
       if provider.fetch("kind") == "existing_local"
-        target = existing_local_target(locator, checkout_root)
+        target = existing_local_target(locator)
       else
         raise ValidationError, "target already exists: #{target}" if File.exist?(target)
         _output, error, status = Support.capture(
@@ -58,9 +58,17 @@ module Flightdeck
       if default_branch && verification["branch"] != default_branch
         raise ValidationError, "verified branch #{verification['branch'].inspect} does not match requested default branch #{default_branch.inspect}"
       end
+      placement = begin
+        Support.contained_path(config.root, target, label: "repository target")
+        "managed"
+      rescue ConfigurationError
+        "attached"
+      end
+      local_path = placement == "attached" ? File.realpath(target) : Support.relative_path(config.root, target)
       record = {
         "display_name" => local_name.tr("-_", " ").split.map(&:capitalize).join(" "),
-        "local_path" => Support.relative_path(config.root, target),
+        "local_path" => local_path,
+        "placement" => placement,
         "remote_url" => remote_url,
         "provider" => provider_name,
         "locator" => locator,
@@ -170,15 +178,13 @@ module Flightdeck
       raise ValidationError, "invalid remote URL: #{e.message}"
     end
 
-    def existing_local_target(locator, checkout_root)
+    def existing_local_target(locator)
       expanded = File.expand_path(locator.to_s)
       raise ValidationError, "existing-local path must be an absolute directory" unless Pathname.new(expanded).absolute? && Dir.exist?(expanded)
 
-      path = File.realpath(expanded)
-      root = File.realpath(checkout_root)
-      Support.contained_path(root, path, label: "existing-local path")
-    rescue ConfigurationError, Errno::ENOENT, Errno::ELOOP
-      raise ValidationError, "existing-local path must resolve inside the workload root"
+      File.realpath(expanded)
+    rescue Errno::ENOENT, Errno::ELOOP
+      raise ValidationError, "existing-local path cannot be resolved safely"
     end
 
     def verify_repository(path, require_clean:)

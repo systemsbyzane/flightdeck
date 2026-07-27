@@ -5,8 +5,9 @@ require_relative "bridge_store"
 
 module Flightdeck
   class GitInspector
-    def initialize(root)
-      @root = root
+    def initialize(config)
+      @config = config
+      @root = config.root
     end
 
     def inspect(repository)
@@ -16,8 +17,8 @@ module Flightdeck
         "path" => repository["path"],
         "remote_refs_fetched" => false
       }
-      path = Support.contained_path(@root, repository.fetch("path"), label: "repository path")
-      base["path"] = Support.relative_path(@root, path)
+      path = @config.repository_path(repository)
+      base["path"] = repository["placement"] == "attached" ? path : Support.relative_path(@root, path)
       return base.merge("error" => "checkout directory does not exist") unless Dir.exist?(path)
 
       root, error, status = git(path, "rev-parse", "--show-toplevel")
@@ -218,7 +219,7 @@ module Flightdeck
       repository = @config.repository(id)
       return [issue("error", "bridge.repository_missing", id, "recorded repository is not registered")] unless repository
 
-      root = @config.root_path(repository.fetch("path"), label: "repository path")
+      root = @config.repository_path(repository)
       target = Support.contained_path(root, record.fetch("target"), label: "bridge target")
       if !File.file?(target)
         issues << issue("error", "bridge.target_missing", id, "recorded target is missing")

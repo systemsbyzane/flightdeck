@@ -2,13 +2,22 @@
 
 Evaluate STIG rules against Kubernetes workloads with evidence collection and conservative status decisions.
 
-## Inputs To Extract
+## Adaptive Intake
 
-- STIG ID, title, severity, check procedure, expected state, fix text, and CCI references.
-- Target pod, namespace, and container.
-- Optional Helm chart path.
-- Optional notes as inline text or a file path.
-- Output format: `text`, `json`, or `checklist`.
+Extract what is available:
+
+- STIG ID, benchmark release, title, severity, check procedure, expected state,
+  fix text, and CCI references.
+- Target type and identity, source revision, environment, and applicable
+  workload, namespace, or container.
+- Optional chart path, evidence artifacts, notes, and output format.
+
+Do not turn this list into a mandatory questionnaire. Begin with supplied
+context, state unknowns, and request only the next fact required to distinguish
+`Open`, `Not Applicable`, or `Not Reviewed`.
+
+Read `evidence-contract.md` for applicability, inherited controls, structured
+batch records, and draft-versus-export readiness.
 
 ## Evidence Collection
 
@@ -46,8 +55,13 @@ Use CKL status labels exactly:
 
 - `Not a Finding`: verified compliant implementation.
 - `Open`: verified failure, missing security control, or no verified compensating control.
-- `Not Applicable`: verified absence of the component, architecture makes the control irrelevant, or verified compensating controls satisfy the intent.
+- `Not Applicable`: verified absence of the component or verified architecture makes the control irrelevant.
 - `Not Reviewed`: cannot complete verification because of permissions, missing access, ambiguity, or inconclusive evidence.
+
+Do not use `Not a Finding` without positive direct or inherited evidence. Do
+not use `Not Applicable` without a specific applicability rationale and
+evidence for the boundary. A compensating control requires explicit
+rule-intent analysis and normally warrants human review.
 
 ## Confidence
 
@@ -84,6 +98,7 @@ For text output, return:
 **Title:** <title>
 **Severity:** <CAT I/II/III or high/medium/low>
 **Target:** <pod or chart target>
+**Applicability:** <applicable|not_applicable|unknown> - <rationale>
 
 ## Status Summary (For STIG Comments)
 
@@ -117,6 +132,9 @@ For text output, return:
 
 **Analysis:**
 <comparison between expected and observed state>
+
+**Evidence Gaps:**
+<missing provenance, revision, access, applicability, or manual review>
 ```
 
 ## JSON Output
@@ -128,6 +146,18 @@ When `--output-format json` is requested, produce an object shaped for downstrea
   "vuln_id": "V-XXXXXX",
   "status": "Not a Finding",
   "status_summary": "The system is compliant. Evidence shows the required control is implemented.",
+  "confidence": "HIGH",
+  "applicability": {
+    "state": "applicable",
+    "rationale": "The rule applies to the evaluated workload."
+  },
+  "evidence": [
+    {
+      "kind": "direct",
+      "source": "rendered workload manifest",
+      "summary": "The required setting is configured."
+    }
+  ],
   "finding_details": [
     "Required setting is enabled",
     "Configuration was verified from the rendered workload manifest"
@@ -145,4 +175,3 @@ Keep `status_summary` and `finding_details` CKL-ready:
 - No raw JSON structures.
 - No unverified claims.
 - Plain strings only in `finding_details`.
-

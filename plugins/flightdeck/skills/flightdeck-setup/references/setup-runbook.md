@@ -21,25 +21,38 @@ or partial target, is a hard stop.
    `flightdeck.yaml`, and `hub/repositories.yaml` as user-owned after generation.
    Validation must inspect their contracts without copying or byte-comparing
    their payload content to the template.
+6. If the request names a folder containing repositories, resolve it to one
+   absolute real path and use it as the authorized discovery root. Reject a
+   filesystem root, home directory, symlink root, or missing directory. Do not
+   scan or modify repositories outside it. If no repository root is named,
+   complete core setup and ask only which folder contains the repositories to
+   connect.
 
 Preview first:
 
 ```text
 python3 scripts/preflight.py --json
-python3 scripts/bootstrap.py --target <absolute-target> --json
+python3 scripts/bootstrap.py --target <absolute-target> \
+  [--repositories-root <absolute-repositories-root>] --json
 ```
 
 When the user has asked to create the Hub, apply the preview:
 
 ```text
-python3 scripts/bootstrap.py --target <absolute-target> --apply --json
+python3 scripts/bootstrap.py --target <absolute-target> \
+  [--repositories-root <absolute-repositories-root>] --apply --json
 ```
 
-The bootstrap may initialize a new local Git repository. It never stages,
-commits, adds a remote, installs a plugin, registers a project, configures a
-secret, publishes, or merges existing content. On a recognized generated Hub
-it reruns validation without overwriting files. Treat `runtime_status:
-agent_verification_required` as pending work, not setup success.
+The bootstrap may initialize a new local Git repository. When a repositories
+root is supplied, apply may also write portable Hub declarations, ignored local
+repository state, ignored reference bridges, and repository-local
+`.git/info/exclude` entries for those bridges. Those ordinary setup writes are
+authorized by the setup request. It never changes tracked files in an attached
+repository, stages, commits, adds a remote, installs a plugin, registers a
+project, configures a secret, publishes, or merges existing content. On a
+recognized generated Hub it reruns validation without overwriting managed
+files. Treat `runtime_status: agent_verification_required` as pending work, not
+setup success.
 
 ## 2. Verify local prerequisites
 
@@ -121,12 +134,83 @@ In Codex, choose File > Open Folder, select "<absolute-target>", then reply "don
 
 Do not add alternative actions or perform Hub-owned work as a fallback.
 
-## 5. Handoff and acceptance boundary
+## 5. Connect discovered repositories
+
+Skip this section only when the user has not yet supplied a repositories root.
+The bootstrap repository preview is read-only and must report every discovered
+Git root, dirty state, inferred workload/profile, proposed portable
+declaration, bridge target, project-registration status, and blocker.
+
+Setup defaults to an attached checkout and a `reference` bridge:
+
+- the checkout remains at its existing exact path;
+- `hub/repositories.yaml` stores stable portable facts and never the attached
+  absolute path;
+- ignored `hub/state/repositories.yaml` stores the exact machine-local path;
+- ignored `AGENTS.override.md` and its repository-local
+  `.git/info/exclude` entry are installed automatically;
+- dirty, untracked, ignored, branch, and remote state are preserved;
+- tracked repository files are not edited.
+
+The default `continue` policy connects independent safe repositories and skips
+blocked ones. Stop and report a repository when discovery finds an ID/path
+conflict, detached or unverifiable HEAD, credential-bearing or unsupported
+origin, an unmanaged `AGENTS.override.md`, bridge drift, or an unsafe local
+registration. Never delete, rename, overwrite, reset, clean, stash, fetch,
+pull, or switch branches to clear a blocker.
+
+Use local `origin/HEAD` as the verified default branch when available. For an
+otherwise safe attached checkout without that ref, record the checked-out
+branch with `default_branch_verified: false`, continue setup, and report one
+non-blocking provider-metadata warning. Do not claim that fallback is the
+provider default. Managed cloning still requires a verified default branch.
+
+The deterministic commands are:
+
+```text
+bin/flightdeck setup plan \
+  --repositories-root <absolute-repositories-root> \
+  --failure-policy continue --json
+bin/flightdeck setup connect \
+  --repositories-root <absolute-repositories-root> \
+  --failure-policy continue --json
+```
+
+`setup connect` is the explicit apply. A normal setup request authorizes it
+after the read-only plan. `materialized` and `repo-native` are not initial setup
+defaults; route later mode changes, migrations, or drift repair through the
+repo-bridge skill. `repo-native` always requires separate per-repository
+authorization.
+
+## 6. Register and verify repository projects
+
+For every successfully connected repository, follow the same refreshed
+live-list, exact-normalized-path verification used for the Hub:
+
+1. Accept an existing saved project only on an exact real-path match.
+2. Otherwise use native registration, then the supported open-folder fallback.
+3. Refresh and verify; retry the same path once after refreshing capabilities.
+4. Record the opaque runtime ID only from the exact-path live-list match in
+   ignored `hub/state/projects.yaml`.
+
+After the second verified failure, give exactly this one action per unresolved
+path:
+
+```text
+In Codex, choose File > Open Folder, select "<exact-repository-path>", then reply "done".
+```
+
+Do not create implementation tasks during setup. Rerun
+`bin/flightdeck doctor --json` after project verification.
+
+## 7. Handoff and acceptance boundary
 
 Return:
 
 - exact Hub path and opaque saved runtime project ID returned by the
   exact-path live-list match;
+- repository discovery, connection, safe bridge, and exact-path project counts,
+  plus concise per-repository blockers;
 - validation commands and outcomes;
 - artifact capability readiness or exact blockers;
 - Doctor error/warning counts and no-fetch caveat;
@@ -143,9 +227,3 @@ Live Codex registration and task dispatch require an installed plugin and a
 fresh task. Do not mark those runtime checks passed from this local harness.
 Follow `references/installed-acceptance.md` after installation is separately
 authorized.
-
-Repository declarations remain empty until the user supplies verified
-provider, ownership, path, default-branch, bridge, and project facts. After the
-Hub project is open, a “configure bridge repos” request must route to
-`flightdeck-repo-bridge/references/configure-bridge-repos.md`; setup itself must
-not invent repository declarations or create implementation tasks.

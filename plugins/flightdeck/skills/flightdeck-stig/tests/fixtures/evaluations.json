@@ -1,0 +1,58 @@
+{
+  "schema_version": "flightdeck.stig-evaluations/v1",
+  "benchmark": {
+    "release": "Release 1",
+    "title": "Synthetic Platform STIG"
+  },
+  "target": {
+    "kind": "workload",
+    "name": "synthetic-service",
+    "revision": "synthetic-revision"
+  },
+  "evaluations": [
+    {
+      "applicability": {
+        "rationale": "The rule applies to the synthetic workload.",
+        "state": "applicable"
+      },
+      "comments": "The system implements the required control.",
+      "confidence": "HIGH",
+      "evidence": [
+        {
+          "kind": "direct",
+          "source": "synthetic rendered manifest",
+          "summary": "The required value is configured."
+        }
+      ],
+      "finding_details": [
+        "The required value is configured."
+      ],
+      "status": "Not a Finding",
+      "vuln_id": "V-000001"
+    },
+    {
+      "applicability": {
+        "rationale": "The rule applies to the synthetic delivery workflow.",
+        "state": "applicable"
+      },
+      "comments": "The required control is not configured.",
+      "confidence": "HIGH",
+      "evidence": [
+        {
+          "kind": "direct",
+          "source": "synthetic workflow definition",
+          "summary": "The required control is absent."
+        }
+      ],
+      "finding_details": [
+        "The required control is absent."
+      ],
+      "remediation_owner": {
+        "kind": "ci-cd",
+        "project_key": "synthetic-delivery"
+      },
+      "status": "Open",
+      "vuln_id": "V-000002"
+    }
+  ]
+}

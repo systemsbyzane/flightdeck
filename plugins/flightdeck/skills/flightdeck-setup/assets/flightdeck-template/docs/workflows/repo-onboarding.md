@@ -1,5 +1,17 @@
 # Repository onboarding
 
+For ordinary existing checkouts, prefer:
+
+```text
+bin/flightdeck setup plan --repositories-root <absolute-root> --json
+bin/flightdeck setup connect --repositories-root <absolute-root> --json
+```
+
+This discovers repositories under the authorized root, attaches them in place,
+creates portable declarations, and installs safe ignored reference bridges.
+Absolute attached paths remain in ignored local state. Dirty state is reported
+and preserved.
+
 Use `repo plan` first. For onboarding:
 
 1. Resolve provider, ownership, canonical URL, and default branch. Pass the
@@ -18,9 +30,11 @@ Use `repo plan` first. For onboarding:
 8. Search for a matching task with the opaque runtime project ID, create one if
    needed, return both identities and the task ID, and stop.
 
-Supported adapters are GitHub, GitLab, Bitbucket, generic Git, existing-local,
-and remote-validation. Credentials are supplied by the user's configured tools
-and are never stored in the Hub.
+Use the lower-level `repo plan` and `repo onboard` path for an explicitly named
+clone, provider-specific onboarding, or a repository that cannot be classified
+by discovery. Supported adapters are GitHub, GitLab, Bitbucket, generic Git,
+existing-local, and remote-validation. Credentials are supplied by the user's
+configured tools and are never stored in the Hub.
 
 For the declared repository set, keep credential-free facts in
 `hub/repositories.yaml` and follow

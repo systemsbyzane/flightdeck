@@ -4,7 +4,11 @@ Use this reference when a STIG evaluation includes `--chart`, asks for Helm reme
 
 ## Default Behavior
 
-With a chart path, evaluate chart compliance as well as the running pod. A fresh deployment from the chart is the long-term compliance target. If the pod is stale but the chart renders compliant manifests, the finding can be `Not a Finding` with explanation.
+With a chart path, evaluate declared and rendered chart behavior. Inspect a
+running workload only when the request includes authorized environment access.
+A fresh deployment from the chart may be the intended long-term state, but a
+compliant render does not prove the running revision is compliant. Keep source,
+rendered, applied, and observed runtime evidence distinct.
 
 Do not edit chart files unless the user explicitly asks for remediation changes. If the user only provides `--chart`, write or return a remediation plan.
 
@@ -95,3 +99,8 @@ kubectl get pod <pod> -n <namespace> -o jsonpath='{.spec.containers[*].securityC
 
 If writing a file, use `.stigs/<STIG-ID>_helm-remediation.md` in the project root.
 
+Route chart inspection or edits to the chart owner's Flightdeck project before
+analysis. Use `$flightdeck-platform` for cluster-owned controls and
+environment writes, and `$flightdeck-ci` for delivery or policy gates. A
+remediation request authorizes scoped local source edits only after owner
+dispatch; it does not authorize a release, apply, deployment, or restart.

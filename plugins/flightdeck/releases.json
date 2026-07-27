@@ -1,0 +1,95 @@
+{
+  "schema_version": "flightdeck-releases/v1",
+  "releases": [
+    {
+      "version": "0.1.0+codex.20260724172520",
+      "date": "2026-07-24",
+      "summary": "Initial public Flightdeck plugin and portable generated Hub.",
+      "changes": [
+        {
+          "category": "added",
+          "text": "Published the neutral Flightdeck coordinator, focused engineering skills, setup generator, Doctor, repository bridges, and local acceptance tooling."
+        }
+      ],
+      "breaking_changes": [],
+      "migration": []
+    },
+    {
+      "version": "0.1.0+codex.20260724202443",
+      "date": "2026-07-24",
+      "summary": "Direct GitHub marketplace installation and public plugin metadata.",
+      "changes": [
+        {
+          "category": "added",
+          "text": "Added the direct GitHub marketplace installation path and public repository metadata."
+        },
+        {
+          "category": "changed",
+          "text": "Documented supported update, uninstall, contribution, and public-readiness workflows."
+        }
+      ],
+      "breaking_changes": [],
+      "migration": []
+    },
+    {
+      "version": "0.1.0+codex.20260724204522",
+      "date": "2026-07-24",
+      "summary": "Visual onboarding for the repository and Codex plugin interface.",
+      "changes": [
+        {
+          "category": "added",
+          "text": "Added an original repository hero, animated routing tour, expandable quick starts, plugin icon, brand color, and interface screenshot."
+        }
+      ],
+      "breaking_changes": [],
+      "migration": []
+    },
+    {
+      "version": "0.1.0+codex.20260727213536",
+      "date": "2026-07-27",
+      "summary": "Natural-language setup, planning, review, CI/CD, platform, STIG, and safe plugin lifecycle workflows.",
+      "changes": [
+        {
+          "category": "added",
+          "text": "Added one-prompt setup that discovers and connects existing repositories with safe reference bridges."
+        },
+        {
+          "category": "added",
+          "text": "Added adaptive planning and findings-first review skills that trigger from natural intent."
+        },
+        {
+          "category": "added",
+          "text": "Added focused CI/CD and platform skills with evidence, ownership, approval, and runtime boundaries."
+        },
+        {
+          "category": "changed",
+          "text": "Expanded STIG evaluation with evidence contracts, draft and export readiness, deterministic validation, and generated-Hub guidance."
+        },
+        {
+          "category": "added",
+          "text": "Added a safe in-place plugin upgrade workflow, deterministic patch notes, preservation checks, and explicit rollback limits."
+        }
+      ],
+      "breaking_changes": [],
+      "migration": [
+        "Start a fresh Codex task after upgrading so the new skill definitions load.",
+        "Existing generated Hubs are preserved and are not automatically migrated."
+      ]
+    },
+    {
+      "version": "0.1.0+codex.20260727224307",
+      "date": "2026-07-27",
+      "summary": "Installed-runtime metadata correction.",
+      "changes": [
+        {
+          "category": "fixed",
+          "text": "Limited plugin default prompts to the three entries supported by Codex so setup, planning or review, and upgrade suggestions load correctly."
+        }
+      ],
+      "breaking_changes": [],
+      "migration": [
+        "Start a fresh Codex task after upgrading so the corrected plugin prompts load."
+      ]
+    }
+  ]
+}

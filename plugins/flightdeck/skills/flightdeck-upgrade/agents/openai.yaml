@@ -1,0 +1,7 @@
+interface:
+  display_name: "Flightdeck Upgrade"
+  short_description: "Upgrade safely and explain each release"
+  default_prompt: "Use $flightdeck-upgrade to plan a safe in-place Flightdeck plugin upgrade, preserve my existing Hub and repositories, and show what changed."
+
+policy:
+  allow_implicit_invocation: true

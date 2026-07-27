@@ -197,6 +197,7 @@
         "docs/compliance/program-workspace.md",
         "docs/compliance/sensitivity.md",
         "docs/compliance/sidecars.md",
+        "docs/compliance/stig-evaluation.md",
         "docs/compliance/templates/control-assessment-notes.md",
         "docs/compliance/templates/evidence-index.md",
         "docs/compliance/templates/poam-analysis.md",
@@ -206,6 +207,7 @@
         "docs/patching/image-compatibility.md",
         "docs/review/README.md",
         "docs/review/backend-review-guidelines.md",
+        "docs/review/change-review.md",
         "docs/review/charts-review-guidelines.md",
         "docs/review/codex-review-readiness.md",
         "docs/review/frontend-review-guidelines.md",
@@ -226,9 +228,13 @@
         "docs/workflows/README.md",
         "docs/workflows/artifacts.md",
         "docs/workflows/automations.md",
+        "docs/workflows/ci-cd.md",
         "docs/workflows/configure-bridge-repos.md",
         "docs/workflows/multirepo-coordination.md",
         "docs/workflows/operations.md",
+        "docs/workflows/planning.md",
+        "docs/workflows/platform.md",
+        "docs/workflows/plugin-lifecycle.md",
         "docs/workflows/remote-validation.md",
         "docs/workflows/repo-bridge.md",
         "docs/workflows/repo-onboarding.md",
@@ -320,6 +326,7 @@
         "lib/flightdeck/repo_planner.rb",
         "lib/flightdeck/repository_store.rb",
         "lib/flightdeck/route_planner.rb",
+        "lib/flightdeck/setup_store.rb",
         "lib/flightdeck/support.rb",
         "lib/flightdeck/task_store.rb",
         "lib/flightdeck/workflow.rb"
@@ -436,6 +443,81 @@
       ]
     },
     {
+      "id": "ci-cd-method",
+      "status": "added",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 3,
+      "plugin_paths": [
+        "skills/flightdeck-ci/**"
+      ],
+      "source_mapping_ids": [
+        "coordination-entry-documents",
+        "reusable-method-guides"
+      ]
+    },
+    {
+      "id": "platform-method",
+      "status": "added",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 3,
+      "plugin_paths": [
+        "skills/flightdeck-platform/**"
+      ],
+      "source_mapping_ids": [
+        "workspace-section-guides",
+        "reusable-method-guides"
+      ]
+    },
+    {
+      "id": "planning-method",
+      "status": "added",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 3,
+      "plugin_paths": [
+        "skills/flightdeck-plan/**"
+      ],
+      "source_mapping_ids": [
+        "coordination-entry-documents",
+        "reusable-method-guides"
+      ]
+    },
+    {
+      "id": "plugin-upgrade-method",
+      "status": "added",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 7,
+      "plugin_paths": [
+        "releases.json",
+        "skills/flightdeck-upgrade/**"
+      ],
+      "source_mapping_ids": [
+        "coordination-entry-documents",
+        "reusable-method-guides"
+      ]
+    },
+    {
+      "id": "review-method",
+      "status": "added",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 3,
+      "plugin_paths": [
+        "skills/flightdeck-review/**"
+      ],
+      "source_mapping_ids": [
+        "reusable-method-guides"
+      ]
+    },
+    {
       "id": "workspace-health-method",
       "status": "generalized",
       "source_count": 0,
@@ -520,7 +602,7 @@
       "source_count": 0,
       "source_paths": [],
       "candidate_paths": [],
-      "plugin_count": 13,
+      "plugin_count": 16,
       "plugin_paths": [
         "skills/flightdeck-stig/**"
       ],

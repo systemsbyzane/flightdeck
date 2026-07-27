@@ -1,4 +1,4 @@
 interface:
   display_name: "Flightdeck Setup"
-  short_description: "Generate a portable Flightdeck workspace"
-  default_prompt: "Use $flightdeck-setup to generate and validate a new Flightdeck in an empty target, then verify its opaque runtime project ID by exact path."
+  short_description: "Set up Flightdeck and connect local repositories"
+  default_prompt: "Set up Flightdeck for the Git repositories under this folder, add safe local bridges, validate it, and tell me only what needs my attention."

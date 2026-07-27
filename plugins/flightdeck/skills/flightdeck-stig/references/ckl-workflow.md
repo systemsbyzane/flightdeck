@@ -48,9 +48,19 @@ mode remain available for workflow compatibility.
 For Codex-native batch work:
 
 1. Parse the CKL with `scripts/ckl_parser.py`.
-2. Evaluate one vulnerability at a time using `references/evaluator.md`.
-3. Persist after each finding to `.stigs/<basename>_findings.json`.
-4. Track progress in `.stigs/<basename>_progress.json`.
-5. Generate the evaluated CKL with `scripts/ckl_generator.py`.
+2. Record benchmark, target, applicability, and evidence provenance using
+   `references/evidence-contract.md`.
+3. Evaluate one vulnerability at a time using `references/evaluator.md`.
+4. Persist after each finding to `.stigs/<basename>_evaluations.json`.
+5. Track progress in `.stigs/<basename>_progress.json`.
+6. Validate iteratively with
+   `scripts/evaluation_validator.py <file> --profile draft`.
+7. Before final generation, validate with `--profile export`, review every
+   warning, and transform approved evaluations into the generator's
+   `findings` array.
+8. Generate the evaluated CKL with `scripts/ckl_generator.py`.
 
 Keep batches small enough that evidence can be reviewed before continuing.
+Do not treat a successfully generated CKL as proof that its conclusions are
+supported. Generation validates mechanics; export validation checks evidence
+readiness; human review remains required for submission or authorization use.

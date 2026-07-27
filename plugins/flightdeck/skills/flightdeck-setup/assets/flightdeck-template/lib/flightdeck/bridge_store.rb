@@ -208,7 +208,7 @@ module Flightdeck
     end
 
     def repository_root(repository)
-      path = config.root_path(repository.fetch("path"), label: "repository path")
+      path = config.repository_path(repository)
       raise ValidationError, "repository directory does not exist: #{path}" unless Dir.exist?(path)
       output, error, status = Support.capture("git", "rev-parse", "--show-toplevel", chdir: path)
       raise ValidationError, "repository Git root unavailable: #{error}" unless status.zero?

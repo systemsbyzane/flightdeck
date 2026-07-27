@@ -6,6 +6,7 @@ require_relative "doctor"
 require_relative "repo_planner"
 require_relative "repository_store"
 require_relative "route_planner"
+require_relative "setup_store"
 
 module Flightdeck
   class CLI
@@ -24,6 +25,7 @@ module Flightdeck
       case command
       when "doctor" then doctor(config, arguments)
       when "status" then status(config, arguments)
+      when "setup" then setup(config, arguments)
       when "route" then route(config, arguments)
       when "repo" then repo(config, arguments)
       when "bridge" then bridge(config, arguments)
@@ -74,6 +76,58 @@ module Flightdeck
       end
       options[:json] ? json(result) : @out.puts(status_markdown(result))
       0
+    end
+
+    def setup(config, argv)
+      subcommand = argv.shift
+      options = { failure_policy: "continue", json: false }
+      OptionParser.new do |parser|
+        parser.on("--repositories-root PATH") { |value| options[:repositories_root] = value }
+        parser.on("--failure-policy POLICY") { |value| options[:failure_policy] = value }
+        parser.on("--json") { options[:json] = true }
+      end.parse!(argv)
+      empty!(argv)
+      raise UsageError, "--repositories-root is required" unless options[:repositories_root]
+
+      json_output = options.delete(:json)
+      store = SetupStore.new(config)
+      result = case subcommand
+               when "plan" then store.plan(**options)
+               when "connect" then store.connect(**options)
+               else raise UsageError, "setup requires plan or connect"
+               end
+      if json_output
+        json(result)
+      elsif subcommand == "plan"
+        @out.puts("Repository connection preview")
+        @out.puts("Root: #{result['repositories_root']}")
+        @out.puts(
+          "Discovered: #{result.dig('summary', 'discovered')}; " \
+          "ready: #{result.dig('summary', 'ready')}; " \
+          "already connected: #{result.dig('summary', 'noop')}; " \
+          "blocked: #{result.dig('summary', 'blocked')}"
+        )
+        result["repositories"].each do |item|
+          @out.puts("- #{item['repository_id']}: #{item['status']} (#{item['path']})")
+          Array(item["warnings"]).each { |message| @out.puts("  note: #{message}") }
+          item.fetch("blockers").each { |message| @out.puts("  blocker: #{message}") }
+        end
+        @out.puts("No files, repositories, projects, or Git state were changed.")
+      else
+        @out.puts("Repository connection: #{result['status']}")
+        @out.puts(
+          "Connected: #{result.dig('summary', 'connected')}; " \
+          "blocked: #{result.dig('summary', 'blocked')}; " \
+          "Codex projects pending: #{result.dig('summary', 'project_pending')}"
+        )
+        result["repositories"].each do |item|
+          @out.puts("- #{item['repository_id']}: #{item['connection_status']} (#{item['path']})")
+          Array(item["warnings"]).each { |message| @out.puts("  note: #{message}") }
+          item.fetch("blockers").each { |message| @out.puts("  blocker: #{message}") }
+        end
+        @out.puts(result["next"])
+      end
+      subcommand == "connect" && !result["ok"] ? 1 : 0
     end
 
     def route(config, argv)
@@ -276,6 +330,8 @@ module Flightdeck
           bin/flightdeck help
           bin/flightdeck doctor [--json] [--strict]
           bin/flightdeck status [--json] [--write]
+          bin/flightdeck setup plan --repositories-root PATH [--failure-policy stop|continue] [--json]
+          bin/flightdeck setup connect --repositories-root PATH [--failure-policy stop|continue] [--json]
           bin/flightdeck route plan --workload NAME --work-type TYPE [--repo-id ID] [--project-key KEY] [--json]
           bin/flightdeck repo plan --workload NAME --provider NAME --repo LOCATOR [--name NAME] [--owner OWNER] [--default-branch BRANCH] [--json]
           bin/flightdeck repo onboard --workload NAME --provider NAME --repo LOCATOR --id ID [--name NAME] [--url URL] [--owner OWNER] [--default-branch BRANCH] [--bridge-mode MODE] [--acknowledge-repo-native]
@@ -288,9 +344,10 @@ module Flightdeck
           bin/flightdeck task validate SLUG
           bin/flightdeck task transition SLUG STATE [--note NOTE]
 
-        doctor, status, route plan, repo plan, and bridge plan are read-only.
-        status --write, repo onboard, bridge install, task new, and task transition
-        have explicit state-changing names and write only their documented scope.
+        doctor, status, setup plan, route plan, repo plan, and bridge plan are read-only.
+        status --write, setup connect, repo onboard, bridge install, task new, and
+        task transition have explicit state-changing names and write only their
+        documented scope.
       HELP
       0
     end

@@ -128,6 +128,10 @@ def main() -> int:
                 "name": "installed_task_search_create_resume_and_no_monitoring",
                 "status": "not_run_requires_installed_plugin_fresh_task",
             },
+            {
+                "name": "installed_plugin_upgrade_and_preservation_verification",
+                "status": "not_run_requires_explicit_plugin_update_authorization",
+            },
         ],
     }
 
@@ -196,6 +200,204 @@ def main() -> int:
                 ["python3", str(SETUP), str(hub), "--no-git", "--json"], cwd=root
             )
             probe(report, "fresh_generation", setup.get("generated") is True, setup)
+
+            planning_guidance = " ".join(
+                (hub / "docs/workflows/planning.md")
+                .read_text(encoding="utf-8")
+                .split()
+            ).casefold()
+            review_guidance = " ".join(
+                (hub / "docs/review/change-review.md")
+                .read_text(encoding="utf-8")
+                .split()
+            ).casefold()
+            routing_guidance = " ".join(
+                (hub / "docs/workflows/thread-routing.md")
+                .read_text(encoding="utf-8")
+                .split()
+            ).casefold()
+            hub_instructions = " ".join(
+                (hub / "AGENTS.md").read_text(encoding="utf-8").split()
+            ).casefold()
+            probe(
+                report,
+                "generated_adaptive_plan_and_findings_first_review_guidance",
+                "users do not need to name a skill" in planning_guidance
+                and "planning-only request is read-only" in planning_guidance
+                and "right-sized coordination planning" in routing_guidance
+                and "lead with actionable findings" in review_guidance
+                and "review is read-only by default" in review_guidance
+                and "natural-language planning-only request" in hub_instructions
+                and "natural-language review request" in hub_instructions,
+                {
+                    "planning": "docs/workflows/planning.md",
+                    "review": "docs/review/change-review.md",
+                    "instructions": "AGENTS.md",
+                },
+            )
+
+            ci_guidance = " ".join(
+                (hub / "docs/workflows/ci-cd.md")
+                .read_text(encoding="utf-8")
+                .split()
+            ).casefold()
+            platform_guidance = " ".join(
+                (hub / "docs/workflows/platform.md")
+                .read_text(encoding="utf-8")
+                .split()
+            ).casefold()
+            probe(
+                report,
+                "generated_ci_cd_and_platform_coordination_guidance",
+                "users do not need to name a skill" in ci_guidance
+                and "latest run and current checkout may differ" in ci_guidance
+                and "first causal failure" in ci_guidance
+                and "each external action requires explicit authorization" in ci_guidance
+                and "users do not need to name a skill" in platform_guidance
+                and "source and runtime split" in platform_guidance
+                and "successful plan or render does not prove an apply occurred"
+                in platform_guidance
+                and "every environment write" in platform_guidance
+                and "natural pipeline" in hub_instructions
+                and "natural infrastructure" in hub_instructions,
+                {
+                    "ci_cd": "docs/workflows/ci-cd.md",
+                    "platform": "docs/workflows/platform.md",
+                    "instructions": "AGENTS.md",
+                },
+            )
+
+            stig_guidance = " ".join(
+                (hub / "docs/compliance/stig-evaluation.md")
+                .read_text(encoding="utf-8")
+                .split()
+            ).casefold()
+            probe(
+                report,
+                "generated_adaptive_stig_evidence_guidance",
+                "users do not need to name a skill" in stig_guidance
+                and "fixed intake form" in stig_guidance
+                and "direct, inherited, and merely declared" in stig_guidance
+                and "decide applicability before assigning" in stig_guidance
+                and "draft evidence profile" in stig_guidance
+                and "export profile" in stig_guidance
+                and "generated ckl does not prove" in stig_guidance
+                and "natural stig" in hub_instructions
+                and "dispatch repository, program, ci/cd, platform, or environment-owned"
+                in hub_instructions,
+                {
+                    "stig": "docs/compliance/stig-evaluation.md",
+                    "instructions": "AGENTS.md",
+                },
+            )
+
+            lifecycle_guidance = " ".join(
+                (hub / "docs/workflows/plugin-lifecycle.md")
+                .read_text(encoding="utf-8")
+                .split()
+            ).casefold()
+            probe(
+                report,
+                "generated_plugin_lifecycle_preservation_guidance",
+                "separate lifecycles" in lifecycle_guidance
+                and "protected state" in lifecycle_guidance
+                and "without removing it first" in lifecycle_guidance
+                and "does not run setup or bootstrap" in lifecycle_guidance
+                and "existing hubs stay on their generated template version"
+                in lifecycle_guidance
+                and "natural flightdeck update" in hub_instructions
+                and "marketplace refresh, plugin reinstall, and rollback require explicit authorization"
+                in hub_instructions,
+                {
+                    "lifecycle": "docs/workflows/plugin-lifecycle.md",
+                    "instructions": "AGENTS.md",
+                },
+            )
+
+            attached_root = root / "attached-repositories"
+            attached = attached_root / "synthetic-attached"
+            initialize_repository(attached)
+            hub_before_setup_plan = tree_state(hub)
+            attached_before_setup_plan = tree_state(attached)
+            setup_plan = json_command(
+                [
+                    str(hub / "bin/flightdeck"),
+                    "setup",
+                    "plan",
+                    "--repositories-root",
+                    str(attached_root),
+                    "--json",
+                ],
+                cwd=hub,
+            )
+            probe(
+                report,
+                "setup_repository_discovery_read_only",
+                setup_plan["read_only"] is True
+                and setup_plan["summary"]["discovered"] == 1
+                and setup_plan["summary"]["ready"] == 1
+                and tree_state(hub) == hub_before_setup_plan
+                and tree_state(attached) == attached_before_setup_plan,
+                setup_plan["summary"],
+            )
+            attached_agents = (attached / "AGENTS.md").read_text(encoding="utf-8")
+            setup_connect = json_command(
+                [
+                    str(hub / "bin/flightdeck"),
+                    "setup",
+                    "connect",
+                    "--repositories-root",
+                    str(attached_root),
+                    "--json",
+                ],
+                cwd=hub,
+            )
+            declaration_text = (hub / "hub/repositories.yaml").read_text(
+                encoding="utf-8"
+            )
+            local_registry_text = (hub / "hub/state/repositories.yaml").read_text(
+                encoding="utf-8"
+            )
+            probe(
+                report,
+                "setup_attached_reference_bridge_portable",
+                setup_connect["ok"] is True
+                and setup_connect["summary"]["connected"] == 1
+                and "placement: attached" in declaration_text
+                and str(attached) not in declaration_text
+                and str(attached) in local_registry_text
+                and (attached / "AGENTS.override.md").is_file()
+                and (attached / "AGENTS.md").read_text(encoding="utf-8")
+                == attached_agents
+                and git(attached, "diff", "--name-only") == "",
+                setup_connect["summary"],
+            )
+            bridge_registry_before_noop = (
+                hub / "hub/state/bridges.yaml"
+            ).read_bytes()
+            setup_noop = json_command(
+                [
+                    str(hub / "bin/flightdeck"),
+                    "setup",
+                    "connect",
+                    "--repositories-root",
+                    str(attached_root),
+                    "--json",
+                ],
+                cwd=hub,
+            )
+            probe(
+                report,
+                "setup_connect_idempotent_and_preserves_tracked_files",
+                setup_noop["ok"] is True
+                and setup_noop["changed"] is False
+                and setup_noop["bridge_receipt"]["repositories"][0]["bridge"]["status"]
+                == "noop"
+                and (hub / "hub/state/bridges.yaml").read_bytes()
+                == bridge_registry_before_noop
+                and git(attached, "diff", "--name-only") == "",
+                setup_noop["summary"],
+            )
 
             nested_validator_root = root / ".flightdeck-local" / "nested-validator-root"
             nested_validator_root.mkdir(parents=True)

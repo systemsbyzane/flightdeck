@@ -5,8 +5,8 @@ Hub. The user describes the outcome; the Hub chooses the project and mode.
 
 ## Automatic Flow
 
-1. Classify intent: read-only, implementation, compliance,
-   runtime-validation, or coordination.
+1. Classify intent: planning, review, CI/CD, platform, read-only,
+   implementation, compliance, runtime-validation, or coordination.
 2. Resolve workload and ownership from `flightdeck.yaml`, repo code, artifacts,
    GitHub, or authorized environment evidence.
 3. Use `bin/flightdeck route plan --workload <id> --work-type <type>` and add
@@ -51,14 +51,17 @@ product repo that owns the tag or digest instead.
 
 ## Default Routing
 
-- **Hub thread**: intake, ownership resolution, cross-repo design, sequencing,
-  approvals, and final synthesis.
-- **Repo project on Mac**: code edits, tests, diffs, commits, PR preparation, and
-  repo-specific review; also read-only repo audits when that repo owns the work.
+- **Hub task**: intake, ownership resolution, right-sized coordination
+  planning, cross-repo design, sequencing, approvals, and final synthesis.
+- **Repo project on Mac**: code edits, tests, diffs, commits, PR preparation,
+  findings-first repo review, code-level planning, and pipeline or
+  infrastructure source changes; also read-only repo audits when that repo owns
+  the work.
 - **Codex Worktree mode**: parallel feature work or review fixes inside one Git
   repo.
 - **`remote-validation` remote thread**: cluster inspection, logs, image rebuilds,
-  Kubernetes validation, and VM-hosted environment checks.
+  Kubernetes validation, platform observation, and VM-hosted environment
+  checks.
 - **GitHub plugin or app controls**: PR, issue, review, CI, and workflow context.
 - **Codex Security plugin**: diff scans, repository scans, finding validation,
   and security remediation planning.

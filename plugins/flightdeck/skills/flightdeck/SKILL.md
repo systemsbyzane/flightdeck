@@ -1,6 +1,6 @@
 ---
 name: flightdeck
-description: Coordinate portable multi-repository work from a generated Flightdeck using exact-path project verification and separate logical/runtime project identities. Use when a request begins in a Hub, spans projects or environments, needs ownership routing, requires an owning Codex project task, says “configure bridge repos”, “configure repository bridges”, or “set up all repos”, or must preserve explicit approval and no-monitoring boundaries.
+description: Coordinate portable multi-repository work from a generated Flightdeck using exact-path project verification and separate logical/runtime project identities. Use when a request begins in a Hub, spans projects or environments, needs ownership routing, planning, review, CI/CD, platform, STIG, or plugin lifecycle coordination, asks to connect repositories, requires an owning Codex project task, or must preserve explicit approval and no-monitoring boundaries.
 ---
 
 # Flightdeck
@@ -8,21 +8,37 @@ description: Coordinate portable multi-repository work from a generated Flightde
 Use the Hub as a coordinator and each owning repository, program workspace, or
 environment as the execution surface.
 
+For “set up Flightdeck” or “connect repositories” intent, use
+`$flightdeck-setup`; users do not need to invoke the skill by name.
+For planning-only intent, use `$flightdeck-plan`. For change, pull-request,
+architecture, or readiness review, use `$flightdeck-review`. Natural intent is
+enough; explicit skill invocation is optional.
+For pipeline and delivery intent, use `$flightdeck-ci`. For infrastructure,
+platform-service, or environment intent, use `$flightdeck-platform`.
+For STIG, CKL, applicability, inherited-control, evidence-gap, or
+STIG-remediation intent, use `$flightdeck-stig`.
+For Flightdeck plugin update, reinstall, preservation, rollback, version, or
+patch-note intent, use `$flightdeck-upgrade`. An existing Hub is protected user
+state and is never regenerated as part of a plugin upgrade.
+
 ## Start
 
 1. Locate the generated Hub by walking upward to `flightdeck.yaml`.
 2. Read the Hub `AGENTS.md`, registry, and
    `docs/workflows/thread-routing.md`.
-3. Classify the request as coordination, read-only, implementation, artifact,
-   compliance, or runtime validation.
+3. Classify the request as coordination, planning, review, CI/CD, platform,
+   STIG, plugin lifecycle, read-only, implementation, artifact, compliance, or
+   runtime validation.
 4. Run `bin/flightdeck route plan` with the resolved workload and work type.
 5. For repository-owned work, require a verified `bridge_handoff` and include
    it completely in the child prompt.
 
 Read `references/dispatch.md` before creating or resuming a project task.
-For bridge-configuration intent, use `$flightdeck-repo-bridge` and its mandatory
+For initial repository discovery and connection, use `$flightdeck-setup`.
+For advanced bridge mode changes, migration, or drift repair, use
+`$flightdeck-repo-bridge` and its mandatory
 `references/configure-bridge-repos.md` runbook. Do not create implementation
-tasks for bridge setup.
+tasks during setup.
 
 ## Dispatch Gate
 
@@ -70,5 +86,6 @@ publication, deployment, shared environment mutation, external communication,
 compliance submission, risk acceptance, and closure claims. Never place
 credentials or sensitive evidence in Hub state or task prompts.
 
-Use the specialized bundled skill for development, charts, patching, research,
-artifacts, compliance, STIG, setup, Doctor, or repo-bridge work.
+Use the specialized bundled skill for planning, review, CI/CD, platform,
+development, charts, patching, research, artifacts, compliance, STIG, setup,
+Doctor, repo-bridge, or plugin-upgrade work.

@@ -232,6 +232,25 @@ module Flightdeck
       repositories.find { |item| item["id"] == name.to_s }
     end
 
+    def repository_path(repository)
+      value = repository.fetch("path")
+      placement = repository.fetch("placement", "managed")
+      unless %w[managed attached].include?(placement)
+        raise ConfigurationError, "repository placement must be managed or attached"
+      end
+
+      return root_path(value, label: "repository path") if placement == "managed"
+
+      unless repository["registry_origin"] == "local"
+        raise ConfigurationError, "attached repository paths must come from ignored local state"
+      end
+      unless Pathname.new(value.to_s).absolute?
+        raise ConfigurationError, "attached repository path must be absolute"
+      end
+
+      File.expand_path(value)
+    end
+
     def workflow_path(type)
       entry = workflows[type.to_s]
       return nil unless Support.present?(entry)
@@ -257,6 +276,7 @@ module Flightdeck
       value["id"] = name.to_s
       value["local_path"] ||= value["path"]
       value["path"] = value["local_path"]
+      value["placement"] ||= "managed"
       value["workloads"] = Array(value["workload_ids"] || value["workloads"] || value["workload"]).map(&:to_s)
       value["workload"] ||= value["workloads"].first || "shared"
       value["registry_origin"] = origin
@@ -267,23 +287,35 @@ module Flightdeck
       raise ConfigurationError, "repository declaration must be a mapping" unless item.is_a?(Hash)
 
       value = Support.stringify(item)
+      value["placement"] ||= "managed"
       required = %w[
-        id workload provider locator local_path owner default_branch
+        id workload provider locator owner default_branch
         default_branch_verified bridge codex_project
       ]
-      missing = required.reject { |key| Support.present?(value[key]) || value[key] == true }
+      missing = required.reject { |key| Support.present?(value[key]) || value[key] == false }
       raise ConfigurationError, "repository declaration missing: #{missing.join(', ')}" unless missing.empty?
 
       Support.validate_identifier!(value["id"], label: "repository declaration ID")
       raise ConfigurationError, "unknown declared workload: #{value['workload']}" unless workload(value["workload"])
       raise ConfigurationError, "unknown declared provider: #{value['provider']}" unless provider(value["provider"])
-      raise ConfigurationError, "declared default branch must be verified" unless value["default_branch_verified"] == true
-      if Pathname.new(value["local_path"].to_s).absolute?
-        raise ConfigurationError, "declared repository path must be Hub-relative"
+      unless %w[managed attached].include?(value["placement"])
+        raise ConfigurationError, "declared repository placement must be managed or attached"
       end
-      root_path(value["local_path"], label: "declared repository path")
+      unless [true, false].include?(value["default_branch_verified"])
+        raise ConfigurationError, "declared default_branch_verified must be boolean"
+      end
+      if value["placement"] == "managed"
+        raise ConfigurationError, "managed declaration default branch must be verified" unless value["default_branch_verified"] == true
+        raise ConfigurationError, "managed declaration local_path is required" unless Support.present?(value["local_path"])
+        if Pathname.new(value["local_path"].to_s).absolute?
+          raise ConfigurationError, "declared repository path must be Hub-relative"
+        end
+        root_path(value["local_path"], label: "declared repository path")
+      elsif value.key?("local_path")
+        raise ConfigurationError, "attached declarations must not store a machine-local path"
+      end
       if value["provider"] == "existing-local" && Pathname.new(value["locator"].to_s).absolute?
-        raise ConfigurationError, "existing-local declaration locator must be Hub-relative"
+        raise ConfigurationError, "existing-local declaration locator must be portable"
       end
       begin
         locator_uri = URI.parse(value["locator"].to_s)

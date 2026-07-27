@@ -13,7 +13,7 @@ module Flightdeck
 
     def run
       issues = configuration_issues
-      repositories = @config.repositories.map { |item| GitInspector.new(@config.root).inspect(item) }
+      repositories = @config.repositories.map { |item| GitInspector.new(@config).inspect(item) }
       repositories.each { |repository| issues.concat(repository_issues(repository)) }
       compliance = ComplianceChecker.new(@config.root).run
       issues.concat(compliance.delete("issues"))
@@ -95,6 +95,14 @@ module Flightdeck
         end
         if item.dig("bridge", "desired_state") == "not_installed" && item["blockers"].to_a.empty?
           issues << issue("warning", "bridge.declaration_pending", id, "declared bridge is not installed")
+        end
+        if item["default_branch_verified"] == false
+          issues << issue(
+            "warning",
+            "repository.default_branch_pending",
+            id,
+            "attached repository uses its checked-out branch until provider default-branch metadata is verified"
+          )
         end
         project_status = item.dig("project_registration", "status")
         unless project_status == "verified"

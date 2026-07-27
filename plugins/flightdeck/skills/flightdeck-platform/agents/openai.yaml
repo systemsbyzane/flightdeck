@@ -1,0 +1,6 @@
+interface:
+  display_name: "Flightdeck Platform"
+  short_description: "Coordinate platform and environment work"
+  default_prompt: "Use $flightdeck-platform to coordinate this platform change across source and runtime owners."
+policy:
+  allow_implicit_invocation: true

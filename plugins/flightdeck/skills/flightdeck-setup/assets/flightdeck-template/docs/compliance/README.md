@@ -28,6 +28,8 @@ context into reviewer-ready control language and package artifacts.
 - `assessor-quality-bar.md` - maintain AO/SCA-quality discipline.
 - `artifact-sensitivity-and-handling.md` - handle sensitive assessment material
   safely.
+- `stig-evaluation.md` - adapt rule, evidence, applicability, CKL, and
+  remediation work to the user's requested depth.
 
 ## Source Anchors
 
@@ -57,4 +59,3 @@ control effectiveness unless the program record proves that status.
 
 Every generated artifact should also produce same-basename `.json` and `.yaml`
 sidecars in the same directory.
-

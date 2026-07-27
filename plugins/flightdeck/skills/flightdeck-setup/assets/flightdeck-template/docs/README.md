@@ -9,6 +9,14 @@ the Hub into a monorepo.
 
 - [Thread routing](workflows/thread-routing.md) - resolve the owning project,
   execution mode, and environment.
+- [Planning](workflows/planning.md) - create a right-sized, read-only plan from
+  natural intent.
+- [CI/CD and delivery](workflows/ci-cd.md) - diagnose or change delivery
+  pipelines with exact-revision evidence.
+- [Platform and environments](workflows/platform.md) - coordinate
+  infrastructure source and live runtime ownership.
+- [Plugin lifecycle](workflows/plugin-lifecycle.md) - upgrade the installed
+  Flightdeck plugin without regenerating this Hub or changing repositories.
 - [Flightdeck operations](workflows/operations.md) - use the registry, task
   lifecycle, status, routing, and approval model.
 - [Control-plane architecture](architecture/control-plane.md) - understand
@@ -17,6 +25,8 @@ the Hub into a monorepo.
   inside independent repository projects.
 - [Review readiness](review/codex-review-readiness.md) - prepare a change for
   repository review.
+- [Change review](review/change-review.md) - review the exact candidate and
+  lead with evidence-backed findings.
 - [Design review](architecture/design-review.md) - evaluate non-trivial changes
   before implementation.
 - [Manifest architecture](architecture/manifest-architecture.md) - review Helm,
@@ -27,6 +37,9 @@ the Hub into a monorepo.
   runtime contracts while patching images or dependencies.
 - [Compliance guidance](compliance/README.md) - operate evidence-backed RMF and
   authorization-package workspaces.
+- [STIG evaluation](compliance/stig-evaluation.md) - evaluate rules, review
+  evidence gaps, handle inherited controls, and prepare CKL output without a
+  fixed intake form.
 
 ## Templates
 

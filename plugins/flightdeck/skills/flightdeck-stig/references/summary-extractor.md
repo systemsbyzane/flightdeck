@@ -21,10 +21,14 @@ Extract the most recent STIG evaluation into conservative, CKL-ready text:
 
 - Prefer too little over too much.
 - Keep only verified evidence.
+- Confirm the status is supported by the applicability and evidence contract
+  before presenting the text as export-ready.
 - Remove speculation such as "appears", "likely", "probably", "should", and "may".
 - Do not add data that was not in the evaluation.
 - Do not include raw command output unless the user asks for audit details.
 - For CKL fields, use generic terms such as "the system", "the database", or "the application".
+- Do not imply that successful CKL generation, an inherited-control label, or
+  a completed checklist proves compliance.
 
 ## Container-Era Language
 
@@ -40,4 +44,3 @@ Useful phrasing:
 | NetworkPolicy | Network isolation is enforced by Kubernetes NetworkPolicy. |
 
 Only use these statements when verified.
-

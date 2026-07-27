@@ -1,6 +1,6 @@
 ---
 name: flightdeck-repo-bridge
-description: Plan, bulk-configure, install, and validate non-destructive repository instruction bridges and exact-path saved-project identities for a generated Flightdeck. Use when a user says “configure bridge repos”, “configure repository bridges”, “set up all repos”, or asks about reference, materialized, repo-native, drift, unsafe overrides, or owning-repository onboarding.
+description: Inspect, change, migrate, or repair repository instruction bridges and exact-path saved-project identities for an existing Flightdeck. Use for reference, materialized, or repo-native mode changes, bridge drift, unsafe overrides, advanced bulk bridge work, or owning-repository onboarding. Initial one-prompt Flightdeck setup belongs to flightdeck-setup.
 ---
 
 # Flightdeck Repo Bridge
@@ -9,8 +9,7 @@ Read the owning repository's applicable `AGENTS.md` files before bridge work.
 Repo rules own layout, commands, and tests; the stricter rule wins for security
 and authorization.
 
-For “configure bridge repos”, “configure repository bridges”, “set up all
-repos”, or equivalent requests, read
+For advanced bulk bridge configuration on an existing Flightdeck, read
 `references/configure-bridge-repos.md` completely and follow it end to end.
 That runbook is mandatory.
 

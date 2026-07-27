@@ -17,6 +17,7 @@ require "flightdeck/doctor"
 require "flightdeck/repo_planner"
 require "flightdeck/repository_store"
 require "flightdeck/route_planner"
+require "flightdeck/setup_store"
 require "flightdeck/task_store"
 
 class FlightdeckTest < Minitest::Test
@@ -41,6 +42,15 @@ class FlightdeckTest < Minitest::Test
         source = File.join(TEMPLATE_ROOT, "hub", entry)
         FileUtils.cp_r(source, File.join(root, "hub", entry)) if File.exist?(source)
       end
+      Flightdeck::Support.atomic_yaml(
+        File.join(root, "hub", "repositories.yaml"),
+        {
+          "api_version" => "flightdeck.dev/v1alpha1",
+          "kind" => "RepositoryDeclarations",
+          "schema" => "hub/schemas/repository-declarations.schema.json",
+          "repositories" => []
+        }
+      )
       WORKLOAD_ROOTS.each do |workload|
         FileUtils.mkdir_p(File.join(root, workload))
         readme = File.join(TEMPLATE_ROOT, workload, "README.md")
@@ -431,6 +441,261 @@ class FlightdeckTest < Minitest::Test
       assert_equal "local", registered["owner"]
       assert_equal result.dig("verification", "branch"), registered["default_branch"]
       assert_equal false, result.dig("project_registration", "verified")
+    end
+  end
+
+  def test_setup_plan_discovers_attached_repository_without_writing
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      repository = initialize_repository(repositories_root, "attached-service")
+      commit_repository(repository)
+      File.write(File.join(repository, "local-note.txt"), "preserve me\n")
+      declarations_before = File.read(config.repository_declarations_path)
+
+      result = Flightdeck::SetupStore.new(config).plan(
+        repositories_root: repositories_root
+      )
+
+      assert_equal true, result["read_only"]
+      assert_equal 1, result.dig("summary", "discovered")
+      assert_equal 1, result.dig("summary", "ready")
+      item = result.fetch("repositories").first
+      assert_equal "attached", item["placement"]
+      assert_equal "reference", item.dig("bridge", "mode")
+      assert_equal false, item["clean"]
+      assert_equal "existing-local", item["provider"]
+      assert_equal "attached", item.dig("proposed_declaration", "placement")
+      refute item.fetch("proposed_declaration").key?("local_path")
+      assert_equal declarations_before, File.read(config.repository_declarations_path)
+      refute File.exist?(config.local_registry_path)
+      refute File.exist?(File.join(repository, "AGENTS.override.md"))
+    end
+  end
+
+  def test_setup_plan_normalizes_hosted_origin_without_network_access
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      repository = initialize_repository(repositories_root, "hosted-service")
+      commit_repository(repository)
+      git(
+        "remote", "add", "origin",
+        "https://github.com/example-company/hosted-service.git",
+        chdir: repository
+      )
+
+      item = Flightdeck::SetupStore.new(config).plan(
+        repositories_root: repositories_root
+      ).fetch("repositories").first
+
+      assert_equal "github", item["provider"]
+      assert_equal "example-company/hosted-service", item["locator"]
+      assert_equal "example-company", item["owner"]
+      assert_equal "main", item["verified_default_branch"]
+      assert_equal "checked_out_branch_fallback", item["default_branch_source"]
+      assert_equal false, item["default_branch_verified"]
+      assert_includes item.fetch("warnings").join(" "), "unverified fallback"
+
+      git("update-ref", "refs/remotes/origin/main", "HEAD", chdir: repository)
+      git(
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
+        chdir: repository
+      )
+      verified = Flightdeck::SetupStore.new(config).plan(
+        repositories_root: repositories_root
+      ).fetch("repositories").first
+      assert_equal "origin_head", verified["default_branch_source"]
+      assert_equal true, verified["default_branch_verified"]
+    end
+  end
+
+  def test_setup_plan_blocks_and_redacts_credential_bearing_origin
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      repository = initialize_repository(repositories_root, "credential-service")
+      commit_repository(repository)
+      git(
+        "remote", "add", "origin",
+        "https://synthetic-user:synthetic-secret@example.invalid/service.git",
+        chdir: repository
+      )
+
+      result = Flightdeck::SetupStore.new(config).plan(
+        repositories_root: repositories_root
+      )
+      item = result.fetch("repositories").first
+      serialized = JSON.generate(result)
+
+      assert_equal "blocked", item["status"]
+      assert_includes item.fetch("blockers").join(" "), "embedded credentials"
+      refute_includes serialized, "synthetic-user"
+      refute_includes serialized, "synthetic-secret"
+    end
+  end
+
+  def test_setup_connect_keeps_unverified_remote_default_branch_truthful
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      repository = initialize_repository(repositories_root, "branch-fallback-service")
+      commit_repository(repository)
+      git(
+        "remote", "add", "origin",
+        "https://github.com/example-company/branch-fallback-service.git",
+        chdir: repository
+      )
+
+      result = Flightdeck::SetupStore.new(config).connect(
+        repositories_root: repositories_root
+      )
+
+      assert_equal true, result["ok"], result.inspect
+      declaration = Flightdeck::Config.new(root: root).repository_declarations.first
+      assert_equal false, declaration["default_branch_verified"]
+      assert_equal "main", declaration["default_branch"]
+      doctor = Flightdeck::Doctor.new(Flightdeck::Config.new(root: root)).run
+      assert_equal 0, doctor.dig("summary", "errors"), doctor.inspect
+      assert_includes(
+        doctor["issues"].map { |item| item["code"] },
+        "repository.default_branch_pending"
+      )
+    end
+  end
+
+  def test_setup_connect_never_persists_local_file_origin_in_portable_declaration
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      repository = initialize_repository(repositories_root, "local-origin-service")
+      commit_repository(repository)
+      local_origin = File.join(File.dirname(root), "synthetic-origin.git")
+      git("remote", "add", "origin", "file://#{local_origin}", chdir: repository)
+
+      result = Flightdeck::SetupStore.new(config).connect(
+        repositories_root: repositories_root
+      )
+
+      assert_equal true, result["ok"], result.inspect
+      declaration = Flightdeck::Config.new(root: root).repository_declarations.first
+      assert_equal "existing-local", declaration["provider"]
+      assert_equal "local-origin-service", declaration["locator"]
+      serialized = File.read(config.repository_declarations_path)
+      refute_includes serialized, local_origin
+      refute_includes serialized, File.dirname(root)
+    end
+  end
+
+  def test_setup_connect_attaches_in_place_and_installs_safe_reference_bridge
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      repository = initialize_repository(repositories_root, "attached-service")
+      commit_repository(repository)
+      agents_before = File.read(File.join(repository, "AGENTS.md"))
+
+      result = Flightdeck::SetupStore.new(config).connect(
+        repositories_root: repositories_root
+      )
+
+      assert_equal true, result["ok"], result.inspect
+      assert_equal "connected_projects_pending", result["status"]
+      assert_equal 1, result.dig("summary", "connected")
+      assert_equal 1, result.dig("summary", "project_pending")
+      declaration = Flightdeck::Config.new(root: root).repository_declarations.first
+      assert_equal "attached", declaration["placement"]
+      refute declaration.key?("local_path")
+      refute_includes File.read(config.repository_declarations_path), repository
+      registered = Flightdeck::Config.new(root: root).repository("attached-service")
+      assert_equal File.realpath(repository), File.realpath(registered["path"])
+      assert_equal "attached", registered["placement"]
+      assert File.file?(File.join(repository, "AGENTS.override.md"))
+      _ignored, _error, ignored_status = Flightdeck::Support.capture(
+        "git", "check-ignore", "-q", "--", "AGENTS.override.md", chdir: repository
+      )
+      assert_equal 0, ignored_status
+      assert_equal agents_before, File.read(File.join(repository, "AGENTS.md"))
+      doctor = Flightdeck::Doctor.new(Flightdeck::Config.new(root: root)).run
+      assert_equal 0, doctor.dig("summary", "errors"), doctor.inspect
+      bridge_registry = File.read(config.bridge_registry_path)
+      second = Flightdeck::SetupStore.new(Flightdeck::Config.new(root: root)).connect(
+        repositories_root: repositories_root
+      )
+      assert_equal true, second["ok"], second.inspect
+      assert_equal false, second["changed"]
+      assert_equal "noop", second.dig("bridge_receipt", "repositories", 0, "bridge", "status")
+      assert_equal bridge_registry, File.read(config.bridge_registry_path)
+    end
+  end
+
+  def test_setup_connect_skips_unmanaged_override_without_writing_state
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      repository = initialize_repository(repositories_root, "conflict-service")
+      commit_repository(repository)
+      File.write(File.join(repository, "AGENTS.override.md"), "unmanaged\n")
+      declarations_before = File.read(config.repository_declarations_path)
+
+      result = Flightdeck::SetupStore.new(config).connect(
+        repositories_root: repositories_root
+      )
+
+      assert_equal false, result["ok"]
+      assert_equal false, result["changed"]
+      assert_equal "connected_with_blockers", result["status"]
+      assert_includes(
+        result.fetch("repositories").first.fetch("blockers").join(" "),
+        "refusing to overwrite"
+      )
+      assert_equal declarations_before, File.read(config.repository_declarations_path)
+      refute File.exist?(config.local_registry_path)
+      assert_equal "unmanaged\n", File.read(File.join(repository, "AGENTS.override.md"))
+
+      stopped = Flightdeck::SetupStore.new(config).connect(
+        repositories_root: repositories_root,
+        failure_policy: "stop"
+      )
+      assert_equal "stopped_before_changes", stopped["status"]
+      assert_equal 0, stopped.dig("summary", "project_verified")
+    end
+  end
+
+  def test_setup_connect_reports_empty_authorized_root_without_claiming_ready
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "empty-repositories")
+      FileUtils.mkdir_p(repositories_root)
+
+      result = Flightdeck::SetupStore.new(config).connect(
+        repositories_root: repositories_root
+      )
+
+      assert_equal true, result["ok"]
+      assert_equal false, result["complete"]
+      assert_equal "no_repositories_found", result["status"]
+      assert_equal 0, result.dig("summary", "connected")
+      assert_equal false, result["changed"]
+    end
+  end
+
+  def test_setup_connect_continues_independent_safe_repositories
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      safe = initialize_repository(repositories_root, "a-safe-service")
+      blocked = initialize_repository(repositories_root, "b-blocked-service")
+      [safe, blocked].each { |repository| commit_repository(repository) }
+      File.write(File.join(blocked, "AGENTS.override.md"), "unmanaged\n")
+
+      result = Flightdeck::SetupStore.new(config).connect(
+        repositories_root: repositories_root,
+        failure_policy: "continue"
+      )
+
+      assert_equal false, result["ok"]
+      assert_equal 1, result.dig("summary", "connected")
+      assert_equal 1, result.dig("summary", "blocked")
+      assert File.file?(File.join(safe, "AGENTS.override.md"))
+      assert_equal "unmanaged\n", File.read(File.join(blocked, "AGENTS.override.md"))
+      declarations = Flightdeck::Config.new(root: root).repository_declarations
+      assert_equal ["a-safe-service"], declarations.map { |item| item["id"] }
+      doctor = Flightdeck::Doctor.new(Flightdeck::Config.new(root: root)).run
+      assert_equal 0, doctor.dig("summary", "errors"), doctor.inspect
     end
   end
 

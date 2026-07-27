@@ -29,7 +29,7 @@ module Flightdeck
       project = @config.codex_project(resolved_key)
       project ||= {
         "display_name" => repository_id,
-        "path" => @config.root_path(repository.fetch("path")),
+        "path" => @config.repository_path(repository),
         "context" => "local",
         "role" => "implementation",
         "required" => true

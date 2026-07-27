@@ -51,7 +51,12 @@ Mandatory surfaces are:
   record;
 - setup, artifact capability preflight, and acceptance runbooks;
 - active Hub skill triggers and automation method;
-- STIG evaluation, Helm planning, summary extraction, and CKL tools;
+- adaptive STIG evaluation, evidence/applicability validation,
+  draft-versus-export readiness, remediation routing, Helm planning, summary
+  extraction, and CKL tools;
+- exact-version plugin upgrade planning, deterministic patch notes,
+  preservation boundaries, supported reinstall commands, approval gates, and
+  generated-Hub lifecycle separation;
 - reusable architecture, security, patching, review, compliance, template, and
   workflow method, including the documentation index, Codex UI model, and
   retained neutral control-plane and compliance workbench design history.
@@ -61,4 +66,5 @@ tasks, evidence, generated findings, and controlled artifacts are mandatory
 exclusions, not parity gaps. Runtime Codex UI registration and dispatch remain
 unresolved until installed fresh-task acceptance is actually executed and its
 evidence proves exact-path ID capture, create-versus-resume, and the
-no-monitoring boundary.
+no-monitoring boundary. A locally tested upgrade planner cannot prove that an
+installed upgrade succeeded or that refreshed skills loaded in a new task.
