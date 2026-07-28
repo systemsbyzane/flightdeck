@@ -58,6 +58,23 @@ end to end.
 - A plan, render, or green source check does not prove publication, apply,
   rollout, or runtime success.
 
+## Database intent
+
+- Natural database, DB, data-store, schema, query, index, transaction,
+  migration, backfill, replication, backup, restore, or database-performance
+  intent uses `docs/workflows/database.md`; users do not need to name a skill.
+- Keep conceptual answers lightweight. Dispatch repository-owned or live-state
+  investigation before inspecting code, schema, data, or runtime.
+- Preserve database constraints and transaction invariants, backward
+  compatibility, bounded migrations, least privilege, measured query and pool
+  behavior, and tested recovery objectives.
+- Treat production reads as potentially expensive. Diagnostics do not
+  authorize DDL, DML, migrations, maintenance, failover, restore, restart,
+  credential changes, or broader data access.
+- Keep schema source, migration plans, applied state, replicas, backups, and
+  observed runtime evidence distinct. A successful command or backup job does
+  not prove application compatibility or recoverability.
+
 ## STIG intent
 
 - Natural STIG, CKL, checklist, evidence-gap, applicability, inherited-control,

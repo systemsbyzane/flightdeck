@@ -184,6 +184,21 @@ boundary.
 </details>
 
 <details>
+<summary><strong>Design or change a database safely</strong></summary>
+
+```text
+Review this database migration for compatibility, locking, data integrity,
+rollout, recovery, and production validation risks.
+```
+
+Flightdeck applies database-specific design and operational guidance, routes
+source and live-state work to the exact owners, and keeps diagnostics,
+migrations, data changes, maintenance, restore, and failover behind their
+appropriate authorization boundaries.
+
+</details>
+
+<details>
 <summary><strong>Upgrade Flightdeck safely</strong></summary>
 
 ```text
@@ -242,6 +257,7 @@ Installing the plugin makes these focused skills available:
 - adaptive, read-only planning and findings-first review;
 - CI/CD diagnosis, delivery workflow changes, and release gates;
 - platform, infrastructure, and environment coordination;
+- database design, migrations, performance, security, and recovery guidance;
 - setup and Doctor;
 - repository bridge planning and installation;
 - development, charts, patching, and research workflows;

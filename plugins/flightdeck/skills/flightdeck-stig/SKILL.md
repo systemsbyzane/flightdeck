@@ -20,6 +20,16 @@ batch or CKL workflow, export-readiness check, or remediation plan. Ask only
 for information that blocks an honest next step. Missing context normally
 produces a draft with explicit gaps, not a refusal.
 
+Choose the smallest execution mode that satisfies the request:
+
+- `quick`: answer a conceptual or single-rule question with applicability,
+  status or uncertainty, supporting evidence, and the next missing fact;
+- `standard`: collect and report reproducible evidence for a reviewable
+  evaluation;
+- `batch/export`: use structured records, validation, and CKL tooling.
+
+Do not parse, validate, or generate CKL data for a quick text-only question.
+
 Collect read-only evidence only: local file inspection, rendered chart output,
 safe cluster reads, and non-mutating in-container inspection. Notes guide what
 to verify but are not evidence. Redact secrets and sensitive values.
@@ -28,7 +38,7 @@ Use exactly one status: `Not a Finding`, `Open`, `Not Applicable`, or
 `Not Reviewed`. Reserve `Not Applicable` for verified architectural
 inapplicability and `Not Reviewed` for inconclusive or inaccessible evidence.
 
-Use the bundled deterministic scripts:
+Use only the bundled deterministic scripts required by the selected mode:
 
 ```text
 python3 scripts/ckl_parser.py input.ckl -o parsed.json

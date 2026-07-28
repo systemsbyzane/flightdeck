@@ -170,8 +170,15 @@ def main() -> int:
         if tree.getroot().tag != "CHECKLIST":
             raise ValueError("template root must be CHECKLIST")
         updated: set[str] = set()
+        template_ids: set[str] = set()
         for element in tree.getroot().iter("VULN"):
             vuln_id = vulnerability_id(element)
+            if vuln_id and vuln_id in template_ids:
+                raise ValueError(
+                    f"duplicate vulnerability ID in template: {vuln_id}"
+                )
+            if vuln_id:
+                template_ids.add(vuln_id)
             if vuln_id in findings:
                 update_element(element, findings[vuln_id], args.timestamp)
                 updated.add(vuln_id)

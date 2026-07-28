@@ -1,6 +1,6 @@
 ---
 name: flightdeck
-description: Coordinate portable multi-repository work from a generated Flightdeck using exact-path project verification and separate logical/runtime project identities. Use when a request begins in a Hub, spans projects or environments, needs ownership routing, planning, review, CI/CD, platform, STIG, or plugin lifecycle coordination, asks to connect repositories, requires an owning Codex project task, or must preserve explicit approval and no-monitoring boundaries.
+description: Coordinate portable multi-repository work from a generated Flightdeck using exact-path project verification and separate logical/runtime project identities. Use when a request begins in a Hub, spans projects or environments, needs ownership routing, planning, review, CI/CD, platform, database, STIG, or plugin lifecycle coordination, asks to connect repositories, requires an owning Codex project task, or must preserve explicit approval and no-monitoring boundaries.
 ---
 
 # Flightdeck
@@ -15,6 +15,8 @@ architecture, or readiness review, use `$flightdeck-review`. Natural intent is
 enough; explicit skill invocation is optional.
 For pipeline and delivery intent, use `$flightdeck-ci`. For infrastructure,
 platform-service, or environment intent, use `$flightdeck-platform`.
+For database, data-store, schema, query, migration, backup, restore,
+replication, or database-performance intent, use `$flightdeck-db`.
 For STIG, CKL, applicability, inherited-control, evidence-gap, or
 STIG-remediation intent, use `$flightdeck-stig`.
 For Flightdeck plugin update, reinstall, preservation, rollback, version, or
@@ -27,8 +29,8 @@ state and is never regenerated as part of a plugin upgrade.
 2. Read the Hub `AGENTS.md`, registry, and
    `docs/workflows/thread-routing.md`.
 3. Classify the request as coordination, planning, review, CI/CD, platform,
-   STIG, plugin lifecycle, read-only, implementation, artifact, compliance, or
-   runtime validation.
+   database, STIG, plugin lifecycle, read-only, implementation, artifact,
+   compliance, or runtime validation.
 4. Run `bin/flightdeck route plan` with the resolved workload and work type.
 5. For repository-owned work, require a verified `bridge_handoff` and include
    it completely in the child prompt.
@@ -87,5 +89,5 @@ compliance submission, risk acceptance, and closure claims. Never place
 credentials or sensitive evidence in Hub state or task prompts.
 
 Use the specialized bundled skill for planning, review, CI/CD, platform,
-development, charts, patching, research, artifacts, compliance, STIG, setup,
-Doctor, repo-bridge, or plugin-upgrade work.
+database, development, charts, patching, research, artifacts, compliance,
+STIG, setup, Doctor, repo-bridge, or plugin-upgrade work.

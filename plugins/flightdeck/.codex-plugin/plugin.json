@@ -1,6 +1,6 @@
 {
   "name": "flightdeck",
-  "version": "0.1.0+codex.20260727224307",
+  "version": "0.1.0+codex.20260728181734",
   "description": "Coordinate portable multi-repository engineering, operations, research, artifacts, and compliance work.",
   "author": {
     "name": "Flightdeck Maintainers",
@@ -19,7 +19,7 @@
   "interface": {
     "displayName": "Flightdeck",
     "shortDescription": "Portable multi-project engineering coordination",
-    "longDescription": "Generates a local control plane, discovers and connects existing repositories in place with safe local bridges, creates right-sized plans, routes findings-first reviews to exact owning projects, preserves approval boundaries, validates workspace health, upgrades safely with patch notes, and provides reusable engineering, CI/CD, platform, automation, artifact, compliance, and STIG workflows.",
+    "longDescription": "Generates a local control plane, discovers and connects existing repositories in place with safe local bridges, creates right-sized plans, routes findings-first reviews to exact owning projects, preserves approval boundaries, validates workspace health, upgrades safely with patch notes, and provides reusable engineering, CI/CD, platform, database, automation, artifact, compliance, and STIG workflows.",
     "developerName": "Flightdeck Maintainers",
     "category": "Developer Tools",
     "websiteURL": "https://github.com/systemsbyzane/flightdeck",

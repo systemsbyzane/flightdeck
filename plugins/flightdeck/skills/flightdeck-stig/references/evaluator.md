@@ -19,6 +19,21 @@ context, state unknowns, and request only the next fact required to distinguish
 Read `evidence-contract.md` for applicability, inherited controls, structured
 batch records, and draft-versus-export readiness.
 
+## Response Depth
+
+Use the lightest response that preserves an honest conclusion:
+
+- For a conceptual or single-rule question, return applicability, one status
+  or `Not Reviewed`, the decisive evidence, and the smallest next check. Do not
+  include raw output or run CKL tooling unless requested.
+- For a reviewable evaluation, use the standard report below with reproducible
+  evidence and explicit gaps.
+- For batch or export work, use the structured evidence contract and validate
+  before generation.
+
+Do not expand a quick question into cluster discovery, a full benchmark review,
+or remediation planning without user intent.
+
 ## Evidence Collection
 
 Use read-only commands and keep complete command outputs for the technical audit trail. Useful patterns:

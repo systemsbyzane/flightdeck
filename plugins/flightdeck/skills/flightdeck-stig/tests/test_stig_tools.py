@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import subprocess
@@ -111,6 +112,62 @@ class StigToolsTest(unittest.TestCase):
             self.assertIn("**Evidence:**", details)
             self.assertIn("**Human Review Recommended:**", details)
             self.assertNotIn("confidence", details.lower())
+
+    def test_generator_rejects_duplicate_template_vulnerability_ids(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="flightdeck-stig-") as directory:
+            target = Path(directory)
+            template = target / "duplicate.ckl"
+            output = target / "output.ckl"
+            tree = ET.parse(FIXTURES / "template.ckl")
+            first = tree.getroot().find(".//VULN")
+            container = tree.getroot().find(".//iSTIG")
+            self.assertIsNotNone(first)
+            self.assertIsNotNone(container)
+            container.append(copy.deepcopy(first))
+            tree.write(template, encoding="UTF-8", xml_declaration=True)
+
+            result = self.run_tool(
+                str(SCRIPTS / "ckl_generator.py"),
+                str(FIXTURES / "findings.json"),
+                str(template),
+                str(output),
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("duplicate vulnerability ID in template", result.stderr)
+            self.assertFalse(output.exists())
+
+    def test_summary_extractor_rejects_unsupported_decided_status(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="flightdeck-stig-") as directory:
+            target = Path(directory) / "unsupported.json"
+            target.write_text(
+                json.dumps(
+                    {
+                        "status": "Not a Finding",
+                        "confidence": "HIGH",
+                        "status_summary": "The system implements the control.",
+                        "finding_details": ["The required value is configured."],
+                        "applicability": {
+                            "state": "applicable",
+                            "rationale": "The rule applies.",
+                        },
+                        "evidence": [
+                            {
+                                "kind": "inherited",
+                                "source": "synthetic platform statement",
+                                "summary": "The platform supplies the control.",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_tool(
+                str(SCRIPTS / "summary_extractor.py"),
+                str(target),
+                "--json",
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("direct or attributed inherited evidence", result.stderr)
 
     def test_evaluation_validator_accepts_export_ready_bundle(self) -> None:
         result = self.run_tool(

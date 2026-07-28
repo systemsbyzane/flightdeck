@@ -90,6 +90,30 @@
       "migration": [
         "Start a fresh Codex task after upgrading so the corrected plugin prompts load."
       ]
+    },
+    {
+      "version": "0.1.0+codex.20260728181734",
+      "date": "2026-07-28",
+      "summary": "Database engineering guidance and faster, stricter STIG workflows.",
+      "changes": [
+        {
+          "category": "added",
+          "text": "Added the implicitly triggered flightdeck-db skill for database design, queries, transactions, migrations, security, performance, reliability, and operational safety."
+        },
+        {
+          "category": "changed",
+          "text": "Added quick, standard, and batch/export STIG execution modes so focused questions avoid unnecessary CKL tooling."
+        },
+        {
+          "category": "fixed",
+          "text": "Prevented CKL-ready summaries from accepting unsupported decided statuses and rejected duplicate vulnerability IDs in CKL templates."
+        }
+      ],
+      "breaking_changes": [],
+      "migration": [
+        "Start a fresh Codex task after upgrading so the flightdeck-db skill and updated STIG guidance load.",
+        "Existing generated Hubs are preserved and are not automatically migrated."
+      ]
     }
   ]
 }

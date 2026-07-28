@@ -11,6 +11,8 @@ and runtime validation separated.
   pipeline evidence and separates delivery actions.
 - [Platform and environments](platform.md) separates infrastructure source,
   generated plans, applied state, and runtime observations.
+- [Database work](database.md) coordinates schema, query, migration,
+  performance, security, reliability, and recovery decisions.
 - [Plugin lifecycle](plugin-lifecycle.md) separates supported plugin updates
   from generated-Hub migration and protects user-owned state.
 - [Repository onboarding](repo-onboarding.md) verifies or acquires an owning

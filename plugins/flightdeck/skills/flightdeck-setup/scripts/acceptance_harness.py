@@ -267,6 +267,30 @@ def main() -> int:
                 },
             )
 
+            database_guidance = " ".join(
+                (hub / "docs/workflows/database.md")
+                .read_text(encoding="utf-8")
+                .split()
+            ).casefold()
+            probe(
+                report,
+                "generated_database_engineering_and_operations_guidance",
+                "users do not need to name a skill" in database_guidance
+                and "conceptual questions" in database_guidance
+                and "expand-and-contract" in database_guidance
+                and "treat production reads as potentially expensive"
+                in database_guidance
+                and "successful migration command, backup job, or database startup"
+                in database_guidance
+                and "natural database" in hub_instructions
+                and "diagnostics do not authorize ddl, dml, migrations"
+                in hub_instructions,
+                {
+                    "database": "docs/workflows/database.md",
+                    "instructions": "AGENTS.md",
+                },
+            )
+
             stig_guidance = " ".join(
                 (hub / "docs/compliance/stig-evaluation.md")
                 .read_text(encoding="utf-8")

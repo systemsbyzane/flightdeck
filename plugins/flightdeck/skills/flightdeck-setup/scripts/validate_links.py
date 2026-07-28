@@ -22,6 +22,7 @@ PLAN_SKILL = ROOT.parent / "flightdeck-plan"
 REVIEW_SKILL = ROOT.parent / "flightdeck-review"
 CI_SKILL = ROOT.parent / "flightdeck-ci"
 PLATFORM_SKILL = ROOT.parent / "flightdeck-platform"
+DB_SKILL = ROOT.parent / "flightdeck-db"
 STIG_SKILL = ROOT.parent / "flightdeck-stig"
 UPGRADE_SKILL = ROOT.parent / "flightdeck-upgrade"
 REQUIRED = (
@@ -42,6 +43,7 @@ REQUIRED = (
     TEMPLATE / "docs" / "workflows" / "planning.md",
     TEMPLATE / "docs" / "workflows" / "ci-cd.md",
     TEMPLATE / "docs" / "workflows" / "platform.md",
+    TEMPLATE / "docs" / "workflows" / "database.md",
     TEMPLATE / "docs" / "workflows" / "plugin-lifecycle.md",
     TEMPLATE / "docs" / "compliance" / "stig-evaluation.md",
     TEMPLATE / "docs" / "workflows" / "configure-bridge-repos.md",
@@ -54,6 +56,8 @@ REQUIRED = (
     REVIEW_SKILL / "references" / "review-method.md",
     CI_SKILL / "references" / "delivery-method.md",
     PLATFORM_SKILL / "references" / "platform-method.md",
+    DB_SKILL / "references" / "database-method.md",
+    DB_SKILL / "references" / "operations-safety.md",
     STIG_SKILL / "references" / "evidence-contract.md",
     UPGRADE_SKILL / "references" / "upgrade-contract.md",
     PLUGIN / "releases.json",
@@ -167,6 +171,11 @@ def main() -> int:
             PLATFORM_SKILL,
             ("natural platform intent", "explicit invocation is optional"),
             "references/platform-method.md",
+        ),
+        (
+            DB_SKILL,
+            ("natural database intent", "explicit invocation is optional"),
+            "references/database-method.md",
         ),
         (
             STIG_SKILL,

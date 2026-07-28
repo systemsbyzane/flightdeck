@@ -230,6 +230,7 @@
         "docs/workflows/automations.md",
         "docs/workflows/ci-cd.md",
         "docs/workflows/configure-bridge-repos.md",
+        "docs/workflows/database.md",
         "docs/workflows/multirepo-coordination.md",
         "docs/workflows/operations.md",
         "docs/workflows/planning.md",
@@ -437,6 +438,20 @@
       "plugin_count": 3,
       "plugin_paths": [
         "skills/flightdeck-development/**"
+      ],
+      "source_mapping_ids": [
+        "reusable-method-guides"
+      ]
+    },
+    {
+      "id": "database-method",
+      "status": "added",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 4,
+      "plugin_paths": [
+        "skills/flightdeck-db/**"
       ],
       "source_mapping_ids": [
         "reusable-method-guides"

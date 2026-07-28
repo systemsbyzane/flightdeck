@@ -15,6 +15,8 @@ the Hub into a monorepo.
   pipelines with exact-revision evidence.
 - [Platform and environments](workflows/platform.md) - coordinate
   infrastructure source and live runtime ownership.
+- [Database work](workflows/database.md) - design and change persistent data
+  safely across schema, query, migration, reliability, and recovery concerns.
 - [Plugin lifecycle](workflows/plugin-lifecycle.md) - upgrade the installed
   Flightdeck plugin without regenerating this Hub or changing repositories.
 - [Flightdeck operations](workflows/operations.md) - use the registry, task

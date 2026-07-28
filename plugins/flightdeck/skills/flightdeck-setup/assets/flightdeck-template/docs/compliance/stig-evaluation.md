@@ -39,6 +39,18 @@ Missing context normally produces a useful draft with explicit gaps. It does
 not force the user through a questionnaire or pretend that an unsupported
 status is complete.
 
+## Execution Pace
+
+Use the smallest mode that answers the request:
+
+- quick for a conceptual or single-rule answer;
+- standard for a reproducible evidence-backed evaluation;
+- batch/export for structured validation and CKL generation.
+
+Quick mode returns applicability, status or uncertainty, decisive evidence,
+and the smallest next check. It does not run CKL tooling, inspect unrelated
+targets, or expand into remediation unless requested.
+
 ## Evidence And Applicability
 
 Keep benchmark release, target identity, source revision, and environment

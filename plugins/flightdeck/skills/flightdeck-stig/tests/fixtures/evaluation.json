@@ -1,6 +1,17 @@
 {
   "status": "Not a Finding",
   "confidence": "HIGH",
+  "applicability": {
+    "state": "applicable",
+    "rationale": "The rule applies to the synthetic workload."
+  },
+  "evidence": [
+    {
+      "kind": "direct",
+      "source": "synthetic rendered manifest",
+      "summary": "The required value is configured."
+    }
+  ],
   "status_summary": "The system enforces the required access restriction. It may also use an unverified secondary control.",
   "finding_details": [
     "The rendered workload manifest sets the required security value.",

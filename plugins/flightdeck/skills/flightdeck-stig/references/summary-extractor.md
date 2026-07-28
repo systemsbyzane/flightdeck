@@ -21,8 +21,9 @@ Extract the most recent STIG evaluation into conservative, CKL-ready text:
 
 - Prefer too little over too much.
 - Keep only verified evidence.
-- Confirm the status is supported by the applicability and evidence contract
-  before presenting the text as export-ready.
+- The extractor rejects decided statuses unless applicability and at least one
+  direct evidence item or properly attributed inherited evidence item supports
+  them.
 - Remove speculation such as "appears", "likely", "probably", "should", and "may".
 - Do not add data that was not in the evaluation.
 - Do not include raw command output unless the user asks for audit details.

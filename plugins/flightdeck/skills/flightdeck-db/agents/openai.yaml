@@ -1,0 +1,6 @@
+interface:
+  display_name: "Flightdeck Database"
+  short_description: "Guide safe, reliable database work"
+  default_prompt: "Use $flightdeck-db to evaluate this database design or change using durable engineering and operational practices."
+policy:
+  allow_implicit_invocation: true

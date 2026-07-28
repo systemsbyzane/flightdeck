@@ -46,6 +46,7 @@ EXPECTED_SKILLS = {
     "flightdeck-review",
     "flightdeck-ci",
     "flightdeck-platform",
+    "flightdeck-db",
     "flightdeck-development",
     "flightdeck-charts",
     "flightdeck-patching",
@@ -1405,6 +1406,61 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
             probe_name="platform skill and generated Hub semantic anchors",
             passed=platform_pass,
             evidence=platform_evidence,
+        )
+    )
+
+    database_pass, database_evidence = static_contains(
+        [
+            plugin / "skills" / "flightdeck-db" / "SKILL.md",
+            plugin / "skills" / "flightdeck-db" / "agents" / "openai.yaml",
+            plugin
+            / "skills"
+            / "flightdeck-db"
+            / "references"
+            / "database-method.md",
+            plugin
+            / "skills"
+            / "flightdeck-db"
+            / "references"
+            / "operations-safety.md",
+            candidate / "AGENTS.md",
+            candidate / "docs" / "workflows" / "database.md",
+        ],
+        {
+            "natural_trigger": (
+                "natural database intent",
+                "allow_implicit_invocation: true",
+            ),
+            "adaptive_depth": (
+                "conceptual questions",
+                "ask only for context",
+            ),
+            "owner_boundary": (
+                "before inspecting its code, schema, data, or runtime",
+                "return the receipt without monitoring",
+            ),
+            "state_distinction": (
+                "intended schema and configuration in source",
+                "applied migration history and runtime configuration",
+                "successful migration command, backup job, or database startup",
+            ),
+            "safe_change_method": (
+                "expand-and-contract",
+                "read-only request does not authorize",
+                "never run `explain analyze` on a write statement",
+            ),
+        },
+    )
+    records.append(
+        surface(
+            "database_engineering_method",
+            status="added",
+            mandatory=True,
+            scope="local",
+            mapping="Natural database intent maps to adaptive design and operational guidance with owner dispatch, evidence-state separation, compatibility-safe migrations, and explicit live-action gates.",
+            probe_name="database skill and generated Hub semantic anchors",
+            passed=database_pass,
+            evidence=database_evidence,
         )
     )
 
