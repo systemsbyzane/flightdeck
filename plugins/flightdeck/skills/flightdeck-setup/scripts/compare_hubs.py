@@ -1212,6 +1212,13 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
                     "authorization boundary",
                 ),
                 "no_monitoring": ("do not read, wait for, poll, or monitor",),
+                "skill_composition": (
+                    "smallest lead flightdeck skill",
+                    "independent of the owning workload",
+                    "new evidence crosses domains",
+                    "before domain-specific mutation",
+                    "do not preload speculative skills",
+                ),
             },
         )
         active_evidence["coordinator_contract"] = hub_anchors
@@ -1394,6 +1401,12 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
                 "explicit authorization for each environment write",
                 "return the receipt without monitoring",
             ),
+            "dynamic_database_handoff": (
+                "migration-version",
+                "$flightdeck-db",
+                "before any database action",
+                "do not preload",
+            ),
         },
     )
     records.append(
@@ -1430,6 +1443,8 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
             "natural_trigger": (
                 "natural database intent",
                 "allow_implicit_invocation: true",
+                "runtime-discovered migration-version",
+                "during another workflow",
             ),
             "adaptive_depth": (
                 "conceptual questions",

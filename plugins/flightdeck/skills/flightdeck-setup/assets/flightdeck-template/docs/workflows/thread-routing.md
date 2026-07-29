@@ -5,7 +5,8 @@ Hub. The user describes the outcome; the Hub chooses the project and mode.
 
 ## Automatic Flow
 
-1. Classify intent: planning, review, CI/CD, platform, read-only,
+1. Classify intent and choose the smallest lead Flightdeck skill for the
+   requested outcome: planning, review, CI/CD, platform, read-only,
    implementation, compliance, runtime-validation, or coordination.
 2. Resolve workload and ownership from `flightdeck.yaml`, repo code, artifacts,
    GitHub, or authorized environment evidence.
@@ -17,12 +18,24 @@ Hub. The user describes the outcome; the Hub chooses the project and mode.
 5. Verify the project is saved. Register an existing checkout automatically if
    missing, then refresh the project list and repeat the exact-path match.
 6. Require `bridge_handoff.status: verified` for a repository owner and include
-   the complete handoff in the child prompt.
+   the complete handoff plus exact lead and currently applicable companion
+   `$flightdeck-*` names in the child prompt.
 7. List recent tasks using the opaque runtime project ID and resume the
    matching objective when one exists.
 8. Create the Local or Worktree task when no matching task exists.
 9. Return logical project key, runtime project ID, child task ID, and mode
    immediately. Do not monitor it.
+
+## Skill Composition
+
+Project ownership and skill expertise are independent. A charts repository can
+own a live deployment while `$flightdeck-platform` remains the lead skill.
+Choose companions only for domains already involved; do not preload speculative
+skills.
+
+When new evidence crosses domains, announce and read the newly applicable skill
+before domain-specific mutation. Preserve the existing authorization boundary;
+loading a skill never grants a new action.
 
 ## Dispatch Gate
 

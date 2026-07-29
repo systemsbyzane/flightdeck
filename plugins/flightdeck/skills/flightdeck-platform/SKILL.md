@@ -1,6 +1,6 @@
 ---
 name: flightdeck-platform
-description: Coordinate platform engineering and environment work through Flightdeck. Use when a user asks about infrastructure as code, Terraform or OpenTofu, Pulumi, cloud resources, Kubernetes clusters, platform services, identity, networking, DNS, certificates, secrets, storage, backups, observability, reliability, capacity, upgrades, environment drift, runtime validation, or operational change. Natural platform intent should trigger this skill; explicit invocation is optional.
+description: Coordinate platform engineering and environment work through Flightdeck. Use when a user asks about infrastructure as code, Terraform or OpenTofu, Pulumi, cloud resources, Kubernetes clusters, SSH or remote-host operations, kind, kubectl, live deployments, platform services, identity, networking, DNS, certificates, secrets, storage, backups, observability, reliability, capacity, upgrades, environment drift, runtime validation, or operational change. Natural platform intent should trigger this skill; explicit invocation is optional.
 ---
 
 # Flightdeck Platform
@@ -22,6 +22,11 @@ an unnecessary infrastructure checklist.
 4. Perform durable live inspection or validation in the matching environment
    project. Record the exact account, project, subscription, region, cluster,
    namespace, and revision that are actually observed.
+
+If runtime evidence reveals a database, schema, migration-version, backfill,
+locking, or persistence issue, announce and read `$flightdeck-db` before any
+database action. Do not preload it for routine platform work, and do not treat
+the handoff as new authorization.
 
 ## Adapt the method
 

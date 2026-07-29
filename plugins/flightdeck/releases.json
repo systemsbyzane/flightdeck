@@ -114,6 +114,34 @@
         "Start a fresh Codex task after upgrading so the flightdeck-db skill and updated STIG guidance load.",
         "Existing generated Hubs are preserved and are not automatically migrated."
       ]
+    },
+    {
+      "version": "0.1.0+codex.20260729210303",
+      "date": "2026-07-29",
+      "summary": "Outcome-led skill composition with dynamic platform and database handoffs.",
+      "changes": [
+        {
+          "category": "fixed",
+          "text": "Made SSH, remote-host, kind, kubectl, live deployment, and runtime-validation requests trigger flightdeck-platform from natural user intent."
+        },
+        {
+          "category": "changed",
+          "text": "Selected lead and companion skills from the requested outcome instead of the owning workload, carried their exact names into child prompts, and deferred speculative skills."
+        },
+        {
+          "category": "fixed",
+          "text": "Made runtime-discovered database, schema, migration-version, backfill, locking, and persistence issues load flightdeck-db before database action without expanding authorization."
+        },
+        {
+          "category": "added",
+          "text": "Added deterministic validation and fresh-task acceptance coverage for platform-led chart handoffs and mid-task database escalation."
+        }
+      ],
+      "breaking_changes": [],
+      "migration": [
+        "Start a fresh Codex task after upgrading so the updated skill triggers and composition rules load.",
+        "Existing generated Hubs are preserved and are not automatically migrated; updated installed skills still apply from fresh tasks."
+      ]
     }
   ]
 }

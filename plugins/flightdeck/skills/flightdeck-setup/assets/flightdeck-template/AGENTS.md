@@ -28,6 +28,17 @@ end to end.
 - Read child results only after a later explicit request to consolidate or
   coordinate follow-up.
 
+## Skill composition
+
+- Users describe outcomes naturally; they do not need to name skills.
+- Choose the smallest lead Flightdeck skill from the requested outcome, not
+  from the owning workload, repository, or bridge profile.
+- Include the exact lead and currently applicable companion `$flightdeck-*`
+  names in every child prompt. Do not preload speculative skills.
+- Re-evaluate when new evidence crosses domains. Before domain-specific
+  mutation, announce and read the newly applicable skill without expanding the
+  existing authorization boundary.
+
 ## Planning and review intent
 
 - A natural-language planning-only request is read-only by default. Use

@@ -23,6 +23,18 @@ For Flightdeck plugin update, reinstall, preservation, rollback, version, or
 patch-note intent, use `$flightdeck-upgrade`. An existing Hub is protected user
 state and is never regenerated as part of a plugin upgrade.
 
+## Skill composition
+
+Choose the smallest lead Flightdeck skill that owns the requested outcome,
+independent of the owning workload, repository, or bridge profile. Add companion
+skills only when their domains are already involved; do not preload speculative
+skills.
+
+When dispatching, include the exact lead and currently applicable companion
+`$flightdeck-*` names in the child prompt. Re-evaluate when new evidence crosses
+domains. Before domain-specific mutation, announce and read the newly applicable
+skill without expanding the existing authorization boundary.
+
 ## Start
 
 1. Locate the generated Hub by walking upward to `flightdeck.yaml`.

@@ -893,6 +893,19 @@ def main() -> int:
                     "receipt": routed["dispatch_receipt"],
                 },
             )
+            child_prompt_requirements = routed["child_prompt_requirements"]
+            child_prompt_text = " ".join(child_prompt_requirements)
+            probe(
+                report,
+                "route_skill_composition_is_fluid_and_dynamic",
+                "lead Flightdeck skill" in child_prompt_text
+                and "owning workload" in child_prompt_text
+                and "new evidence crosses domains" in child_prompt_text
+                and "before domain-specific mutation" in child_prompt_text
+                and "do not preload speculative skills" in child_prompt_text
+                and "expand authorization" in child_prompt_text,
+                {"child_prompt_requirements": child_prompt_requirements},
+            )
             handoff = routed["bridge_handoff"]
             original_checkout = Path(handoff["original_checkout_path"])
             worktree = root / "synthetic-worktree"
@@ -919,7 +932,7 @@ def main() -> int:
                 and artifact_digests_match
                 and "AGENTS.md" in handoff["instruction_order"][0]
                 and "original_checkout_path"
-                in " ".join(routed["child_prompt_requirements"]),
+                in child_prompt_text,
                 {
                     "target_absent_in_worktree": not target_in_worktree.exists(),
                     "target_digest_matches": target_digest

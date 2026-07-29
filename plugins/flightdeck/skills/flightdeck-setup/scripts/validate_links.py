@@ -207,6 +207,49 @@ def main() -> int:
                 f"{display(skill_root / 'agents' / 'openai.yaml')} must allow implicit invocation"
             )
 
+    composition_paths = (
+        PLUGIN / "skills" / "flightdeck" / "SKILL.md",
+        PLATFORM_SKILL / "SKILL.md",
+        TEMPLATE / "AGENTS.md",
+        TEMPLATE / "docs" / "workflows" / "thread-routing.md",
+        TEMPLATE / "lib" / "flightdeck" / "route_planner.rb",
+    )
+    composition_text = " ".join(
+        path.read_text(encoding="utf-8").casefold() for path in composition_paths
+    )
+    for anchor in (
+        "lead flightdeck skill",
+        "owning workload",
+        "new evidence crosses domains",
+        "before domain-specific mutation",
+        "do not preload",
+    ):
+        if anchor not in composition_text:
+            failures.append(f"skill composition contract missing anchor: {anchor}")
+
+    platform_description = (PLATFORM_SKILL / "SKILL.md").read_text(
+        encoding="utf-8"
+    ).split("---", 2)[1].casefold()
+    for trigger in ("ssh", "remote-host", "kind", "kubectl", "live deployments"):
+        if trigger not in platform_description:
+            failures.append(
+                f"flightdeck-platform/SKILL.md description missing trigger: {trigger}"
+            )
+
+    database_description = (DB_SKILL / "SKILL.md").read_text(
+        encoding="utf-8"
+    ).split("---", 2)[1].casefold()
+    for trigger in (
+        "runtime-discovered",
+        "migration-version",
+        "schema-version",
+        "during another workflow",
+    ):
+        if trigger not in database_description:
+            failures.append(
+                f"flightdeck-db/SKILL.md description missing trigger: {trigger}"
+            )
+
     for path in (TEMPLATE / "hub" / "bridges" / "templates").glob("*/AGENTS.override.md"):
         text = path.read_text(encoding="utf-8")
         for relative in re.findall(r"\{\{HUB_ROOT\}\}/(docs/[A-Za-z0-9_./-]+\.md)", text):

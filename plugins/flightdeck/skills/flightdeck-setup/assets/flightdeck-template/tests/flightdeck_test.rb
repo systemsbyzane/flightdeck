@@ -233,6 +233,11 @@ class FlightdeckTest < Minitest::Test
       assert plan["dispatch_ready"]
       assert plan["dispatch_required"]
       assert plan["stop_after_dispatch"]
+      prompt_requirements = plan.fetch("child_prompt_requirements").join(" ")
+      assert_includes prompt_requirements, "lead Flightdeck skill"
+      assert_includes prompt_requirements, "owning workload"
+      assert_includes prompt_requirements, "new evidence crosses domains"
+      assert_includes prompt_requirements, "before domain-specific mutation"
     end
   end
 

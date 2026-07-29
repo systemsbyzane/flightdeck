@@ -12,6 +12,12 @@ Use `$flightdeck-platform` for broader infrastructure, platform-service, or
 environment coordination. Use this skill for Helm, Kubernetes manifest, and
 deployment-configuration source mechanics.
 
+When the requested outcome is primarily live cluster or environment work, use
+`$flightdeck-platform` as the lead skill even when a charts repository owns the
+task. If execution reveals a database, schema, migration-version, backfill,
+locking, or persistence issue, announce and read `$flightdeck-db` before any
+database action. Do not preload skills for domains that have not appeared.
+
 Before changing behavior, identify identity and RBAC, networking and TLS,
 secrets, storage, images, pod security, scheduling, observability, CRDs and
 hooks, upgrades, immutable fields, and rollback.

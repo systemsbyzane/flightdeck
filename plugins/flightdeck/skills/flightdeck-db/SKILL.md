@@ -1,6 +1,6 @@
 ---
 name: flightdeck-db
-description: Coordinate safe, reliable database work through Flightdeck. Use whenever a request discusses databases, DBs, data stores, SQL, relational or non-relational persistence, schema or table design, queries or indexes, transactions or locking, ORMs, connection pools, migrations or backfills, replication or failover, backup or restore, data retention, database security, performance, incidents, or operational changes. Natural database intent should trigger this skill; explicit invocation is optional.
+description: Coordinate safe, reliable database work through Flightdeck. Use whenever a request discusses databases, DBs, data stores, SQL, relational or non-relational persistence, schema or table design, queries or indexes, transactions or locking, ORMs, connection pools, migrations or backfills, replication or failover, backup or restore, data retention, database security, performance, incidents, operational changes, or runtime-discovered migration-version, schema-version, database-compatibility, or persistence errors during another workflow. Natural database intent should trigger this skill; explicit invocation is optional.
 ---
 
 # Flightdeck Database
@@ -13,6 +13,10 @@ migration, performance diagnosis, incident analysis, or an operational action.
 Ask only for context that changes the safe answer: engine and version,
 deployment model, workload shape, data sensitivity, consumers, availability
 requirements, and recovery objectives.
+
+This skill can become applicable after another workflow starts. When new
+evidence reveals database work, preserve the active task and authorization
+boundary while applying this method before any database action.
 
 Read `references/database-method.md` for substantive design, review, query,
 schema, performance, security, or reliability work. Also read

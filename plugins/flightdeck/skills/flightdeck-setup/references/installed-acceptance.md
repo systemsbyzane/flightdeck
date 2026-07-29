@@ -81,6 +81,24 @@ patching work whose owner is a synthetic repository.
    mode, and authorization boundary, then stops without waiting, polling,
    reading, or monitoring.
 
+## Specialist skill composition acceptance
+
+Use fresh tasks and synthetic, read-only evidence. The user prompts must not
+name skills.
+
+1. Ask the generated Hub to use SSH from a local task to update two synthetic
+   application images in a synthetic kind cluster and verify the deployment.
+2. Verify the Hub selects `$flightdeck-platform` as the lead,
+   `$flightdeck-charts` only for manifest mechanics, and carries those exact
+   names into the child prompt even when the charts project owns the task.
+3. Before any mutation, present the child with a synthetic startup error saying
+   database migration version 74 is behind embedded version 96.
+4. Verify the child announces and reads `$flightdeck-db` plus
+   `references/operations-safety.md` before proposing a migration action.
+5. Verify database guidance was not preloaded before the error, the user was
+   never required to name a skill, and loading the new skill did not expand
+   authorization or mutate a live environment.
+
 ## Plugin upgrade acceptance
 
 Run this separately and only after the user explicitly authorizes mutation of

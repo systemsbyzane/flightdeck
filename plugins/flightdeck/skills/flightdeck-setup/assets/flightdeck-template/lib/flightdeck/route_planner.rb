@@ -83,6 +83,8 @@ module Flightdeck
           "Read every applicable owning-repository AGENTS.md before the Hub bridge.",
           "Read and verify the route plan's bridge_handoff before the installed bridge and its required Hub documents.",
           "In a Codex Worktree where an ignored reference or materialized bridge is absent, read the verified bridge artifacts from bridge_handoff.original_checkout_path; do not copy them into the Worktree.",
+          "State the lead Flightdeck skill and any currently applicable companion skills explicitly; choose them from the requested outcome, not from the owning workload or bridge profile.",
+          "Re-evaluate skill applicability when new evidence crosses domains. Read the newly applicable skill before domain-specific mutation; do not preload speculative skills or expand authorization.",
           "Follow repository rules for layout, commands, tests, and implementation mechanics.",
           "Apply the stricter security and authorization rule.",
           "Return evidence and authorization state without claiming unverified success."
