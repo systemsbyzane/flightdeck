@@ -718,9 +718,9 @@ class FlightdeckTest < Minitest::Test
     end
   end
 
-  def test_compliance_sidecars_require_semantic_parity
+  def test_compliance_working_records_require_semantic_parity
     with_hub do |root, config|
-      directory = File.join(root, "compliance", "example", "control-assessments")
+      directory = File.join(root, "compliance", "example", "working-records")
       FileUtils.mkdir_p(directory)
       File.write(File.join(directory, "control.json"), JSON.pretty_generate({ "status" => "not_assessed" }))
       File.write(File.join(directory, "control.yaml"), YAML.dump({ "status" => "not_assessed" }))

@@ -15,9 +15,28 @@ ROOT = Path(__file__).resolve().parent.parent
 BOOTSTRAP = ROOT / "scripts" / "bootstrap.py"
 SCANNER = ROOT / "scripts" / "scan_debranding.py"
 STRUCTURED = ROOT / "scripts" / "validate_structured.py"
+ARTIFACT_VALIDATOR_SOURCE = (
+    ROOT.parent
+    / "flightdeck-artifacts"
+    / "scripts"
+    / "validate_deliverable.py"
+)
+ARTIFACT_VALIDATOR_TEMPLATE = (
+    ROOT
+    / "assets"
+    / "flightdeck-template"
+    / "scripts"
+    / "validate-deliverable.py"
+)
 
 
 class BootstrapTest(unittest.TestCase):
+    def test_generated_hub_artifact_validator_matches_skill_source(self) -> None:
+        self.assertEqual(
+            ARTIFACT_VALIDATOR_SOURCE.read_bytes(),
+            ARTIFACT_VALIDATOR_TEMPLATE.read_bytes(),
+        )
+
     def run_bootstrap(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["python3", str(BOOTSTRAP), *arguments],

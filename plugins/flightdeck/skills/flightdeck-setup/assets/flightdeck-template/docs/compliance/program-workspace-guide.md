@@ -32,9 +32,11 @@ Use these folders consistently:
   STIG artifacts, eMASS exports, and package instructions
 - `input-templates/`: eMASS workbooks, control spreadsheets, customer upload
   templates, or package forms to fill
-- `generated-documents/`: generated workbook drafts, policies, SSP narrative,
-  summaries, package support material, and their `.json` and `.yaml` sidecars
-- `control-assessments/`: control-by-control notes and generated assessment
+- `deliverables/`: polished workbooks, policies, SSP narrative, summaries, and
+  other files intended for submission or external review
+- `working-records/`: internal structured records, change summaries,
+  validation results, and unresolved decisions that must not ship by default
+- `control-assessments/`: control-by-control notes and prepared assessment
   rationale
 - `poam/`: POA&M candidates, weakness analysis, milestones, and closure notes
 - `evidence-index/`: evidence maps and source indexes
@@ -57,17 +59,21 @@ Put new workbooks in `input-templates/`. Ask Codex to inspect the workbook
 first and report sheets, columns, formulas, validations, and likely target
 fields before writing an output copy.
 
-Generated files should be written to `generated-documents/`, with companion
-notes in `control-assessments/`, `poam/`, or `evidence-index/`.
+Write polished output files to `deliverables/`, with internal analysis in
+`control-assessments/`, `poam/`, `evidence-index/`, or `working-records/`.
 
-Each generated human-readable artifact should have same-basename `.json` and
-`.yaml` sidecars in the same directory. Use
-`<hub-root>/docs/compliance/machine-readable-artifacts.md`
-for the required sidecar structure.
+Create equivalent JSON and YAML working records only when the user, program
+workflow, or governing format requires them. Store them in `working-records/`,
+not beside the deliverable, and exclude them from submission packages unless
+the user explicitly requests them. Use
+`<hub-root>/docs/compliance/machine-readable-artifacts.md` for their structure.
+
+Before delivery, resolve every template token, remove authoring-process
+metadata, validate the final content, and build archives from an explicit
+file-type allowlist.
 
 ## Program Boundaries
 
 Do not reuse facts from one program in another program unless the source
 artifact explicitly applies to both. Shared method belongs in `docs/compliance/`;
 program facts belong in `compliance/<program>/`.
-

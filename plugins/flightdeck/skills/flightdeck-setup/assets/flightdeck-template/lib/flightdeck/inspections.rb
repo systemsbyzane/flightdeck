@@ -77,7 +77,7 @@ module Flightdeck
   class ComplianceChecker
     DIRECTORIES = %w[
       generated generated-documents evidence evidence-index
-      control-assessment control-assessments poam
+      control-assessment control-assessments poam working-records
     ].freeze
 
     def initialize(root)

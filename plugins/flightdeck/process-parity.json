@@ -107,14 +107,15 @@
         "compliance/_program-template/control-assessments/control-assessment-template.md",
         "compliance/_program-template/evidence-index/.gitkeep",
         "compliance/_program-template/evidence-index/evidence-index-template.md",
-        "compliance/_program-template/generated-documents/.gitkeep",
+        "compliance/_program-template/deliverables/.gitkeep",
         "compliance/_program-template/input-templates/.gitkeep",
         "compliance/_program-template/input-templates/README.md",
         "compliance/_program-template/poam/.gitkeep",
         "compliance/_program-template/poam/poam-candidate-template.md",
         "compliance/_program-template/source-documents/.gitkeep",
         "compliance/_program-template/source-documents/README.md",
-        "compliance/_program-template/working-notes/.gitkeep"
+        "compliance/_program-template/working-notes/.gitkeep",
+        "compliance/_program-template/working-records/.gitkeep"
       ]
     },
     {
@@ -375,8 +376,10 @@
       "status": "generalized",
       "source_count": 0,
       "source_paths": [],
-      "candidate_paths": [],
-      "plugin_count": 3,
+      "candidate_paths": [
+        "scripts/validate-deliverable.py"
+      ],
+      "plugin_count": 5,
       "plugin_paths": [
         "skills/flightdeck-artifacts/**"
       ],

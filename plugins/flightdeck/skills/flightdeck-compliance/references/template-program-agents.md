@@ -37,12 +37,15 @@ another source.
 - Preserve workbook structure, columns, formulas, validations, and hidden
   sheets unless the user explicitly asks for a transform.
 - Fill only intended response fields.
-- Save generated workbook copies under `generated-documents/` unless the user
-  gives a different path.
-- Generate same-basename `.json` and `.yaml` sidecars alongside generated
-  workbook copies and other generated artifacts.
-- Produce companion notes for assumptions, evidence, skipped fields, generated
-  fields, and unresolved questions.
+- Save polished workbook copies under `deliverables/` unless the user gives a
+  different path.
+- Keep equivalent JSON/YAML working records, change summaries, renderings, and
+  validation reports under `working-records/` when required.
+- Keep internal records out of delivery packages unless explicitly requested.
+- Produce internal notes for assumptions, evidence, fields not completed,
+  authored fields, and unresolved questions.
+- Resolve every template variable and remove AI/tool provenance, authoring
+  notes, and review-workflow labels before delivery.
 
 ## Evidence Rules
 
@@ -57,6 +60,11 @@ closure evidence, approval, or upload acceptance.
 
 Do not expose secrets, credentials, raw controlled evidence, or customer
 material outside this program workspace. Prefer source references over copying
-sensitive raw content into generated summaries.
-```
+sensitive raw content into prepared summaries.
 
+## Delivery Rules
+
+Treat final files as professional human-authored documents. Run the artifact
+deliverable validator after the final render. Build archives from an explicit
+allowlist and include only requested files.
+```

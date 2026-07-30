@@ -21,10 +21,10 @@ context into reviewer-ready control language and package artifacts.
 - `evidence-analysis-guide.md` - classify, cite, and challenge evidence.
 - `poam-generation-guide.md` - generate POA&M-ready weakness and milestone
   language.
-- `policy-generation-guide.md` - draft policy and procedure artifacts from
+- `policy-generation-guide.md` - author policy and procedure artifacts from
   program context.
-- `machine-readable-artifacts.md` - generate JSON and YAML sidecars alongside
-  human-readable artifacts.
+- `machine-readable-artifacts.md` - maintain optional structured working
+  records without leaking internal process metadata into deliverables.
 - `assessor-quality-bar.md` - maintain AO/SCA-quality discipline.
 - `artifact-sensitivity-and-handling.md` - handle sensitive assessment material
   safely.
@@ -53,9 +53,13 @@ package instruction, or user-provided guidance in the program workspace.
 
 ## Operating Rule
 
-Generated compliance artifacts are drafts for human review. They are not
-authorization decisions, accepted eMASS uploads, approved policy, or verified
-control effectiveness unless the program record proves that status.
+Place polished, submission-facing files under `deliverables/` and internal
+analysis, structured records, change summaries, and validation evidence under
+`working-records/` or the applicable assessment folder. Deliverables must not
+identify AI, Codex, prompts, tools, generation steps, or review workflow, and
+must not contain unresolved template variables.
 
-Every generated artifact should also produce same-basename `.json` and `.yaml`
-sidecars in the same directory.
+Do not imply authorization, accepted eMASS upload, approved policy, verified
+effectiveness, risk acceptance, or closure unless the program record proves
+that status. Use `unsubmitted` only when the governing format requires a status
+and no later status is evidenced. Package only the files the user requested.

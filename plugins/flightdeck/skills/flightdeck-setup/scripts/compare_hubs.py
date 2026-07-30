@@ -8,6 +8,7 @@ import ast
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from datetime import datetime, timezone
@@ -137,6 +138,71 @@ def run(
         timeout=timeout,
         env={**os.environ, "LC_ALL": "C"},
     )
+
+
+def copy_source_test_snapshot(
+    source: Path,
+    candidate: Path,
+    destination: Path,
+) -> tuple[int, str]:
+    """Copy source control-plane files without local Hub payloads."""
+    result = run(["git", "ls-files", "-z"], cwd=source, timeout=60)
+    if result.returncode != 0:
+        raise ValueError(
+            "source Hub tracked-file inventory failed: "
+            f"{result.stderr.strip() or result.returncode}"
+        )
+    names = [name for name in result.stdout.split("\0") if name]
+    if not names:
+        candidate_intersection = {
+            path.relative_to(candidate).as_posix()
+            for path in sorted(candidate.rglob("*"))
+            if path.is_file() and (source / path.relative_to(candidate)).is_file()
+        }
+        source_control_plane = {
+            path.relative_to(source).as_posix()
+            for relative_root in (
+                "lib",
+                "tests",
+                "hub/automations",
+                "hub/schemas",
+                "hub/templates",
+                "hub/workflows",
+            )
+            for path in sorted((source / relative_root).rglob("*"))
+            if path.is_file() and path.name != ".DS_Store"
+        }
+        source_control_plane.update(
+            path.relative_to(source).as_posix()
+            for path in sorted(source.glob("*hub.yaml"))
+            if path.is_file()
+        )
+        if (source / "AGENTS.md").is_file():
+            source_control_plane.add("AGENTS.md")
+        names = sorted(candidate_intersection | source_control_plane)
+        mode = "candidate_managed_intersection"
+    else:
+        mode = "tracked_current_worktree"
+    if not names:
+        raise ValueError("source Hub has no safe control-plane files")
+    for name in names:
+        relative = Path(name)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError(f"unsafe tracked source path: {name}")
+        source_path = source / relative
+        destination_path = destination / relative
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        if source_path.is_symlink():
+            target = os.readlink(source_path)
+            target_path = Path(target)
+            if target_path.is_absolute() or ".." in target_path.parts:
+                raise ValueError(f"unsafe tracked source symlink: {name}")
+            destination_path.symlink_to(target)
+        elif source_path.is_file():
+            shutil.copy2(source_path, destination_path)
+        else:
+            raise ValueError(f"tracked source path is not a regular file: {name}")
+    return len(names), mode
 
 
 def atomic_text(path: Path, content: str) -> None:
@@ -585,6 +651,17 @@ def headings(path: Path) -> set[str]:
                 "default codex posture": "default operating posture",
                 "emass template workflow": "authorization workbook workflow",
                 "shared compliance docs": "shared compliance guides",
+                "machine readable artifact sidecars": (
+                    "structured compliance working records"
+                ),
+                "minimum sidecar fields": "minimum fields",
+                "workbook sidecars": "workbook records",
+                "consistency": "consistency and delivery",
+                "dorganization status": "document status",
+                "review notes": "internal working record",
+                "dorganization implementation language": "implementation statement",
+                "dorganization assessment note": "assessment note",
+                "recommended reviewer action": "program action",
                 "scenario one patch an data platform image from a repo never cloned": (
                     "scenario one patch a container image from a repository never cloned"
                 ),
@@ -970,7 +1047,23 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
         )
     )
 
-    source_tests = run(["ruby", "-Ilib", str(hub_test(source).relative_to(source))], cwd=source)
+    with tempfile.TemporaryDirectory(
+        prefix="flightdeck-source-test-snapshot-"
+    ) as snapshot_directory:
+        source_snapshot = Path(snapshot_directory)
+        source_snapshot_count, source_snapshot_mode = copy_source_test_snapshot(
+            source,
+            candidate,
+            source_snapshot,
+        )
+        source_tests = run(
+            [
+                "ruby",
+                "-Ilib",
+                str(hub_test(source_snapshot).relative_to(source_snapshot)),
+            ],
+            cwd=source_snapshot,
+        )
     candidate_tests = run(
         ["ruby", "-Ilib", str(hub_test(candidate).relative_to(candidate))],
         cwd=candidate,
@@ -987,6 +1080,10 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
             passed=test_pass,
             evidence={
                 "source": parse_test_summary(source_tests.stdout),
+                "source_snapshot": {
+                    "mode": source_snapshot_mode,
+                    "files": source_snapshot_count,
+                },
                 "candidate": parse_test_summary(candidate_tests.stdout),
                 "source_exit": source_tests.returncode,
                 "candidate_exit": candidate_tests.returncode,
@@ -1586,7 +1683,15 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
     artifact_paths = [
         plugin / "skills" / "flightdeck-artifacts" / "SKILL.md",
         plugin / "skills" / "flightdeck-artifacts" / "references" / "artifact-gates.md",
+        plugin
+        / "skills"
+        / "flightdeck-artifacts"
+        / "scripts"
+        / "validate_deliverable.py",
         plugin / "skills" / "flightdeck-setup" / "references" / "setup-runbook.md",
+        candidate / "docs" / "workflows" / "artifacts.md",
+        candidate / "docs" / "compliance" / "README.md",
+        candidate / "hub" / "schemas" / "compliance-artifact.schema.json",
     ]
     artifact_pass, artifact_evidence = static_contains(
         artifact_paths,
@@ -1596,16 +1701,39 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
             "pdf_gate": ("Render every page", "inspect layout"),
             "spreadsheet_gate": ("scan formula errors", "render every sheet"),
             "no_copy": ("does not bundle artifact implementations",),
+            "deliverable_hygiene": (
+                "professional human-authored",
+                "unresolved template",
+                "validate_deliverable.py",
+                "explicit file-type allowlist",
+                "unsubmitted",
+            ),
         },
     )
+    artifact_test = run(
+        [
+            "python3",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            str(plugin / "skills" / "flightdeck-artifacts" / "tests"),
+            "-p",
+            "test_*.py",
+            "-v",
+        ],
+        cwd=plugin.parent.parent,
+    )
+    artifact_evidence["tests_exit"] = artifact_test.returncode
+    artifact_pass = artifact_pass and artifact_test.returncode == 0
     records.append(
         surface(
             "artifact_capability_integration",
             status="added",
             mandatory=True,
             scope="local",
-            mapping="DOCX, PDF, and spreadsheet authoring remain external installed capabilities; the plugin supplies routing, preflight, and quality gates only.",
-            probe_name="artifact capability and render-inspect gate anchors",
+            mapping="DOCX, PDF, and spreadsheet authoring remain external installed capabilities; the plugin supplies routing, visual quality gates, and deterministic presentation-hygiene validation.",
+            probe_name="artifact capability, render-inspect, and clean-deliverable gates",
             passed=artifact_pass,
             evidence=artifact_evidence,
         )
@@ -1720,7 +1848,11 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
                 "evidence_default": ("read-only evidence", "notes are not evidence"),
                 "helm": ("helm template", "remediation plan"),
                 "batch": ("batch evaluation", "progress"),
-                "summary": ("status summary", "finding details", "human review"),
+                "summary": (
+                    "status summary",
+                    "finding details",
+                    "evidence limitation",
+                ),
                 "ckl_compatibility": (
                     "--dry-run",
                     "--no-timestamp",

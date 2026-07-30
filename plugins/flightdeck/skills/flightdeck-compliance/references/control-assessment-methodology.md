@@ -1,6 +1,6 @@
 # Control Assessment Methodology
 
-Use this method to assess controls from a program workspace and generate
+Use this method to assess controls from a program workspace and prepare
 implementation, assessment, and gap language.
 
 ## Assessment Steps
@@ -11,8 +11,8 @@ implementation, assessment, and gap language.
    planned, not applicable, or unknown.
 3. Locate evidence in the program workspace.
 4. Classify evidence quality using `evidence-analysis-guide.md`.
-5. Draft implementation language from supported facts.
-6. Draft assessment language that separates fact, inference, assumption, and
+5. Prepare implementation language from supported facts.
+6. Prepare assessment language that separates fact, inference, assumption, and
    gap.
 7. Identify POA&M candidates for missing or ineffective control elements.
 8. Record source references in the evidence index or companion notes.
@@ -49,11 +49,11 @@ notes.
 ## AP/CCI-Level Specificity
 
 When the workbook provides assessment procedure acronyms, CCIs, CCI
-definitions, implementation guidance, or assessment procedure text, draft the
+definitions, implementation guidance, or assessment procedure text, prepare the
 implementation narrative for that exact row. Do not reuse a parent-control or
 family-level narrative across all rows.
 
-For each row, the generated narrative must answer:
+For each row, the prepared narrative must answer:
 
 - what specific CCI outcome is implemented
 - which program component, process, role, or inherited provider implements it
@@ -82,12 +82,12 @@ the row's CCI definition and assessment procedure.
 
 ## Assessment Result Pattern
 
-Use this pattern when generating assessor notes:
+Use this pattern when preparing assessor notes:
 
 ```text
 Available evidence supports [satisfied/partially satisfied/not satisfied/not
 assessable] for [control/control part] because [evidence summary]. Remaining
-gaps are [gap list]. Recommended reviewer action is [action].
+gaps are [gap list]. Required program action is [action].
 ```
 
 Do not use "satisfied" when only policy exists and implementation evidence is
@@ -118,3 +118,11 @@ When evidence supports it, label the assessment method:
 If only interview-style evidence exists, do not present it as tested technical
 evidence.
 
+## Finalization
+
+Before placing assessment language in a deliverable, replace every bracketed
+example value and template expression. Unknown values must become professional
+gap language or blank fields permitted by the governing template, never `TBD`,
+`TODO`, or variable syntax. Remove headings and metadata that describe drafting,
+generation, tools, prompts, or review workflow. Keep evidence and decision
+traceability in the requested document fields or internal working records.

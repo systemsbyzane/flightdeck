@@ -35,9 +35,9 @@ receives stricter provenance and consistency checks.
    verification step.
 7. Route remediation separately and preserve every approval boundary.
 
-Missing context normally produces a useful draft with explicit gaps. It does
-not force the user through a questionnaire or pretend that an unsupported
-status is complete.
+Missing context normally produces a useful working evaluation with explicit
+gaps. It does not force the user through a questionnaire or pretend that an
+unsupported status is complete.
 
 ## Execution Pace
 
@@ -72,10 +72,10 @@ specific rationale. Use `Not Reviewed` when identity, access, applicability,
 freshness, or evidence is inconclusive.
 
 Rendered, applied, and observed runtime states are different. A compliant chart
-render does not prove the running revision, and a generated CKL does not prove
+render does not prove the running revision, and CKL file creation does not prove
 that its findings are supported.
 
-## Draft And Export Readiness
+## Working And Export Readiness
 
 During iterative work, use the draft evidence profile. It preserves partial
 evaluations and reports missing provenance or rationale as gaps.
@@ -88,6 +88,8 @@ package, or readiness decision. Export readiness requires:
 - status-to-applicability consistency;
 - direct or properly attributed inherited evidence for decided statuses;
 - a specific rationale for `Not Applicable`;
+- CKL comments and finding details without AI/tool provenance, generator notes,
+  confidence workflow, review-process labels, or unresolved variables;
 - review reasons for `Not Reviewed`;
 - CKL-ready comments and finding details.
 

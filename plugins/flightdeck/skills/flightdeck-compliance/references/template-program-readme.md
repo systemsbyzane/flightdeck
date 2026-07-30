@@ -6,8 +6,9 @@ labels with program-specific values.
 ```md
 # [Program Name] Compliance Workspace
 
-This workspace contains local context, source artifacts, input templates, and
-generated outputs for [Program Name] DoD RMF, eMASS, and ATO package work.
+This workspace contains local context, source artifacts, input templates,
+working records, and deliverables for [Program Name] DoD RMF, eMASS, and ATO
+package work.
 
 ## Program Context
 
@@ -25,8 +26,11 @@ generated outputs for [Program Name] DoD RMF, eMASS, and ATO package work.
   STIG artifacts, eMASS exports, and package instructions
 - `input-templates/` - eMASS workbook templates, customer control matrices, and
   upload formats to fill
-- `generated-documents/` - generated workbook drafts, policies, SSP narrative,
-  summaries, package support documents, and their `.json` and `.yaml` sidecars
+- `deliverables/` - polished workbooks, policies, SSP narrative, summaries, and
+  package-support documents
+- `working-records/` - internal structured records, change summaries,
+  validation results, and unresolved decisions excluded from delivery by
+  default
 - `control-assessments/` - control-by-control implementation and assessment
   notes
 - `poam/` - POA&M candidates, weakness analysis, milestones, and closure notes
@@ -43,3 +47,4 @@ evidence appears strongest, and what is missing before filling any workbook.
 ```
 ```
 
+Replace every bracketed token before using this README in a program workspace.

@@ -36,7 +36,7 @@ An ATO package should answer:
 - **Mission owner**: owns operational use, mission impact, and mission-specific
   risk.
 
-Do not blur these roles in generated language. If a control is inherited,
+Do not blur these roles in prepared language. If a control is inherited,
 hybrid, common, or system-specific, say so clearly and identify the evidence
 that supports the responsibility split.
 
@@ -78,8 +78,9 @@ evidence or clearly labeled inference.
 
 Package the decision record: SSP/control workbook, SAR or assessment notes,
 POA&M, risk summary, inherited control evidence, architecture context,
-continuous monitoring plan, and supporting artifacts. Generated material should
-help a human reviewer reach a decision, not replace the decision.
+continuous monitoring plan, and supporting artifacts. Prepared material should
+support the authorization decision without claiming to replace or predetermine
+that decision.
 
 ### Monitor
 
@@ -105,4 +106,3 @@ deployment changes, and annual review expectations.
 When program evidence is weak, state the risk plainly. A polished package with
 unsupported claims creates review risk and authorization risk. A strong package
 can contain gaps if those gaps are visible, bounded, assigned, and tracked.
-

@@ -76,7 +76,7 @@ Use CKL status labels exactly:
 Do not use `Not a Finding` without positive direct or inherited evidence. Do
 not use `Not Applicable` without a specific applicability rationale and
 evidence for the boundary. A compensating control requires explicit
-rule-intent analysis and normally warrants human review.
+rule-intent analysis and an independent authorization decision.
 
 ## Confidence
 
@@ -84,7 +84,10 @@ Include confidence in text reports, but omit it from CKL JSON fields unless expl
 
 - `HIGH`: direct value match or clear binary evidence.
 - `MEDIUM`: evidence is valid but requires interpretation or architectural context.
-- `LOW`: significant judgment required, evidence partial, or container-era interpretation is debatable. Include human review guidance.
+- `LOW`: significant judgment required, evidence partial, or container-era
+  interpretation is debatable. State the evidence limitation and required
+  verification in the internal technical record; do not add review-workflow
+  language to CKL comments or finding details.
 
 ## Container-Era Interpretation
 
@@ -131,7 +134,7 @@ For text output, return:
 <For Open: include Risk and Remediation Required.>
 <For Not Applicable: include Compensating Controls and Justification.>
 <For Not Reviewed: include Reason and Manual Verification Required.>
-<For LOW confidence: include Human Review Recommended.>
+<For LOW confidence: record the evidence limitation in Technical Details.>
 
 ## Technical Details (For Reference)
 
@@ -189,4 +192,6 @@ Keep `status_summary` and `finding_details` CKL-ready:
 - No pod names, node names, container names, database names, file paths, line numbers, or STIG ID references.
 - No raw JSON structures.
 - No unverified claims.
+- No AI/tool provenance, generator timestamps, authoring notes, confidence
+  workflow, or review-process labels.
 - Plain strings only in `finding_details`.

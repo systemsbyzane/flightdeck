@@ -56,7 +56,7 @@ An evidence index should capture:
 - For spreadsheets, cite workbook, sheet, row, and column when known.
 - For PDFs, cite page or section when tooling can identify it.
 - For diagrams, cite filename and visible label or page.
-- For generated summaries, cite the source artifacts used to generate them.
+- For prepared summaries, cite the source artifacts used to support them.
 - Do not cite a document as evidence for a claim it does not actually support.
 
 ## Staleness
@@ -86,4 +86,3 @@ Unsupported claims should become one of:
 - a POA&M candidate
 - a request for additional evidence
 - a recommendation, clearly labeled as not yet approved
-
