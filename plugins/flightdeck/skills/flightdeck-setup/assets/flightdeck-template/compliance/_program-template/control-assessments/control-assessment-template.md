@@ -22,10 +22,13 @@
 
 - [item requiring review]
 
-## Draft implementation language
+## Implementation statement
 
 [Specific control-part implementation statement.]
 
-## Draft assessment note
+## Assessment note
 
-[Supported result, remaining gaps, and reviewer action.]
+[Supported result, remaining gaps, and required program action.]
+
+Replace every bracketed token before delivery. Use a permitted blank field or
+professional gap language when a value is not established.

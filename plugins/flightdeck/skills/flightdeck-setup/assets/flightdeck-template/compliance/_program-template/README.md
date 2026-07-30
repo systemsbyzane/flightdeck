@@ -11,12 +11,18 @@ objective in `context/`.
 - `control-assessments/`: control-part implementation and assessor notes.
 - `poam/`: evidence-backed weakness candidates, milestones, and closure needs.
 - `working-notes/`: analysis, interviews, conflicts, and unresolved decisions.
-- `generated-documents/`: draft human artifacts plus same-basename JSON and
-  YAML sidecars.
+- `working-records/`: internal structured records, change summaries,
+  validation results, and unresolved decisions excluded from delivery.
+- `deliverables/`: polished workbooks, policies, checklists, manifests, and
+  package-support documents intended for submission or external review.
 
-Start with an inventory. Do not fill a workbook or draft a control claim until
+Start with an inventory. Do not fill a workbook or author a control claim until
 the authorization boundary, template-owned fields, evidence strength, gaps,
 and handling constraints are understood.
+
+Before delivery, replace every template variable, remove AI/tool provenance and
+authoring/review-process labels, validate the final files, and package only the
+requested artifact types.
 
 Real program data is ignored local workspace content and must never be bundled
 back into the distributable plugin.

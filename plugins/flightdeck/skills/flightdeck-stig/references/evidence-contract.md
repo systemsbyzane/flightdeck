@@ -102,8 +102,9 @@ Use status conservatively:
   applicability remains inconclusive.
 
 Compensating controls do not automatically mean `Not Applicable`. Explain how
-the alternate control satisfies the rule intent and preserve human review when
-the interpretation is judgment-heavy.
+the alternate control satisfies the rule intent and preserve the evidence
+limitation and required independent decision when the interpretation is
+judgment-heavy.
 
 ## Evidence-Gap Review
 

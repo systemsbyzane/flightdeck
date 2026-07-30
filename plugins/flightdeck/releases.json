@@ -142,6 +142,30 @@
         "Start a fresh Codex task after upgrading so the updated skill triggers and composition rules load.",
         "Existing generated Hubs are preserved and are not automatically migrated; updated installed skills still apply from fresh tasks."
       ]
+    },
+    {
+      "version": "0.1.0+codex.20260730201641",
+      "date": "2026-07-30",
+      "summary": "Professional compliance deliverables with fail-closed presentation validation.",
+      "changes": [
+        {
+          "category": "added",
+          "text": "Added deterministic validation for document text, Office and PDF metadata, unresolved variables, filenames, and constrained archive contents."
+        },
+        {
+          "category": "changed",
+          "text": "Separated polished compliance deliverables from internal working records and removed default customer-facing sidecars and authoring-process metadata."
+        },
+        {
+          "category": "fixed",
+          "text": "Prevented AI provenance, review-workflow labels, internal STIG review fields, and unresolved template markers from leaking into final deliverables."
+        }
+      ],
+      "breaking_changes": [],
+      "migration": [
+        "Start a fresh Codex task after upgrading so the professional deliverable rules and validator load.",
+        "Existing generated Hubs are preserved and are not automatically migrated; adopt the deliverables and working-records layout explicitly where needed."
+      ]
     }
   ]
 }

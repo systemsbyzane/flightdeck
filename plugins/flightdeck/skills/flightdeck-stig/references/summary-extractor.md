@@ -13,8 +13,6 @@ Extract the most recent STIG evaluation into conservative, CKL-ready text:
 **Confidence:** <HIGH|MEDIUM|LOW>
 
 <Finding Details bullets>
-
-<Human Review Recommended if LOW confidence>
 ```
 
 ## Rules
@@ -30,6 +28,9 @@ Extract the most recent STIG evaluation into conservative, CKL-ready text:
 - For CKL fields, use generic terms such as "the system", "the database", or "the application".
 - Do not imply that successful CKL generation, an inherited-control label, or
   a completed checklist proves compliance.
+- Keep AI/tool provenance, generator notes, confidence workflow, and
+  review-process labels out of CKL comments and finding details. Preserve
+  evidence limitations in the internal evaluation record.
 
 ## Container-Era Language
 

@@ -6,7 +6,7 @@ Use this guide to keep compliance outputs reviewable and honest.
 
 Act as a package author, assessor, and AO support analyst at the same time:
 
-- draft clear package language
+- prepare clear package language
 - challenge weak or unsupported claims
 - identify missing evidence
 - explain residual risk and decision points
@@ -50,7 +50,7 @@ Stop and ask for clarification or mark a gap when:
 - source documents disagree on system scope
 - eMASS upload requirements are not provided
 - evidence appears to contain secrets or controlled material that should not be
-  copied into generated outputs
+  copied into prepared outputs
 - a requested statement would claim compliance that the evidence does not
   support
 
@@ -62,8 +62,9 @@ tool, cadence, evidence, weakness, mitigation, residual risk.
 
 ## Completion Standard
 
-Do not call a package artifact complete merely because all cells are filled. A
-complete draft must include a workbook or document output plus the companion
-notes needed for a human reviewer to understand evidence, assumptions, gaps,
-and risk.
-
+Do not call a package artifact complete merely because all cells are filled.
+Completeness requires the requested document or workbook plus enough internal
+record to trace evidence, assumptions, gaps, and risk. Keep that internal record
+outside the submission-facing file unless the governing template requires it.
+The final deliverable must contain no unresolved template variables or
+authoring-process labels.

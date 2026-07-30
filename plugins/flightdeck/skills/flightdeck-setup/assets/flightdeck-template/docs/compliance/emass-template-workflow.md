@@ -6,12 +6,12 @@ control spreadsheet, export, or required upload template.
 ## Principle
 
 The provided workbook is the format of record. Preserve it unless the user
-explicitly asks for a transformed workbook. Codex should fill intended response
-fields from program evidence, not redesign the workbook.
+explicitly asks for a transformed workbook. Fill intended response fields from
+program evidence; do not redesign the workbook.
 
 ## Initial Inspection
 
-Before writing generated values:
+Before writing values:
 
 - identify every worksheet
 - identify header rows, tables, hidden sheets, formulas, merged cells, data
@@ -20,7 +20,7 @@ Before writing generated values:
 - identify control identifiers, control text, implementation fields,
   assessment fields, status fields, evidence fields, POA&M fields, and comment
   fields
-- identify columns that appear safe for generated content
+- identify columns intended for authored response content
 - identify columns that appear template-owned, formula-owned, or controlled by
   eMASS/customer import logic
 
@@ -35,7 +35,7 @@ workbook.
 - Do not normalize control IDs unless the user asks.
 - Do not overwrite formulas or calculated fields.
 - Do not delete rows or columns from the input template.
-- Put generated content only in intended response columns.
+- Put authored content only in intended response columns.
 - If a required field lacks evidence, write a bounded gap statement where the
   template permits it and capture the issue in the companion notes.
 - Use concise implementation language in cells and put fuller rationale in a
@@ -50,21 +50,20 @@ workbook.
   the AP/CCI outcome. Put compliance status, test conclusions, evidence paths,
   screenshot locations, policy references, and pending-evidence instructions in
   status fields, Test Results, evidence columns, or companion notes.
-- Save output as a new file under the program workspace, normally in
-  `generated-documents/`.
+- Save the polished output as a new file under `deliverables/`.
 
 ## Evidence Mapping
 
 For each filled control row, create or update companion notes that include:
 
 - control ID and title
-- generated workbook fields
+- authored workbook fields
 - source files and locations
 - supported facts
 - reasonable inferences
 - assumptions
 - gaps or conflicts
-- recommended reviewer action
+- required program action
 
 When the workbook has no column for citations, use the companion note or
 evidence index rather than forcing citations into an incompatible field.
@@ -87,21 +86,22 @@ Good workbook language is direct and reviewable:
 
 ## Output Package
 
-For each workbook generation run, produce:
+Produce the requested workbook under `deliverables/`. Maintain assessment
+notes, evidence-index updates, a change summary, unresolved questions, and
+fields not completed under the applicable internal folders or
+`working-records/`; do not place them beside the workbook unless requested.
 
-- generated workbook
-- same-basename `.json` and `.yaml` sidecars for the generated workbook
-- companion assessment notes
-- evidence index updates
-- change summary listing modified sheets and columns
-- unresolved questions
-- skipped fields and why they were skipped
+The workbook is eMASS-ready in structure only when it preserves the provided
+template. Acceptance by eMASS is not claimed until upload and validation
+evidence exists.
 
-The generated workbook is eMASS-ready in structure only when it preserves the
-provided eMASS template. Acceptance by eMASS is not claimed until upload and
-validation evidence exists.
+Resolve all template variables in the output. When evidence does not establish
+a value, leave the field blank if allowed or write a professional bounded gap
+statement. Do not use `TBD`, bracketed variables, authoring notes, or
+AI/tool/review-process labels. Run the artifact deliverable validator after the
+final workbook render.
 
-Use `machine-readable-artifacts.md` for the sidecar structure. The sidecars
-should include workbook changes, sheets and columns modified, evidence
-references, assumptions, skipped fields, and reviewer actions.
-
+Use `machine-readable-artifacts.md` when a structured working record is
+required. It should include verified workbook changes, evidence references,
+assumptions, and fields not completed, and it must remain outside the delivery
+package unless explicitly requested.

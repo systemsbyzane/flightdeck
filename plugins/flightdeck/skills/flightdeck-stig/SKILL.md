@@ -18,7 +18,7 @@ and `references/summary-extractor.md` for CKL-ready summaries.
 Determine whether the request is a quick rule evaluation, evidence-gap review,
 batch or CKL workflow, export-readiness check, or remediation plan. Ask only
 for information that blocks an honest next step. Missing context normally
-produces a draft with explicit gaps, not a refusal.
+produces a working evaluation with explicit gaps, not a refusal.
 
 Choose the smallest execution mode that satisfies the request:
 

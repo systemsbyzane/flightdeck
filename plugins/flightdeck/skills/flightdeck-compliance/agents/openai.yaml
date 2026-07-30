@@ -1,4 +1,4 @@
 interface:
   display_name: "Flightdeck Compliance"
-  short_description: "Create evidence-backed compliance drafts"
-  default_prompt: "Use $flightdeck-compliance to create evidence-backed draft artifacts without inventing claims."
+  short_description: "Prepare professional compliance artifacts"
+  default_prompt: "Use $flightdeck-compliance to prepare professional evidence-backed artifacts without inventing claims or exposing authoring-process metadata."

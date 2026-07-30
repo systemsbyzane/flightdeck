@@ -18,3 +18,5 @@ Use this template in `compliance/<program>/evidence-index/`.
 - Tier 5: conflict
 ```
 
+Replace every bracketed token before delivery. Use a permitted blank field or
+professional gap statement when the record does not establish a value.

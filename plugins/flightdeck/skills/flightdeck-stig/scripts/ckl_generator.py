@@ -62,7 +62,12 @@ def format_finding_details(value: Any) -> str:
         return format_value(value, bullets=isinstance(value, list))
 
     lines: list[str] = []
-    processed = {"confidence"}
+    processed = {
+        "confidence",
+        "human_review_recommended",
+        "needs_human_review",
+        "review_notes",
+    }
     if "status" in value:
         lines.append(f"**Status:** {value['status']}")
         processed.add("status")
@@ -81,12 +86,6 @@ def format_finding_details(value: Any) -> str:
     if "verification" in value:
         lines.extend(["", f"**Verification:** {format_value(value['verification'])}"])
         processed.add("verification")
-    if value.get("human_review_recommended") or value.get("needs_human_review"):
-        note = value.get("review_notes", "See evidence and analysis above.")
-        lines.extend(["", f"**Human Review Recommended:** {format_value(note)}"])
-        processed.update(
-            {"human_review_recommended", "needs_human_review", "review_notes"}
-        )
     for key, item in sorted(value.items()):
         if key in processed:
             continue
@@ -125,7 +124,7 @@ def update_element(element: ET.Element, finding: dict[str, Any], timestamp: str 
         "COMMENTS": format_value(finding.get("comments")),
     }
     if timestamp:
-        suffix = f"CKL generated: {timestamp}"
+        suffix = f"Checklist updated: {timestamp}"
         values["COMMENTS"] = f"{values['COMMENTS']}\n\n{suffix}".strip()
     for name, value in values.items():
         child = element.find(name)
@@ -154,7 +153,10 @@ def main() -> int:
     parser.add_argument("findings_json", type=Path)
     parser.add_argument("template_ckl", type=Path)
     parser.add_argument("output_ckl", type=Path)
-    parser.add_argument("--timestamp", help="Explicit timestamp text to append to comments")
+    parser.add_argument(
+        "--timestamp",
+        help="Explicit checklist update timestamp text to append to comments",
+    )
     parser.add_argument(
         "--no-timestamp",
         action="store_true",

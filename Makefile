@@ -31,6 +31,7 @@ endif
 
 test: ruby-tests
 	$(PYTHON) -m unittest discover -s $(SETUP)/tests -p 'test_*.py' -v
+	$(PYTHON) -m unittest discover -s $(PLUGIN)/skills/flightdeck-artifacts/tests -p 'test_*.py' -v
 	$(PYTHON) -m unittest discover -s $(PLUGIN)/skills/flightdeck-stig/tests -p 'test_*.py' -v
 	$(PYTHON) -m unittest discover -s $(PLUGIN)/skills/flightdeck-upgrade/tests -p 'test_*.py' -v
 

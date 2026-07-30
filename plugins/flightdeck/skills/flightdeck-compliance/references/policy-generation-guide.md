@@ -3,11 +3,13 @@
 Use this guide when drafting policies, procedures, plans, or control narratives
 from a program workspace.
 
-## Draft Status
+## Document Status
 
-Generated policy language is draft material until an authorized program owner
-reviews and approves it. Do not describe generated policy as approved, signed,
-published, or enforced unless the program record proves that status.
+Do not describe policy language as approved, signed, published, or enforced
+unless the program record proves that status. When the governing template
+requires a status and no later status is evidenced, use `unsubmitted`. Do not
+add draft, human-review, AI, model, Codex, prompt, or tooling labels to the
+document.
 
 ## Inputs
 
@@ -24,7 +26,7 @@ Useful policy inputs include:
 
 ## Output Standard
 
-A generated policy or procedure should identify:
+A policy or procedure should identify:
 
 - purpose
 - scope
@@ -56,12 +58,14 @@ the authorization boundary. The ISSO coordinates the review with system
 administrators and retains review evidence with the program security artifacts.
 ```
 
-If cadence, owner, or tooling is unknown, leave that gap visible in the
-companion notes rather than inserting a generic value.
+If cadence, owner, or tooling is unknown, state “Not established in the
+available record” when the document requires an answer, or leave the field
+blank when permitted. Record detail in internal working records rather than
+inserting a template variable or generic value.
 
-## Review Notes
+## Internal Working Record
 
-Every generated policy draft should include a short review note listing:
+Maintain an internal record listing:
 
 - sources used
 - assumptions
@@ -69,3 +73,6 @@ Every generated policy draft should include a short review note listing:
 - controls supported
 - evidence still needed
 
+Keep this record under `working-records/` and out of the deliverable unless the
+user or governing template explicitly requests it. Validate the final policy
+for unresolved variables and authoring-process metadata before delivery.

@@ -40,8 +40,10 @@ The generator normalizes common status variants into CKL values and accepts
 string, list, or structured finding details. It refuses duplicate IDs, unknown
 statuses, and findings that do not exist in the template. Output has no
 timestamp by default; use `--timestamp <text>` only when the caller explicitly
-needs a stable supplied timestamp. `--dry-run`, `--no-timestamp`, and verbose
-mode remain available for workflow compatibility.
+needs a stable supplied checklist-update timestamp. CKL comments and finding
+details must not expose AI/tool provenance, generation notes, internal
+confidence workflow, or review-process labels. `--dry-run`, `--no-timestamp`,
+and verbose mode remain available for workflow compatibility.
 
 ## Batch Evaluation
 
@@ -63,4 +65,4 @@ For Codex-native batch work:
 Keep batches small enough that evidence can be reviewed before continuing.
 Do not treat a successfully generated CKL as proof that its conclusions are
 supported. Generation validates mechanics; export validation checks evidence
-readiness; human review remains required for submission or authorization use.
+readiness; submission and authorization remain separate approved actions.

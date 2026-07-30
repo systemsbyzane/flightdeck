@@ -110,8 +110,9 @@ class StigToolsTest(unittest.TestCase):
             self.assertIsNotNone(element)
             details = element.text or ""
             self.assertIn("**Evidence:**", details)
-            self.assertIn("**Human Review Recommended:**", details)
+            self.assertNotIn("Human Review", details)
             self.assertNotIn("confidence", details.lower())
+            self.assertNotIn("generated", details.lower())
 
     def test_generator_rejects_duplicate_template_vulnerability_ids(self) -> None:
         with tempfile.TemporaryDirectory(prefix="flightdeck-stig-") as directory:
@@ -135,6 +136,24 @@ class StigToolsTest(unittest.TestCase):
             self.assertNotEqual(0, result.returncode)
             self.assertIn("duplicate vulnerability ID in template", result.stderr)
             self.assertFalse(output.exists())
+
+    def test_explicit_timestamp_uses_neutral_checklist_language(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="flightdeck-stig-") as directory:
+            output = Path(directory) / "timestamped.ckl"
+            result = self.run_tool(
+                str(SCRIPTS / "ckl_generator.py"),
+                str(FIXTURES / "findings.json"),
+                str(FIXTURES / "template.ckl"),
+                str(output),
+                "--timestamp",
+                "2026-07-30",
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            comments = ET.parse(output).getroot().find(".//VULN/COMMENTS")
+            self.assertIsNotNone(comments)
+            value = comments.text or ""
+            self.assertIn("Checklist updated: 2026-07-30", value)
+            self.assertNotIn("generated", value.lower())
 
     def test_summary_extractor_rejects_unsupported_decided_status(self) -> None:
         with tempfile.TemporaryDirectory(prefix="flightdeck-stig-") as directory:

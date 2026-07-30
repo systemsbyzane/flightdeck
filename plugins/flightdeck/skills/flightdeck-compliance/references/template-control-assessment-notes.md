@@ -40,16 +40,20 @@ Use this template in `compliance/<program>/control-assessments/`.
 
 - [Missing, stale, conflicting, or insufficient evidence]
 
-## Draft Implementation Language
+## Implementation Statement
 
 [Implementation statement suitable for SSP or workbook response field.]
 
-## Draft Assessment Note
+## Assessment Note
 
-[Assessment note separating support, gaps, and recommended reviewer action.]
+[Assessment note separating support, gaps, and the required program action.]
 
-## Recommended Reviewer Action
+## Program Action
 
 [Confirm, request evidence, update workbook, create POA&M candidate, or mark not assessable.]
 ```
 
+Replace every bracketed token before using this template as a deliverable.
+Where a value is not established, use professional gap language or a permitted
+blank field. Do not leave authoring or review-workflow instructions in the
+completed document.

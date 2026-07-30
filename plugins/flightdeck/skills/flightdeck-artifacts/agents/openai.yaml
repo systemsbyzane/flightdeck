@@ -1,4 +1,4 @@
 interface:
   display_name: "Flightdeck Artifacts"
-  short_description: "Route DOCX PDF and XLSX quality work"
-  default_prompt: "Use $flightdeck-artifacts to route this artifact through its installed capability and visual quality gates."
+  short_description: "Produce polished DOCX PDF and XLSX files"
+  default_prompt: "Use $flightdeck-artifacts to route this artifact through its installed capability, visual checks, and professional deliverable validation."

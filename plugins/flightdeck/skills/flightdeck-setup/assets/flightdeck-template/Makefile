@@ -1,4 +1,4 @@
-.PHONY: test validate doctor
+.PHONY: test validate validate-deliverables doctor
 
 test:
 	ruby -Ilib tests/flightdeck_test.rb
@@ -27,3 +27,12 @@ validate: test
 		-path ./hub/tmp -prune -o \
 		-type f \( -name '*.json' -o -name '*.yaml' -o -name '*.yml' \) -print)
 	@echo "Flightdeck validation passed."
+
+validate-deliverables:
+	@found=0; \
+	for directory in compliance/*/deliverables; do \
+		test -d "$$directory" || continue; \
+		found=1; \
+		python3 scripts/validate-deliverable.py "$$directory" --json || exit 1; \
+	done; \
+	test $$found -eq 1 || echo "No program deliverables directories found."

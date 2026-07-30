@@ -3,7 +3,7 @@
 - Affected control: [control]
 - Source of weakness: [evidence reference]
 - Affected scope: [system/component/environment/boundary]
-- Status recommendation: [draft/open/in review/not enough evidence]
+- Status recommendation: [open/in review/ready for closure/not enough evidence]
 
 ## Evidence-backed weakness
 
@@ -29,3 +29,6 @@
 
 This is a candidate. It does not assert risk acceptance, approval,
 authorization, effectiveness, or closure.
+
+Replace every bracketed token before delivery. Use a permitted blank field or
+professional gap language when a value is not established.

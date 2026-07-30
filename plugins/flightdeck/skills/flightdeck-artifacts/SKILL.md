@@ -25,5 +25,6 @@ export only after the latest pass.
 
 Read `references/artifact-gates.md`. Keep Markdown or policy sources
 authoritative when a human-readable Word or PDF guide is generated from them.
-Preserve originals and return only requested final deliverables unless the user
-asks for QA intermediates.
+Preserve originals. Separate internal QA records from polished deliverables,
+return only the requested final files, and run the bundled deliverable validator
+before delivery.

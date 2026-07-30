@@ -46,14 +46,14 @@ provide them.
 - Make every `compliance/<program>/` folder self-contained enough to open as a
   Codex project.
 - Standardize how a task inventories context, maps evidence to controls, fills
-  supplied workbooks, and produces supporting drafts.
-- Generate equivalent `.json` and `.yaml` sidecars alongside human-readable
-  outputs.
+  supplied workbooks, and produces professional supporting documents.
+- Keep required equivalent `.json` and `.yaml` working records separate from
+  human-readable deliverables.
 - Preserve exact columns, formulas, validation, hidden content, and expected
   structure in supplied workbooks when tooling can inspect them.
 - Tie every claim to evidence, inference, assumption, gap, or recommendation.
-- Require human review before upload, submission, approval, risk acceptance, or
-  closure.
+- Require explicit program authority before upload, submission, approval, risk
+  acceptance, or closure.
 
 ## Non-Goals
 
@@ -80,7 +80,8 @@ compliance/
     context/
     source-documents/
     input-templates/
-    generated-documents/
+    deliverables/
+    working-records/
     control-assessments/
     poam/
     evidence-index/
@@ -117,14 +118,16 @@ that program:
   and earlier authorization artifacts
 - `input-templates/`: supplied workbooks, control matrices, upload templates,
   and package forms
-- `generated-documents/`: generated workbook drafts, policies, narratives,
-  summaries, support documents, and their sidecars
+- `deliverables/`: polished workbooks, policies, narratives, summaries, and
+  support documents intended for submission or external review
+- `working-records/`: internal structured records, change summaries,
+  validation results, and unresolved decisions excluded from delivery
 - `control-assessments/`: control-by-control analysis, implementation
   statements, assessment notes, and gaps
 - `poam/`: weakness candidates, risk rationale, milestones, ownership,
   completion targets, and closure-evidence notes
 - `evidence-index/`: references to files, pages, sheets, sections, screenshots,
-  and generated mappings
+  and derived mappings
 - `working-notes/`: scratch analysis, interview notes, review comments, and
   unresolved questions
 
@@ -165,22 +168,24 @@ When the user supplies an authorization or control workbook:
 1. Inspect the workbook before editing.
 2. Identify sheets, tables, columns, formulas, validations, hidden content, and
    protected fields when tooling can see them.
-3. Identify fields intended for generated content.
+3. Identify fields intended for authored response content.
 4. Ask before changing ambiguous required fields unless the user explicitly
    names them.
 5. Build an evidence map from the selected program workspace.
 6. Fill fields only from supported facts.
 7. Label weak, stale, conflicting, or missing evidence as gaps.
 8. Preserve workbook structure and template-owned fields.
-9. Produce an assessment note listing inputs, generated fields, skipped fields,
-   assumptions, gaps, and unresolved questions.
-10. Save the output in the program workspace at the authorized path.
-11. Save equivalent same-basename `.json` and `.yaml` sidecars with changes,
-    evidence references, assumptions, gaps, skipped fields, and reviewer
-    actions.
+9. Produce an internal assessment record listing inputs, authored fields,
+   fields not completed, assumptions, gaps, and unresolved questions.
+10. Save polished output under `deliverables/`.
+11. When structured records are required, save equivalent `.json` and `.yaml`
+    under `working-records/` with changes, evidence references, assumptions,
+    gaps, fields not completed, and program actions.
+12. Validate the deliverable for unresolved variables and authoring-process
+    metadata, then package only the requested files.
 
-The result is a draft for human review, not proof of upload acceptance or an
-authorization decision.
+Structural readiness does not prove upload acceptance or an authorization
+decision.
 
 ## Evidence And Claim Discipline
 
@@ -218,16 +223,18 @@ The design is implemented when:
 - the reusable program template contains the required isolated directories
 - shared compliance guides describe repeatable evidence-backed method
 - Hub navigation links to both the workload and shared docs
-- generated content contains no real identity or unfinished markers
+- deliverable content contains no real identity, unfinished markers,
+  AI/tool provenance, or authoring/review-process labels
 - public method is distinguished from private program and platform details
 - supplied workbooks are preserved instead of replaced with a generic shape
-- generated artifacts include equivalent JSON and YAML sidecars
+- required internal structured records use equivalent JSON and YAML and remain
+  outside delivery packages
 - no external submission, approval, risk acceptance, or closure occurs without
   explicit authority
 
 ## Rollback
 
 Remove the compliance scaffold and shared compliance documentation, then remove
-their Hub navigation links. Program evidence or generated outputs must be
+their Hub navigation links. Program evidence, working records, or deliverables must be
 archived or removed only through a separately authorized, scoped operation.
 Independent repository history and environment state are unaffected.

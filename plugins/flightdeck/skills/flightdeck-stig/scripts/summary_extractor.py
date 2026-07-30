@@ -122,7 +122,6 @@ def extract(value: dict[str, Any]) -> dict[str, Any]:
         "status": status,
         "confidence": confidence,
         "finding_details": details,
-        "human_review_recommended": confidence == "LOW",
     }
 
 
@@ -135,8 +134,6 @@ def render(value: dict[str, Any]) -> str:
         "",
         *[f"- {item}" for item in value["finding_details"]],
     ]
-    if value["human_review_recommended"]:
-        lines.extend(["", "**Human Review Recommended**"])
     return "\n".join(lines) + "\n"
 
 

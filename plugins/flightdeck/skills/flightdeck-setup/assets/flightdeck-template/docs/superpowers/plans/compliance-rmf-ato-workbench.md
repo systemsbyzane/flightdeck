@@ -6,8 +6,9 @@ workspaces.
 
 **Architecture:** The Hub owns reusable compliance method under
 `docs/compliance/`. Each `compliance/<program>/` workspace owns its facts,
-templates, evidence, and generated outputs. The program template carries local
-instructions that bridge the program project back to the Hub guidance.
+templates, evidence, internal working records, and deliverables. The program
+template carries local instructions that bridge the program project back to the
+Hub guidance.
 
 **Tech stack:** Markdown documentation, local filesystem directories, Codex
 `AGENTS.md` instructions, user-supplied authorization workbooks, and JSON/YAML
@@ -49,8 +50,8 @@ identities, evidence, or private schema.
   docs.
 - [ ] Make a copied program folder independently openable as a Codex project.
 - [ ] Include directories for context, source documents, input templates,
-  generated documents, control assessments, POA&M work, evidence indexes, and
-  working notes.
+  polished deliverables, internal working records, control assessments, POA&M
+  work, evidence indexes, and working notes.
 
 Expected: `compliance/example-program/` can be created from the template
 without carrying facts from another program.
@@ -65,8 +66,8 @@ without carrying facts from another program.
 
 - [ ] Require every claim to be classified as supported fact, inference,
   assumption, gap, or recommendation.
-- [ ] Require evidence locations, reviewer actions, draft status, and handling
-  notes where applicable.
+- [ ] Require evidence locations, program actions, evidence-backed status, and
+  handling notes where applicable.
 - [ ] Verify templates contain no unfinished markers or real identities.
 
 Expected: templates are synthetic, program-neutral starting points rather than
@@ -83,8 +84,9 @@ pre-filled authorization claims.
 - [ ] Link the compliance workload and shared docs from Hub entrypoints.
 - [ ] Treat program folders as sensitive evidence and document workspaces, not
   source repositories.
-- [ ] Verify that generated outputs remain drafts for human review and include
-  same-basename JSON and YAML sidecars.
+- [ ] Verify that deliverables contain no AI/tool provenance,
+  authoring/review-process labels, or unresolved variables, and that required
+  JSON/YAML working records stay outside delivery packages.
 - [ ] Verify structured files parse, links resolve, source-specific identities
   are absent, and fresh setup generation reproduces the expected workspace.
 - [ ] Confirm no external submission, approval, or authorization claim occurs

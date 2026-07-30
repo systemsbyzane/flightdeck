@@ -1,52 +1,48 @@
-# Machine-Readable Artifact Sidecars
+# Structured Compliance Working Records
 
-Every generated compliance artifact should have machine-readable sidecars in
-both JSON and YAML.
+Structured JSON and YAML can preserve traceability without becoming part of a
+submission-facing package.
 
 ## Rule
 
-When Codex generates a human-readable artifact, workbook, policy, POA&M
-analysis, control note, evidence index, or package-support document, it should
-also generate same-basename sidecar files in the same directory:
+Create a structured working record only when the user, program workflow, or
+governing format requires it, or when it materially improves validation. Store
+equivalent JSON and YAML under `working-records/`:
 
 ```text
-generated-documents/control-workbook.xlsx
-generated-documents/control-workbook.json
-generated-documents/control-workbook.yaml
-
-poam/open-weaknesses.md
-poam/open-weaknesses.json
-poam/open-weaknesses.yaml
+deliverables/control-workbook.xlsx
+working-records/control-workbook.json
+working-records/control-workbook.yaml
 ```
 
-The sidecars should contain equivalent structured content. JSON is preferred
-for programmatic parsing. YAML is preferred for human-readable review and
-manual editing.
+Do not place working records beside deliverables or inside an archive unless
+the user explicitly requests them. Do not record AI, model, Codex, prompt, tool,
+render, inspection, or authoring-process provenance in customer-facing
+manifests or working records intended for release.
 
-## Minimum Sidecar Fields
+## Minimum Fields
 
 Use these top-level fields unless the user provides a stricter schema:
 
 ```yaml
-schema_version: "1.0"
-artifact_id: "program-artifact-local-id"
-artifact_type: "control_workbook | control_assessment | poam_analysis | policy | evidence_index | risk_summary | package_note"
+schema_version: "2.0"
+record_id: "program-record-local-id"
+record_type: "control_workbook | control_assessment | poam_analysis | policy | evidence_index | risk_summary | package_note"
 program: "program name"
-source_human_artifact: "relative/path/to/generated-artifact.ext"
-generated_at: "ISO-8601 timestamp when known"
-generated_by: "codex"
-status: "draft_for_human_review"
+document_path: "deliverables/control-workbook.xlsx"
+prepared_at: "ISO-8601 timestamp when required"
+status: "unsubmitted"
 sensitivity: "program_sensitive"
 inputs:
   - path: "relative/path/to/source"
     type: "policy | diagram | workbook | scan | stig | note | export | template"
     location: "page, sheet, row, section, or label when known"
-outputs:
-  fields_generated:
+document_updates:
+  fields_authored:
     - "field or section name"
-  fields_skipped:
+  fields_not_completed:
     - field: "field or section name"
-      reason: "why it was not generated"
+      reason: "evidence gap or template-owned field"
 claims:
   supported_facts:
     - claim: "fact"
@@ -57,7 +53,7 @@ claims:
       basis:
         - "EV-001"
   assumptions:
-    - "assumption requiring owner review"
+    - "assumption requiring program confirmation"
   gaps:
     - "missing, stale, conflicting, or insufficient evidence"
 evidence_refs:
@@ -65,9 +61,13 @@ evidence_refs:
     path: "relative/path/to/source"
     location: "page, sheet, row, section, or label"
     tier: "direct_current | direct_stale | indirect | assertion | conflict"
-reviewer_actions:
-  - "action for human reviewer"
+open_actions:
+  - "program action needed to resolve a documented gap"
 ```
+
+Use another status only when the program record proves it and the governing
+format requires it. Do not imply submission, acceptance, approval,
+effectiveness, risk acceptance, or closure from file creation.
 
 Include additional fields when useful, such as:
 
@@ -79,16 +79,15 @@ Include additional fields when useful, such as:
 - `residual_risk`
 - `open_questions`
 - `source_hashes`
-- `tooling_notes`
 
-## Workbook Sidecars
+## Workbook Records
 
-For generated eMASS or control workbooks, include:
+For a control workbook, record only verified changes:
 
 ```yaml
 workbook_changes:
   source_template: "input-templates/template.xlsx"
-  output_workbook: "generated-documents/template-filled.xlsx"
+  output_workbook: "deliverables/template-filled.xlsx"
   sheets_modified:
     - sheet: "Controls"
       columns_modified:
@@ -100,8 +99,8 @@ workbook_changes:
   formulas_preserved: true
   hidden_sheets_preserved: true
   validations_preserved: true
-  skipped_columns:
-    - column: "Import Status"
+  fields_not_completed:
+    - field: "Import Status"
       reason: "template-owned field"
 ```
 
@@ -110,23 +109,20 @@ tooling inspected those properties.
 
 ## Sensitivity
 
-Sidecars should not duplicate secrets, credentials, personal data, or sensitive
-raw evidence. Prefer references to evidence locations. If a source contains
-sensitive details, capture the evidence reference and handling note instead of
-copying the sensitive value.
+Working records must not duplicate secrets, credentials, personal data, or
+sensitive raw evidence. Prefer evidence locations. If a source contains
+sensitive details, record the reference and handling note instead of the value.
 
-## Consistency
+## Consistency And Delivery
 
-The human artifact and sidecars should agree on:
+The deliverable and working records must agree on scope, evidence, assumptions,
+gaps, and fields not completed. Update both after a document revision.
 
-- controls covered
-- evidence used
-- assumptions
-- gaps
-- skipped fields
-- reviewer actions
-- draft status
+Before delivery:
 
-If a human artifact is revised, regenerate or update the sidecars before
-presenting the package as review-ready.
-
+1. validate the polished document for unresolved variables and internal
+   process labels;
+2. build the package from an explicit allowlist;
+3. exclude `working-records/`, renderings, change summaries, and validation
+   reports unless the user requested them;
+4. verify the final archive contents, paths, and checksums.

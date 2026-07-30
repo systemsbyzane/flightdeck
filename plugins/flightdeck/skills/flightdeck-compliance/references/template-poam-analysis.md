@@ -49,8 +49,11 @@ Use this template in `compliance/<program>/poam/`.
 
 - [Information requiring program owner confirmation]
 
-## Reviewer Action
+## Program Action
 
 [Recommended next action.]
 ```
 
+Replace every bracketed token before delivery. Do not use `TBD`, replacement
+instructions, or authoring/review-process labels for unknown values; use a
+permitted blank field or professional gap language.
