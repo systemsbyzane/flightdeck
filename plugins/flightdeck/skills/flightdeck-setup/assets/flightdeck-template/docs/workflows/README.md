@@ -15,6 +15,8 @@ and runtime validation separated.
   performance, security, reliability, and recovery decisions.
 - [Plugin lifecycle](plugin-lifecycle.md) separates supported plugin updates
   from generated-Hub migration and protects user-owned state.
+- [Generated-Hub compatibility](hub-compatibility.md) identifies commands and
+  documents before newer installed skills require them.
 - [Repository onboarding](repo-onboarding.md) verifies or acquires an owning
   checkout without inventing provider or branch facts.
 - [Configure bridge repositories](configure-bridge-repos.md) plans and applies

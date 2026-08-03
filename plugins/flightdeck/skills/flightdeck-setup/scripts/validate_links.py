@@ -25,12 +25,14 @@ PLATFORM_SKILL = ROOT.parent / "flightdeck-platform"
 DB_SKILL = ROOT.parent / "flightdeck-db"
 STIG_SKILL = ROOT.parent / "flightdeck-stig"
 UPGRADE_SKILL = ROOT.parent / "flightdeck-upgrade"
+COORDINATOR_SKILL = ROOT.parent / "flightdeck"
 REQUIRED = (
     ROOT / "references" / "setup-runbook.md",
     ROOT / "references" / "setup-contract.md",
     ROOT / "references" / "installed-acceptance.md",
     ROOT / "scripts" / "preflight.py",
     ROOT / "scripts" / "bootstrap.py",
+    ROOT / "scripts" / "hub_compatibility.py",
     ROOT / "scripts" / "setup_flightdeck.py",
     ROOT / "scripts" / "acceptance_harness.py",
     ROOT / "scripts" / "scan_debranding.py",
@@ -45,10 +47,13 @@ REQUIRED = (
     TEMPLATE / "docs" / "workflows" / "platform.md",
     TEMPLATE / "docs" / "workflows" / "database.md",
     TEMPLATE / "docs" / "workflows" / "plugin-lifecycle.md",
+    TEMPLATE / "docs" / "workflows" / "hub-compatibility.md",
     TEMPLATE / "docs" / "compliance" / "stig-evaluation.md",
     TEMPLATE / "docs" / "workflows" / "configure-bridge-repos.md",
     TEMPLATE / "docs" / "review" / "change-review.md",
     TEMPLATE / "hub" / "repositories.yaml",
+    TEMPLATE / "hub" / "compatibility.json",
+    TEMPLATE / "hub" / "schemas" / "hub-compatibility.schema.json",
     TEMPLATE / "hub" / "schemas" / "repository-declarations.schema.json",
     TEMPLATE / "hub" / "schemas" / "project-verifications.schema.json",
     BRIDGE_SKILL / "references" / "configure-bridge-repos.md",
@@ -60,6 +65,7 @@ REQUIRED = (
     DB_SKILL / "references" / "operations-safety.md",
     STIG_SKILL / "references" / "evidence-contract.md",
     UPGRADE_SKILL / "references" / "upgrade-contract.md",
+    COORDINATOR_SKILL / "references" / "hub-compatibility.md",
     PLUGIN / "releases.json",
     PLUGIN / "process-parity.json",
 )

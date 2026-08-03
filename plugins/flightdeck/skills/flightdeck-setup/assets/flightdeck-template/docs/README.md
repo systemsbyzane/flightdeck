@@ -19,6 +19,8 @@ the Hub into a monorepo.
   safely across schema, query, migration, reliability, and recovery concerns.
 - [Plugin lifecycle](workflows/plugin-lifecycle.md) - upgrade the installed
   Flightdeck plugin without regenerating this Hub or changing repositories.
+- [Generated-Hub compatibility](workflows/hub-compatibility.md) - verify
+  versioned commands and documents before newer installed skills require them.
 - [Flightdeck operations](workflows/operations.md) - use the registry, task
   lifecycle, status, routing, and approval model.
 - [Control-plane architecture](architecture/control-plane.md) - understand

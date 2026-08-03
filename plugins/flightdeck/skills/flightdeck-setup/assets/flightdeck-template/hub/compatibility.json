@@ -1,0 +1,187 @@
+{
+  "schema_version": "flightdeck.hub-compatibility/v1",
+  "schema": "hub/schemas/hub-compatibility.schema.json",
+  "product": "flightdeck",
+  "template_version": "1.0.0",
+  "capabilities": {
+    "flightdeck.command.doctor.v1": {
+      "kind": "command",
+      "description": "Read-only structured workspace diagnostics.",
+      "probe": {
+        "help_contains": "bin/flightdeck doctor "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/doctor.rb"
+      ],
+      "fallback": {
+        "mode": "compatibility_report_only"
+      }
+    },
+    "flightdeck.command.status.v1": {
+      "kind": "command",
+      "description": "Read-only status rendering with an explicit write option.",
+      "probe": {
+        "help_contains": "bin/flightdeck status "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/doctor.rb"
+      ],
+      "fallback": {
+        "mode": "compatibility_report_only"
+      }
+    },
+    "flightdeck.command.route-plan.v1": {
+      "kind": "command",
+      "description": "Read-only ownership and dispatch routing plan.",
+      "probe": {
+        "help_contains": "bin/flightdeck route plan "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/route_planner.rb"
+      ],
+      "fallback": {
+        "mode": "manual_exact_path_handoff"
+      }
+    },
+    "flightdeck.command.repo-plan.v1": {
+      "kind": "command",
+      "description": "Read-only repository onboarding plan.",
+      "probe": {
+        "help_contains": "bin/flightdeck repo plan "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/repo_planner.rb"
+      ],
+      "fallback": {
+        "mode": "manual_exact_path_handoff"
+      }
+    },
+    "flightdeck.command.repo-onboard.v1": {
+      "kind": "command",
+      "description": "Explicit repository onboarding apply command.",
+      "probe": {
+        "help_contains": "bin/flightdeck repo onboard "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/repository_store.rb"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.command.bridge-plan.v1": {
+      "kind": "command",
+      "description": "Read-only bridge installation or drift plan.",
+      "probe": {
+        "help_contains": "bin/flightdeck bridge plan "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "lib/flightdeck/bridge_bulk_store.rb",
+        "lib/flightdeck/bridge_store.rb",
+        "lib/flightdeck/cli.rb"
+      ],
+      "fallback": {
+        "mode": "manual_exact_path_handoff"
+      }
+    },
+    "flightdeck.command.bridge-install.v1": {
+      "kind": "command",
+      "description": "Explicit bridge installation apply command.",
+      "probe": {
+        "help_contains": "bin/flightdeck bridge install "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "lib/flightdeck/bridge_bulk_store.rb",
+        "lib/flightdeck/bridge_store.rb",
+        "lib/flightdeck/cli.rb"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.command.setup-plan.v1": {
+      "kind": "command",
+      "description": "Read-only discovery and repository-connection preview.",
+      "probe": {
+        "help_contains": "bin/flightdeck setup plan "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/setup_store.rb"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.command.setup-connect.v1": {
+      "kind": "command",
+      "description": "Explicit repository discovery, declaration, and safe bridge apply command.",
+      "probe": {
+        "help_contains": "bin/flightdeck setup connect "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/setup_store.rb"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.document.thread-routing.v1": {
+      "kind": "document",
+      "description": "Owner routing and no-monitoring coordination contract.",
+      "probe": {
+        "path": "docs/workflows/thread-routing.md"
+      },
+      "managed_paths": [
+        "docs/workflows/thread-routing.md"
+      ],
+      "fallback": {
+        "mode": "bundled_reference",
+        "reference": "skills/flightdeck/references/dispatch.md"
+      }
+    },
+    "flightdeck.document.change-review.v1": {
+      "kind": "document",
+      "description": "Hub-local findings-first change-review workflow.",
+      "probe": {
+        "path": "docs/review/change-review.md"
+      },
+      "managed_paths": [
+        "docs/review/change-review.md"
+      ],
+      "fallback": {
+        "mode": "bundled_reference",
+        "reference": "skills/flightdeck-review/references/review-method.md"
+      }
+    },
+    "flightdeck.document.plugin-lifecycle.v1": {
+      "kind": "document",
+      "description": "Generated-Hub preservation and plugin lifecycle contract.",
+      "probe": {
+        "path": "docs/workflows/plugin-lifecycle.md"
+      },
+      "managed_paths": [
+        "docs/workflows/plugin-lifecycle.md"
+      ],
+      "fallback": {
+        "mode": "bundled_reference",
+        "reference": "skills/flightdeck-upgrade/references/upgrade-contract.md"
+      }
+    }
+  }
+}

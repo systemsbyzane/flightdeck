@@ -28,6 +28,23 @@ or partial target, is a hard stop.
    complete core setup and ask only which folder contains the repositories to
    connect.
 
+Before invoking any command in a non-empty generated Hub, run the read-only
+compatibility checker for only the capabilities needed by the request:
+
+```text
+python3 scripts/hub_compatibility.py \
+  --hub-root <absolute-target> \
+  --require flightdeck.command.doctor.v1
+```
+
+Repository discovery and connection also require
+`flightdeck.command.setup-plan.v1` and
+`flightdeck.command.setup-connect.v1`. Bootstrap itself requires a declared Hub
+contract before treating a non-empty target as the current managed template.
+For `incompatible`, stop before bootstrap or setup and return the structured
+result, allowed fallback, and plan-and-diff migration guidance. Never use setup
+to repair, merge, regenerate, or overwrite a preserved Hub.
+
 Preview first:
 
 ```text
@@ -181,6 +198,11 @@ after the read-only plan. `materialized` and `repo-native` are not initial setup
 defaults; route later mode changes, migrations, or drift repair through the
 repo-bridge skill. `repo-native` always requires separate per-repository
 authorization.
+
+Do not assume these commands exist in a preserved Hub. Require compatible or
+compatible-inferred results for both setup capability IDs before invoking
+them. Missing setup commands are a compatibility stop, not permission to run
+the current bootstrap against the existing Hub.
 
 ## 6. Register and verify repository projects
 

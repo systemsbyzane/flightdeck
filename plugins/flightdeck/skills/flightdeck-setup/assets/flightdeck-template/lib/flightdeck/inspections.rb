@@ -220,6 +220,17 @@ module Flightdeck
       return [issue("error", "bridge.repository_missing", id, "recorded repository is not registered")] unless repository
 
       root = @config.repository_path(repository)
+      unless File.directory?(root)
+        return [
+          issue(
+            "error",
+            "bridge.repository_unavailable",
+            id,
+            "registered repository directory is unavailable"
+          )
+        ]
+      end
+
       target = Support.contained_path(root, record.fetch("target"), label: "bridge target")
       if !File.file?(target)
         issues << issue("error", "bridge.target_missing", id, "recorded target is missing")
@@ -269,6 +280,15 @@ module Flightdeck
       issues
     rescue KeyError, ConfigurationError => e
       [issue("error", "bridge.record_invalid", id, e.message)]
+    rescue SystemCallError => e
+      [
+        issue(
+          "error",
+          "bridge.inspection_failed",
+          id,
+          "bridge inspection could not access the repository filesystem: #{e.class}"
+        )
+      ]
     end
 
     def issue(severity, code, scope, message)

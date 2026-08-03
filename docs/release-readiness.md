@@ -40,6 +40,10 @@ when every mandatory item below is satisfied.
 - the plugin lifecycle contract uses a supported same-plugin reinstall without
   uninstalling first, protects generated Hubs and repositories, and keeps Hub
   migration separate and explicit.
+- generated Hubs publish a versioned capability contract; installed skills
+  check requested Hub-local commands and documents before use, and incompatible
+  preserved Hubs return a read-only plan-and-diff migration scope without
+  regeneration or mutation.
 
 ## Runtime acceptance
 

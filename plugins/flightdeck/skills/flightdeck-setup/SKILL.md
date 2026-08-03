@@ -18,6 +18,14 @@ drifting non-empty targets while preserving valid configured topology,
 repository declarations, workload payloads, and ignored runtime state. It
 provides no merge, repair, or overwrite mode.
 
+Before using an existing generated Hub, run
+`scripts/hub_compatibility.py --hub-root <absolute-path>` with only the
+capabilities required by the request. Repository discovery and connection
+require `flightdeck.command.setup-plan.v1` and
+`flightdeck.command.setup-connect.v1`. If either is unavailable, do not run
+setup or bootstrap against that Hub; return the read-only compatibility result
+and its explicit plan-and-diff migration guidance.
+
 When the request identifies a repositories root, pass
 `--repositories-root <absolute-path>` to both preview and apply. Setup then
 discovers Git roots, records portable declarations, keeps exact attached paths

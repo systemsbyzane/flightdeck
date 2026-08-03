@@ -23,6 +23,11 @@ For Flightdeck plugin update, reinstall, preservation, rollback, version, or
 patch-note intent, use `$flightdeck-upgrade`. An existing Hub is protected user
 state and is never regenerated as part of a plugin upgrade.
 
+Before requiring a Hub-local command or document, read
+`references/hub-compatibility.md` and run the bundled read-only compatibility
+checker for the exact capability IDs needed. Never assume a preserved Hub has
+the current generated-template surface.
+
 ## Skill composition
 
 Choose the smallest lead Flightdeck skill that owns the requested outcome,
@@ -38,8 +43,10 @@ skill without expanding the existing authorization boundary.
 ## Start
 
 1. Locate the generated Hub by walking upward to `flightdeck.yaml`.
-2. Read the Hub `AGENTS.md`, registry, and
-   `docs/workflows/thread-routing.md`.
+2. Check `flightdeck.document.thread-routing.v1` and
+   `flightdeck.command.route-plan.v1`. Read the Hub `AGENTS.md`, registry, and
+   `docs/workflows/thread-routing.md` only when the document capability is
+   available; otherwise use the checker's declared bundled fallback.
 3. Classify the request as coordination, planning, review, CI/CD, platform,
    database, STIG, plugin lifecycle, read-only, implementation, artifact,
    compliance, or runtime validation.
