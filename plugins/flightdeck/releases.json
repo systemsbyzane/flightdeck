@@ -166,6 +166,31 @@
         "Start a fresh Codex task after upgrading so the professional deliverable rules and validator load.",
         "Existing generated Hubs are preserved and are not automatically migrated; adopt the deliverables and working-records layout explicitly where needed."
       ]
+    },
+    {
+      "version": "0.1.0+codex.20260803205157",
+      "date": "2026-08-03",
+      "summary": "Resilient Doctor diagnostics and explicit preserved-Hub compatibility checks.",
+      "changes": [
+        {
+          "category": "fixed",
+          "text": "Prevented missing or concurrently unavailable repository paths from crashing Doctor, status, bridge inspection, or command capture; affected checks now return deterministic structured findings."
+        },
+        {
+          "category": "added",
+          "text": "Added a versioned generated-Hub capability contract and read-only compatibility checker with exact capability probes, managed migration scope, protected user-state exclusions, and fail-closed fallback behavior."
+        },
+        {
+          "category": "changed",
+          "text": "Made setup, review, repository-bridge, and upgrade skills check the Hub capabilities they require before relying on newer commands or documents."
+        }
+      ],
+      "breaking_changes": [],
+      "migration": [
+        "Start a fresh Codex task after upgrading so the updated Doctor, compatibility, and skill guidance load.",
+        "Existing generated Hubs are preserved and are not automatically regenerated or migrated.",
+        "When a required capability is unavailable, use the reported plan-and-diff migration scope; plugin upgrade alone does not modify the Hub."
+      ]
     }
   ]
 }
