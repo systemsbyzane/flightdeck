@@ -24,6 +24,7 @@ its managed bundle. It does not mean editing files inside the plugin cache.
 | Local marketplace source | User or maintainer | Read directly; never refreshed |
 | Generated Flightdeck Hub | User | Protected; never regenerated or migrated |
 | Hub ignored local state | User | Protected; never cleaned or copied |
+| Ignored Mission records, authorized targets, criterion assignments/results, output declarations/materialized refs, event digests, cursors, internal handoff state, and outbox receipts | User | Protected; never rewritten or migrated |
 | Attached repositories | Repository owners | Protected; never edited, stashed, or reset |
 | Tasks, runtime IDs, evidence, credentials | User and external systems | Out of scope |
 
@@ -32,6 +33,41 @@ working from their generated files. New plugin skills may coordinate with them,
 but a template change does not silently rewrite an existing Hub. New skills
 must check the preserved Hub's declared or read-only-inferred capabilities
 before requiring Hub-local commands or documents.
+
+Mission behavior first appears in generated-Hub template `1.1.0`. Its declared
+surface is:
+
+- `flightdeck.command.mission-manage.v1`;
+- `flightdeck.command.mission-plan.v1`;
+- `flightdeck.command.mission-status.v1`;
+- `flightdeck.command.mission-sync.v1`; and
+- `flightdeck.document.mission-control.v1`.
+
+The four command gaps use `stop_and_plan_migration`. They have no bundled or
+direct-dispatch behavioral fallback. Only the document gap may use the bundled
+`skills/flightdeck-mission/references/mission-contract.md` reference. When the
+user asks for a Mission on an older Hub, return the exact managed plan-and-diff
+scope and stop; do not claim that ordinary receipt-and-stop dispatch satisfied
+the Mission request.
+
+The current Mission wire includes exact six-field authorized targets with a
+core-derived scope boundary, ordered criterion IDs/assignments/results,
+generation-bound `sync-plan`/`sync-apply` tokens, closed child
+`output_declarations`, core-materialized producer-bound artifact/task refs,
+persisted `event_digest`, transported-artifact-only action resolver metadata,
+and receipt-gated JIT delivery through internal `awaiting_handoff`. Children and
+adapters never bootstrap or repair producer identity. Blocked and stale
+consumers are non-actionable and the action allowlist has no path for them.
+Client-only or unknown JIT outcomes preserve their exact prepared action as
+non-deliverable; they never authorize a duplicate create. Non-root dispatch
+requires exactly one matching prepared action with the complete parent set, all accepted
+automatic refs exactly equal to the complete eligible set, and at least one per
+parent; terminal or incompatible evidence
+cannot qualify. An
+installed skill must use the preserved Hub's
+actual compatible command/schema surface. If any required flag or schema field
+is absent, stop and propose the compatibility checker's managed migration; a
+plugin reinstall cannot safely emulate or retrofit those semantics.
 
 ## Read-only preflight
 
@@ -114,6 +150,19 @@ If the preserved Hub lacks a capability needed by newer installed skills,
 report that incompatibility separately from plugin installation. Provide the
 checker's exact managed-path plan-and-diff scope. Do not repair, regenerate,
 overwrite, or migrate the Hub during upgrade.
+
+After a verified plugin upgrade, start a fresh Codex task so the new skill
+definitions load. Loading the Mission skill does not add Mission commands to an
+older Hub. The separately authorized migration must preserve Git state,
+attached repositories, ignored task/Mission state, authorized targets,
+core-derived boundaries, criterion assignments/results, output declarations,
+core-materialized refs, event digests, internal `awaiting_handoff` state, exact
+runtime identities, cursors, action trigger digests/identities, delivery
+receipts, evidence, and credentials. It must not synthesize child identity,
+rewrite or repair declarations/refs, turn blocked or stale into an actionable
+consumer, discard or retry a prepared pending/unknown handoff, create a
+dependent from terminal or incompatible evidence, or replay a stale sync plan
+token or prepared action against migrated state.
 
 ## Verify and report
 

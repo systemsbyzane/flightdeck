@@ -21,6 +21,26 @@ When a generated Hub is in scope, run the installed setup skill's read-only
 lifecycle documents. Record incompatibility as preserved-Hub evidence and use
 the bundled upgrade contract; never use plugin upgrade to repair or migrate it.
 
+Mission support is also a generated-Hub capability, not a consequence of
+plugin reinstall. Before Mission use, require the four
+`flightdeck.command.mission-*.v1` capabilities and
+`flightdeck.document.mission-control.v1`. Missing commands must
+`stop_and_plan_migration`; only the document may use the bundled Mission
+reference. Never silently fall back to direct dispatch while claiming Mission
+behavior.
+
+Current Mission use also requires the preserved Hub's real command/schema
+surface for authorized targets, criterion assignments/results, sync plan
+tokens, closed child output declarations, core-materialized producer-bound
+refs and event digests, transported-artifact-only resolver metadata, and the
+receipt-gated `awaiting_handoff` JIT transient. The action allowlist contains no
+action path for blocked or stale consumers. It also requires preserved prepared
+actions for client-only or unknown JIT receipts and exactly one matching prepared,
+complete-parent, type-compatible handoff eligibility before any non-root
+dispatch. If those fields are absent, treat the Hub as
+incompatible and stop for a separate migration plan. Reinstalling the plugin
+must not rewrite Mission state or simulate newer semantics in the adapter.
+
 ## Patch Notes
 
 For an upgrade, run the planner first and use its `target_release_ledger` path.

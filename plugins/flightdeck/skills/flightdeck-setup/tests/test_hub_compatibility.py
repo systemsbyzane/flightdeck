@@ -61,7 +61,7 @@ class HubCompatibilityTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("compatible", report["status"])
         self.assertTrue(report["compatible"])
-        self.assertEqual("1.0.0", report["hub"]["identity"]["template_version"])
+        self.assertEqual("1.1.0", report["hub"]["identity"]["template_version"])
         self.assertEqual([], report["requirements"]["missing"])
 
     def test_legacy_hub_missing_setup_command_returns_migration_plan(self) -> None:

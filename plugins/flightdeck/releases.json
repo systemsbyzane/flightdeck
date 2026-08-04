@@ -191,6 +191,140 @@
         "Existing generated Hubs are preserved and are not automatically regenerated or migrated.",
         "When a required capability is unavailable, use the reported plan-and-diff migration scope; plugin upgrade alone does not modify the Hub."
       ]
+    },
+    {
+      "version": "0.1.0+codex.20260803210212",
+      "date": "2026-08-03",
+      "summary": "Opt-in durable Missions for bounded multi-task coordination in the Codex task control room.",
+      "changes": [
+        {
+          "category": "added",
+          "text": "Added ignored local MissionRecord parents that link exact verified persistent Codex tasks without replacing their owning projects or creating a separate dashboard."
+        },
+        {
+          "category": "added",
+          "text": "Added dispatch_only, watch_only, and supervised modes with required and optional DAG nodes, declared input and output-reference types, controlled fan-in, bounded budgets, explicit stop conditions, and operator-only completion."
+        },
+        {
+          "category": "added",
+          "text": "Added Mission commands for graph management, exact dispatch receipts, compact sync planning and apply, deterministic checkpoint/status derivation, typed next actions, two-phase outbox delivery, reconciliation, failure recording, and explicit close."
+        },
+        {
+          "category": "added",
+          "text": "Added an injected Codex UI task-adapter contract covering exact project and task identity, non-waitable clientThreadId-only pending dispatch, paired clientThreadId and resolved-task reconciliation, unknown-create handling, wait batching of at most eight exact task/host targets, and opaque per-task cursors; pending or unknown JIT results preserve the exact prepared action without authorizing duplicate create."
+        },
+        {
+          "category": "changed",
+          "text": "Preserved ordinary Flightdeck dispatch as receipt-and-stop by default; Mission observation or supervision occurs only after explicit user opt-in."
+        },
+        {
+          "category": "changed",
+          "text": "Treated child commentary and final text as untrusted display-only material and limited final child output to closed bounded output_declarations; children never receive or author producer task bindings, resolver identity, or canonical artifact/task refs."
+        },
+        {
+          "category": "changed",
+          "text": "Kept commit, push, pull request or comment, publication, deployment, shared-environment mutation, external communication, compliance submission, risk acceptance, and closure behind their existing explicit approval boundaries in every Mission mode."
+        },
+        {
+          "category": "fixed",
+          "text": "Hardened Mission authorization validation to require exact authorization_boundary equality across the parent, every producer and consumer node, and every outbox action; made the boundary a required top-level action field included in idempotency and revalidated throughout the action lifecycle."
+        },
+        {
+          "category": "fixed",
+          "text": "Rejected non-regular, unreadable, or oversized observation inputs before reading or parsing them, with filesystem and post-read max_forwarded_bytes checks."
+        },
+        {
+          "category": "fixed",
+          "text": "Separated tool-derived Mission state from final child outcomes: nonterminal observations forbid outcomes, review_ready and failed_validation require exact normalized outcomes, and fan-in requires review_ready with passed validation and non-empty output declarations that core can materialize."
+        },
+        {
+          "category": "changed",
+          "text": "Documented the persisted generated Mission defaults: 50 units, 3 retries, 200 actions, 65536 forwarded bytes, 604800 seconds duration, 3600 seconds before stale, and a 2097152-byte record."
+        },
+        {
+          "category": "fixed",
+          "text": "Made Mission graphs planning-only and frozen after any dispatch, pending or unknown receipt, observation, or outbox state; newly discovered owners require a proposed new Mission and user approval, while a declared non-root dispatch requires its exact prepared core action with the complete parent set and refs exactly equal to the complete eligible accepted set with at least one per parent."
+        },
+        {
+          "category": "fixed",
+          "text": "Clarified that typed references are control-plane metadata rather than artifact transport, requiring proven consumer resolvability, planning-time co-location where compatible, or a fail-closed stop."
+        },
+        {
+          "category": "changed",
+          "text": "Standardized recommended domain reference identifiers and required independent review to use a persistent runtime task distinct from the producer under review."
+        },
+        {
+          "category": "added",
+          "text": "Persisted unique bounded success criteria as ordered criterion-001 records, repeatable per-node --criterion-id assignments, and exact ordered terminal criterion_results with passed, failed, blocked, or degraded dispositions; required nodes must cover every criterion before dispatch and every required assignment must pass before fan-in."
+        },
+        {
+          "category": "fixed",
+          "text": "Replaced caller-supplied Mission boundaries with repeatable closed six-field --authorized-target-json records and a core-derived scope-<48hex> boundary over canonical Mission ID, targets, criteria, and non-goals; node targets and actions are revalidated without treating the token as authority."
+        },
+        {
+          "category": "added",
+          "text": "Made core materialize canonical artifact/task refs only after an exact persisted producer receipt, using bounded child artifact or own-task declarations; artifact namespaces contain resolver, producer node, unpadded base64url task binding, lowercase declaration SHA, and artifact ID, while resolver metadata is present only for transported artifacts."
+        },
+        {
+          "category": "added",
+          "text": "Added required normalized display-only observation status_code values and bounded per-criterion status codes; final codes must equal child outcome codes, intermediate states remain outcome-less, review_ready requires every assigned criterion passed, and failed_validation requires at least one unmet criterion."
+        },
+        {
+          "category": "fixed",
+          "text": "Required every declared dependency ready and action dependency_node_ids equal to the complete parent list; planned handoffs prepare before JIT create, client-only or unknown results preserve the prepared action as non-actionable, exact task/runtime/host reconciliation records awaiting_handoff, and acknowledgement transitions to ordinary running."
+        },
+        {
+          "category": "fixed",
+          "text": "Bound every sync apply to the exact plan_token returned by sync plan, covering Mission generation, input digest, observation and event identity, accepted and ignored changes, rendered actions, and resulting state; locked recomputation rejects drift."
+        },
+        {
+          "category": "fixed",
+          "text": "Closed observation/action identity with persisted event_digest over normalized accepted declarations and criterion results, a trigger_digest bound to producer event ID, event digest, and status, and whole-record recomputation of idempotency_key and action-<prefix> ID."
+        },
+        {
+          "category": "fixed",
+          "text": "Restricted automated cross-node handoff to core-materialized artifact: or codex-task: references; child-declared check: and review: remain terminal operator evidence, and no child or adapter may bootstrap or repair producer provenance. This is provenance control, not content transport."
+        },
+        {
+          "category": "changed",
+          "text": "Defaulted multi-component development Missions to a contract-first graph, with integration depending directly on the contract and every implementation and independent review depending directly on every producer it must inspect."
+        },
+        {
+          "category": "changed",
+          "text": "Routed ordinary security-focused change and readiness review through flightdeck-review and reserved codex-security:security-scan for explicit repository or scoped-path security-scan intent."
+        },
+        {
+          "category": "changed",
+          "text": "Made CI, platform, compliance, research, and professional-artifact examples use child artifact declarations followed by core-materialized refs; terminal check/review declarations remain operator-only, and blocked or stale producers stop handoff."
+        },
+        {
+          "category": "added",
+          "text": "Added generated-Hub Mission compatibility capabilities, migration-safe upgrade guidance that preserves declarations, materialized refs, event digests, and awaiting-handoff state, plus installed acceptance fields for core materialization, child canonical-ref rejection, and blocked/stale non-actionability."
+        },
+        {
+          "category": "fixed",
+          "text": "Removed resume from the Mission action allowlist. Only a prepared planned consumer with an exact receipt in internal awaiting_handoff may receive dependency delivery; genuine blocked, derived stale, pending, and unknown consumers are non-actionable stops."
+        },
+        {
+          "category": "added",
+          "text": "Defined three closed child output declaration forms: artifact {type, artifact_id, digest}, producer task {type, codex_task: true}, and terminal {type, ref, digest} restricted to check: or review:. Core persists both declarations and its materialized refs."
+        },
+        {
+          "category": "fixed",
+          "text": "Prevented duplicate JIT creation after a clientThreadId-only receipt by preserving the exact prepared handoff with dispatch_pending until paired client/task reconciliation; pending or unknown unresolved actions may be failed explicitly but remain non-actionable and are never retried."
+        },
+        {
+          "category": "fixed",
+          "text": "Closed the non-root dispatch bypass: record-dispatch now requires exactly one matching prepared dependency_handoff with every declared parent and refs equal to the complete eligible core-materialized accepted set with at least one per parent, so terminal check/review or incompatible refs cannot start dependents."
+        }
+      ],
+      "breaking_changes": [],
+      "migration": [
+        "Start a fresh Codex task after upgrading so the Flightdeck Mission skill and updated coordination guidance load.",
+        "Existing generated Hubs are preserved and are never automatically migrated by plugin upgrade or setup.",
+        "For an existing Hub, request and explicitly approve the compatibility checker's exact managed plan-and-diff migration before using Mission commands.",
+        "Mission intent on a Hub without the required Mission capabilities must stop; do not silently fall back to ordinary dispatch or claim Mission behavior."
+      ]
     }
   ]
 }

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Flightdeck Mission"
+  short_description: "Coordinate dependent Codex tasks safely"
+  default_prompt: "Use $flightdeck-mission to coordinate this end-to-end through review-ready with exact authorized targets, criterion-certified outcomes, core-materialized producer provenance, and explicit approval gates."
+policy:
+  allow_implicit_invocation: true

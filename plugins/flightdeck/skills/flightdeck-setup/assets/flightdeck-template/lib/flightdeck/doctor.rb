@@ -3,6 +3,7 @@
 require "digest"
 require_relative "bridge_bulk_store"
 require_relative "inspections"
+require_relative "mission_store"
 require_relative "task_store"
 
 module Flightdeck
@@ -24,6 +25,8 @@ module Flightdeck
       issues.concat(AutomationChecker.new(@config.root).run)
       tasks, task_issues = inspect_tasks
       issues.concat(task_issues)
+      missions, mission_issues = inspect_missions
+      issues.concat(mission_issues)
       issues = issues.map { |item| identify(item) }.sort_by { |item| [item["severity"], item["code"], item["scope"]] }
       summary = {
         "errors" => issues.count { |item| item["severity"] == "error" },
@@ -31,6 +34,7 @@ module Flightdeck
         "findings" => issues.length,
         "repositories" => repositories.length,
         "tasks" => tasks.length,
+        "missions" => missions.length,
         "compliance_pairs" => compliance.fetch("pairs").length,
         "bridges" => BridgeStore.new(@config).records.length,
         "repository_declarations" => declarations.length
@@ -44,6 +48,7 @@ module Flightdeck
         "issues" => issues,
         "repositories" => repositories,
         "tasks" => tasks,
+        "missions" => missions,
         "compliance" => compliance
       }
     end
@@ -74,8 +79,9 @@ module Flightdeck
       end
       @config.repository_declarations
       @config.project_verifications
+      @config.mission_budgets
       issues
-    rescue ValidationError => e
+    rescue ValidationError, ConfigurationError => e
       issues << issue("error", "registry.invalid", "hub/state/repositories.yaml", e.message)
     end
 
@@ -154,6 +160,30 @@ module Flightdeck
         issues << issue("error", "task.invalid", id, e.message)
       end
       [tasks, issues]
+    end
+
+    def inspect_missions
+      store = MissionStore.new(@config)
+      missions = store.all
+      issues = []
+      missions.each do |mission|
+        id = mission.dig("metadata", "id") || "unknown"
+        if mission["invalid"]
+          issues << issue("error", "mission.invalid_yaml", id, mission["invalid"])
+          next
+        end
+        store.validate(id).each { |message| issues << issue("error", "mission.invalid", id, message) }
+        view = store.status(id)
+        if view.dig("status", "state") == "stale"
+          issues << issue("warning", "mission.stale", id, "required mission observation is stale")
+        end
+        if view.dig("status", "prepared_actions").to_i.positive?
+          issues << issue("error", "mission.prepared_unacknowledged", id, "side effect is prepared but unacknowledged")
+        end
+      rescue ValidationError => e
+        issues << issue("error", "mission.invalid", id, e.message)
+      end
+      [missions, issues]
     end
 
     def issue(severity, code, scope, message)

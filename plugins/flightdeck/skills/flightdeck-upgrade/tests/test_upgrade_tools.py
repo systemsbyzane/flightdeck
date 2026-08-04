@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -89,6 +90,16 @@ class PatchNotesTests(unittest.TestCase):
         )
         self.assertEqual(releases[-1]["version"], manifest["version"])
 
+    def test_latest_cachebuster_is_strict_and_later_than_prerequisite(self) -> None:
+        releases = patch_notes.load_ledger(PLUGIN_ROOT / "releases.json")
+        pattern = re.compile(r"^0\.1\.0\+codex\.(\d{14})$")
+        prior = pattern.fullmatch(releases[-2]["version"])
+        latest = pattern.fullmatch(releases[-1]["version"])
+        self.assertIsNotNone(prior)
+        self.assertIsNotNone(latest)
+        assert prior and latest
+        self.assertGreater(int(latest.group(1)), int(prior.group(1)))
+
     def test_manifest_uses_runtime_supported_default_prompt_limit(self) -> None:
         manifest = json.loads(
             (PLUGIN_ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
@@ -96,6 +107,69 @@ class PatchNotesTests(unittest.TestCase):
         prompts = manifest["interface"]["defaultPrompt"]
         self.assertGreater(len(prompts), 0)
         self.assertLessEqual(len(prompts), 3)
+
+    def test_mission_template_capabilities_fail_closed(self) -> None:
+        compatibility = json.loads(
+            (
+                PLUGIN_ROOT
+                / "skills"
+                / "flightdeck-setup"
+                / "assets"
+                / "flightdeck-template"
+                / "hub"
+                / "compatibility.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(compatibility["template_version"], "1.1.0")
+        capabilities = compatibility["capabilities"]
+        command_ids = (
+            "flightdeck.command.mission-manage.v1",
+            "flightdeck.command.mission-plan.v1",
+            "flightdeck.command.mission-status.v1",
+            "flightdeck.command.mission-sync.v1",
+        )
+        for capability_id in command_ids:
+            self.assertEqual(
+                capabilities[capability_id]["fallback"],
+                {"mode": "stop_and_plan_migration"},
+            )
+        self.assertEqual(
+            capabilities["flightdeck.document.mission-control.v1"]["fallback"],
+            {
+                "mode": "bundled_reference",
+                "reference": "skills/flightdeck-mission/references/mission-contract.md",
+            },
+        )
+
+    def test_bundled_compatibility_fallback_is_document_only(self) -> None:
+        schema = json.loads(
+            (
+                PLUGIN_ROOT
+                / "skills"
+                / "flightdeck-setup"
+                / "assets"
+                / "flightdeck-template"
+                / "hub"
+                / "schemas"
+                / "hub-compatibility.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        capability_rules = schema["$defs"]["capability"]["allOf"]
+        bundled_rule = next(
+            rule
+            for rule in capability_rules
+            if rule.get("if", {})
+            .get("properties", {})
+            .get("fallback", {})
+            .get("properties", {})
+            .get("mode", {})
+            .get("const")
+            == "bundled_reference"
+        )
+        self.assertEqual(
+            bundled_rule["then"]["properties"]["kind"],
+            {"const": "document"},
+        )
 
 
 class UpgradePlannerTests(unittest.TestCase):

@@ -57,6 +57,21 @@ EXPECTED_SKILLS = {
     "flightdeck-stig",
     "flightdeck-automations",
     "flightdeck-upgrade",
+    "flightdeck-mission",
+}
+
+RUNTIME_ACCEPTANCE_V1 = "flightdeck.runtime-acceptance/v1"
+RUNTIME_ACCEPTANCE_V2 = "flightdeck.runtime-acceptance/v2"
+BASE_RUNTIME_RESULTS = {
+    "installed_setup_and_exact_path_project_registration",
+    "installed_bulk_bridge_configuration",
+    "installed_task_search_create_resume_and_no_monitoring",
+}
+MISSION_RUNTIME_RESULTS = {
+    "installed_mission_dispatch_only_default",
+    "installed_mission_watch_only_synchronization",
+    "installed_mission_supervised_fan_in",
+    "installed_mission_operator_closure",
 }
 
 TEXT_SUFFIXES = {
@@ -121,6 +136,184 @@ def neutral(value: Any) -> Any:
     if isinstance(value, str):
         return neutral_string(value)
     return value
+
+
+def validate_runtime_acceptance_results(evidence: dict[str, Any]) -> list[str]:
+    """Validate v1/v2 installed-result names and safety assertions."""
+
+    failures: list[str] = []
+    schema_version = evidence.get("schema_version")
+    if schema_version not in {RUNTIME_ACCEPTANCE_V1, RUNTIME_ACCEPTANCE_V2}:
+        failures.append(
+            "schema_version must equal flightdeck.runtime-acceptance/v1 or "
+            "flightdeck.runtime-acceptance/v2"
+        )
+
+    results = evidence.get("runtime_acceptance") or []
+    if not isinstance(results, list):
+        failures.append("runtime_acceptance must be a JSON array")
+        return failures
+    malformed_results = [
+        index for index, item in enumerate(results) if not isinstance(item, dict)
+    ]
+    if malformed_results:
+        failures.append(
+            "runtime_acceptance entries must be objects; invalid indexes: "
+            + ", ".join(str(index) for index in malformed_results)
+        )
+    submitted_names = [item.get("name") for item in results if isinstance(item, dict)]
+    invalid_name_indexes = [
+        index
+        for index, item in enumerate(results)
+        if isinstance(item, dict) and not isinstance(item.get("name"), str)
+    ]
+    if invalid_name_indexes:
+        failures.append(
+            "runtime_acceptance names must be strings; invalid indexes: "
+            + ", ".join(str(index) for index in invalid_name_indexes)
+        )
+    result_names = [name for name in submitted_names if isinstance(name, str)]
+    duplicate_names = sorted(
+        {name for name in result_names if result_names.count(name) > 1}
+    )
+    if duplicate_names:
+        failures.append(
+            "runtime_acceptance contains duplicate assertion names: "
+            + ", ".join(duplicate_names)
+        )
+    by_name = {
+        item["name"]: item
+        for item in results
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+
+    required = set(BASE_RUNTIME_RESULTS)
+    if schema_version == RUNTIME_ACCEPTANCE_V2:
+        required.update(MISSION_RUNTIME_RESULTS)
+    expected_label = (
+        "exactly the seven required v2 results"
+        if schema_version == RUNTIME_ACCEPTANCE_V2
+        else "exactly the three required results"
+    )
+    if len(results) != len(required) or set(result_names) != required:
+        failures.append(f"runtime_acceptance must contain {expected_label}")
+    missing = required - by_name.keys()
+    if missing:
+        failures.append(
+            "runtime_acceptance is missing required assertions: "
+            + ", ".join(sorted(missing))
+        )
+    for name in sorted(required & by_name.keys()):
+        if by_name[name].get("status") != "passed":
+            failures.append(f"{name} status must be 'passed'")
+
+    setup_result = by_name.get(
+        "installed_setup_and_exact_path_project_registration", {}
+    )
+    bridge_result = by_name.get("installed_bulk_bridge_configuration", {})
+    dispatch_result = by_name.get(
+        "installed_task_search_create_resume_and_no_monitoring", {}
+    )
+    base_assertions_pass = (
+        BASE_RUNTIME_RESULTS.issubset(by_name)
+        and setup_result.get("exact_path_match") is True
+        and bool(setup_result.get("runtime_project_id"))
+        and bridge_result.get("logical_project_key")
+        != bridge_result.get("runtime_project_id")
+        and bool(bridge_result.get("runtime_project_id"))
+        and bridge_result.get("no_implementation_task_created") is True
+        and bool(dispatch_result.get("create_task_id"))
+        and bool(dispatch_result.get("resume_task_id"))
+        and dispatch_result.get("create_task_id")
+        == dispatch_result.get("resume_task_id")
+        and dispatch_result.get("runtime_project_id_used") is True
+        and dispatch_result.get("monitoring_after_receipt") is False
+    )
+    if BASE_RUNTIME_RESULTS.issubset(by_name) and not base_assertions_pass:
+        failures.append("one or more installed-runtime assertion fields did not pass")
+
+    if schema_version == RUNTIME_ACCEPTANCE_V2 and MISSION_RUNTIME_RESULTS.issubset(by_name):
+        mission_dispatch = by_name["installed_mission_dispatch_only_default"]
+        mission_watch = by_name["installed_mission_watch_only_synchronization"]
+        mission_supervised = by_name["installed_mission_supervised_fan_in"]
+        mission_closure = by_name["installed_mission_operator_closure"]
+
+        dispatch_pass = (
+            bool(mission_dispatch.get("task_id"))
+            and mission_dispatch.get("mission_created") is False
+            and mission_dispatch.get("monitoring_after_receipt") is False
+        )
+        if not dispatch_pass:
+            failures.append(
+                "installed_mission_dispatch_only_default must prove a task receipt, "
+                "no Mission record, and no monitoring"
+            )
+
+        watch_pass = (
+            mission_watch.get("mode") == "watch_only"
+            and mission_watch.get("mission_record_persisted") is True
+            and mission_watch.get("exact_identity_verified") is True
+            and bool(mission_watch.get("logical_project_key"))
+            and bool(mission_watch.get("runtime_project_id"))
+            and mission_watch.get("logical_project_key")
+            != mission_watch.get("runtime_project_id")
+            and bool(mission_watch.get("task_id"))
+            and bool(mission_watch.get("host_id"))
+            and bool(mission_watch.get("cursor"))
+            and mission_watch.get("follow_up_count") == 0
+            and mission_watch.get("external_action_count") == 0
+        )
+        if not watch_pass:
+            failures.append(
+                "installed_mission_watch_only_synchronization must persist exact "
+                "identity and cursor while performing no follow-up or external action"
+            )
+
+        supervised_pass = (
+            mission_supervised.get("mode") == "supervised"
+            and mission_supervised.get("declared_dependency") is True
+            and mission_supervised.get("required_outputs_schema_valid") is True
+            and mission_supervised.get("required_validation_passed") is True
+            and mission_supervised.get("all_criteria_assigned") is True
+            and mission_supervised.get("all_criteria_passed") is True
+            and mission_supervised.get("blocked_or_degraded_rejected") is True
+            and mission_supervised.get("handoff_after_required_fan_in") is True
+            and mission_supervised.get("dependent_handoff_count") == 1
+            and mission_supervised.get("non_artifact_resolver_null") is True
+            and mission_supervised.get("artifact_resolver_binding_verified") is True
+            and mission_supervised.get("artifact_tamper_replay_rejected") is True
+            and mission_supervised.get("producer_provenance_verified") is True
+            and mission_supervised.get("core_materialized_artifact_refs") is True
+            and mission_supervised.get("child_supplied_canonical_ref_rejected") is True
+            and mission_supervised.get("blocked_or_stale_consumer_non_actionable") is True
+            and mission_supervised.get("free_text_ignored") is True
+            and mission_supervised.get("external_action_count") == 0
+        )
+        if not supervised_pass:
+            failures.append(
+                "installed_mission_supervised_fan_in must resume one declared "
+                "dependent exactly once after validated required fan-in; enforce "
+                "criterion assignment/results, resolver direction, artifact tamper/replay, "
+                "core artifact materialization and producer provenance; reject child-supplied "
+                "canonical refs and blocked/stale delivery; ignore free text; and perform no "
+                "external action"
+            )
+
+        closure_pass = (
+            mission_closure.get("pre_close_status") == "review_ready"
+            and mission_closure.get("awaiting_operator_closure") is True
+            and mission_closure.get("automatic_closure") is False
+            and mission_closure.get("explicit_close_authorized") is True
+            and mission_closure.get("post_close_status") == "complete"
+        )
+        if not closure_pass:
+            failures.append(
+                "installed_mission_operator_closure must prove review-ready awaited "
+                "the operator, automatic closure was false, and explicit close alone "
+                "produced complete"
+            )
+
+    return failures
 
 
 def run(
@@ -2050,7 +2243,6 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
             )
 
         expected_metadata = {
-            "schema_version": "flightdeck.runtime-acceptance/v1",
             "plugin_name": "flightdeck",
             "plugin_version": current_plugin_version,
             "candidate_root": str(candidate),
@@ -2096,104 +2288,17 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
                         "template managed surface"
                     )
 
-        results = runtime_evidence.get("runtime_acceptance") or []
-        if not isinstance(results, list):
-            results = []
-            validation_failures.append("runtime_acceptance must be a JSON array")
-        malformed_results = [
-            index for index, item in enumerate(results) if not isinstance(item, dict)
-        ]
-        if malformed_results:
-            validation_failures.append(
-                "runtime_acceptance entries must be objects; invalid indexes: "
-                + ", ".join(str(index) for index in malformed_results)
-            )
-        submitted_result_names = [
-            item.get("name") for item in results if isinstance(item, dict)
-        ]
-        invalid_name_indexes = [
-            index
-            for index, item in enumerate(results)
-            if isinstance(item, dict) and not isinstance(item.get("name"), str)
-        ]
-        if invalid_name_indexes:
-            validation_failures.append(
-                "runtime_acceptance names must be strings; invalid indexes: "
-                + ", ".join(str(index) for index in invalid_name_indexes)
-            )
-        result_names = [
-            name for name in submitted_result_names if isinstance(name, str)
-        ]
-        duplicate_names = sorted(
-            {
-                name
-                for name in result_names
-                if result_names.count(name) > 1
-            }
-        )
-        if duplicate_names:
-            validation_failures.append(
-                "runtime_acceptance contains duplicate assertion names: "
-                + ", ".join(duplicate_names)
-            )
-        by_name = {
-            item["name"]: item
-            for item in results
-            if isinstance(item, dict) and isinstance(item.get("name"), str)
-        }
-        required_runtime = {
-            "installed_setup_and_exact_path_project_registration",
-            "installed_bulk_bridge_configuration",
-            "installed_task_search_create_resume_and_no_monitoring",
-        }
-        if len(results) != len(required_runtime) or set(result_names) != required_runtime:
-            validation_failures.append(
-                "runtime_acceptance must contain exactly the three required results"
-            )
-        setup_result = by_name.get(
-            "installed_setup_and_exact_path_project_registration", {}
-        )
-        bridge_result = by_name.get("installed_bulk_bridge_configuration", {})
-        dispatch_result = by_name.get(
-            "installed_task_search_create_resume_and_no_monitoring", {}
-        )
-        runtime_assertions_pass = (
-            required_runtime.issubset(by_name)
-            and all(by_name[name].get("status") == "passed" for name in required_runtime)
-            and setup_result.get("exact_path_match") is True
-            and bool(setup_result.get("runtime_project_id"))
-            and bridge_result.get("logical_project_key")
-            != bridge_result.get("runtime_project_id")
-            and bool(bridge_result.get("runtime_project_id"))
-            and bridge_result.get("no_implementation_task_created") is True
-            and dispatch_result.get("create_task_id")
-            and dispatch_result.get("resume_task_id")
-            and dispatch_result.get("create_task_id")
-            == dispatch_result.get("resume_task_id")
-            and dispatch_result.get("runtime_project_id_used") is True
-            and dispatch_result.get("monitoring_after_receipt") is False
-        )
-        if not required_runtime.issubset(by_name):
-            validation_failures.append(
-                "runtime_acceptance is missing required assertions: "
-                + ", ".join(sorted(required_runtime - by_name.keys()))
-            )
-        for name in sorted(required_runtime & by_name.keys()):
-            if by_name[name].get("status") != "passed":
-                validation_failures.append(f"{name} status must be 'passed'")
-        if required_runtime.issubset(by_name) and not runtime_assertions_pass:
-            validation_failures.append(
-                "one or more installed-runtime assertion fields did not pass"
-            )
+        result_failures = validate_runtime_acceptance_results(runtime_evidence)
+        validation_failures.extend(result_failures)
         runtime_evidence["validation_failures"] = validation_failures
-        runtime_pass = not validation_failures and runtime_assertions_pass
+        runtime_pass = not validation_failures
     records.append(
         surface(
             "installed_runtime_project_and_task_acceptance",
             status="matched" if runtime_pass else "unresolved",
             mandatory=True,
             scope="runtime",
-            mapping="Native registration or supported open-folder fallback must be verified by an exact path in the refreshed live project list; create/resume response is the receipt and monitoring stops.",
+            mapping="Native registration or supported open-folder fallback must be verified by an exact path in the refreshed live project list; direct dispatch stops without monitoring, and v2 Mission evidence proves bounded watch/supervision plus operator-only closure.",
             probe_name="installed-plugin fresh-task acceptance",
             passed=runtime_pass,
             evidence=runtime_evidence,

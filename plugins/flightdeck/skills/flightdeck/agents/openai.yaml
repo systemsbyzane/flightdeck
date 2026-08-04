@@ -1,4 +1,4 @@
 interface:
   display_name: "Flightdeck"
-  short_description: "Coordinate portable multi-project work"
-  default_prompt: "Use $flightdeck to route this request by exact project path, keep logical and runtime project identities separate, and return without monitoring."
+  short_description: "Route direct work or opt-in missions safely"
+  default_prompt: "Use $flightdeck to route this request by exact project path, preserve ordinary receipt-and-stop dispatch, and select $flightdeck-mission only for explicit mission intent with exact authorized targets and criterion-bound fan-in."
