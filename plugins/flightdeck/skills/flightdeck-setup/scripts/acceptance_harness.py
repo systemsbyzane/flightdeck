@@ -19,6 +19,7 @@ BOOTSTRAP = SCRIPTS / "bootstrap.py"
 SETUP = SCRIPTS / "setup_flightdeck.py"
 SCANNER = SCRIPTS / "scan_debranding.py"
 STRUCTURED = SCRIPTS / "validate_structured.py"
+HUB_COMPATIBILITY = SCRIPTS / "hub_compatibility.py"
 
 
 class HarnessFailure(RuntimeError):
@@ -286,6 +287,37 @@ def main() -> int:
                     "clean": clean_report,
                     "dirty_codes": sorted(dirty_codes),
                 },
+            )
+
+            compatibility_before = tree_state(hub)
+            compatibility = json_command(
+                [
+                    "python3",
+                    str(HUB_COMPATIBILITY),
+                    "--hub-root",
+                    str(hub),
+                    "--require",
+                    "flightdeck.command.setup-plan.v1",
+                    "--require",
+                    "flightdeck.command.setup-connect.v1",
+                    "--require",
+                    "flightdeck.document.change-review.v1",
+                ],
+                cwd=root,
+            )
+            probe(
+                report,
+                "generated_hub_capability_contract_is_declared_probed_and_read_only",
+                compatibility.get("status") == "compatible"
+                and compatibility.get("compatible") is True
+                and compatibility.get("read_only") is True
+                and compatibility.get("hub", {})
+                .get("identity", {})
+                .get("template_version")
+                == "1.0.0"
+                and not compatibility.get("requirements", {}).get("missing")
+                and tree_state(hub) == compatibility_before,
+                compatibility,
             )
 
             planning_guidance = " ".join(

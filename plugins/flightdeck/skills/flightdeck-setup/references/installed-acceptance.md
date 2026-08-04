@@ -104,6 +104,23 @@ name skills.
 Run this separately and only after the user explicitly authorizes mutation of
 the installed plugin and, when applicable, its Git marketplace snapshot.
 
+Before upgrade mutation, exercise preserved-Hub compatibility with a separate
+synthetic legacy copy:
+
+1. Remove its compatibility identity and use a synthetic older command surface
+   that omits `setup plan` and `setup connect`.
+2. Verify the installed setup skill runs the read-only compatibility checker,
+   reports both setup capability IDs missing, returns
+   `stop_and_plan_migration`, and does not invoke setup or bootstrap.
+3. Remove `docs/review/change-review.md`. Verify the installed review skill
+   records that precise missing document, uses only its bundled review-method
+   fallback, and does not claim the Hub-local review workflow was read.
+4. Verify both results include only the affected managed paths, an explicit
+   separate-candidate plan-and-diff workflow, and prohibitions on automatic
+   regeneration, overwrite, migration, or Hub mutation.
+5. Hash or otherwise snapshot the synthetic legacy Hub before and after these
+   read-only probes and require no change.
+
 1. Preserve one synthetic generated Hub with an attached dirty synthetic
    repository. Record exact Git status plus generated Doctor output.
 2. Record the installed plugin version, configured marketplace, source type,

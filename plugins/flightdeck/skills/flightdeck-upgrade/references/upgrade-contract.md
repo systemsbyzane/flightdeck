@@ -29,7 +29,9 @@ its managed bundle. It does not mean editing files inside the plugin cache.
 
 Plugin release and generated-template release are separate. Existing Hubs keep
 working from their generated files. New plugin skills may coordinate with them,
-but a template change does not silently rewrite an existing Hub.
+but a template change does not silently rewrite an existing Hub. New skills
+must check the preserved Hub's declared or read-only-inferred capabilities
+before requiring Hub-local commands or documents.
 
 ## Read-only preflight
 
@@ -54,9 +56,14 @@ but a template change does not silently rewrite an existing Hub.
      --marketplace <marketplace>
    ```
 
-5. If a generated Hub is open, capture `bin/flightdeck doctor --json` and
-   `git status --short` before and after. For attached repositories, use their
-   existing status/Doctor surfaces; do not traverse or hash private evidence.
+5. If a generated Hub is open, run the installed setup skill's
+   `scripts/hub_compatibility.py` for `flightdeck.command.doctor.v1` before
+   invoking Doctor. Capture `bin/flightdeck doctor --json` only for a compatible
+   or compatible-inferred result, plus `git status --short` before and after.
+   For an incompatible Hub, retain the structured compatibility result and use
+   the bundled upgrade contract instead of assuming a Hub-local lifecycle
+   document. For attached repositories, use only existing compatible
+   status/Doctor surfaces; do not traverse or hash private evidence.
 6. Stop before mutation if the installed plugin, marketplace, target manifest,
    or target version cannot be resolved exactly.
 
@@ -102,6 +109,11 @@ codex plugin add flightdeck@<marketplace> --json
 
 Do not run `codex plugin remove` first. Do not copy files into the cache. Do not
 invoke setup, bootstrap, bridge installation, project dispatch, or Hub migration.
+
+If the preserved Hub lacks a capability needed by newer installed skills,
+report that incompatibility separately from plugin installation. Provide the
+checker's exact managed-path plan-and-diff scope. Do not repair, regenerate,
+overwrite, or migrate the Hub during upgrade.
 
 ## Verify and report
 

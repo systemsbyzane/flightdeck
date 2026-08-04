@@ -31,7 +31,9 @@ Plugin upgrade must not change:
 - evidence, credentials, artifacts, environments, or scheduled jobs.
 
 Preflight may run Doctor and Git-status checks to record observable state.
-It must not clean, stash, reset, hash private evidence, or repair findings.
+The installed skill first checks that this Hub exposes the required Doctor
+capability. It must not clean, stash, reset, hash private evidence, assume a
+newer command or document, or repair findings.
 
 ## Upgrade boundary
 
@@ -55,6 +57,12 @@ does not edit a plugin cache directly and does not run setup or bootstrap.
 Existing Hubs stay on their generated template version. Improvements to the
 template are available to newly generated Hubs, but they are not applied here
 automatically.
+
+New Hubs publish `hub/compatibility.json`. Newer installed skills use the
+read-only checker described in [generated-Hub compatibility](hub-compatibility.md)
+before requiring Hub-local commands or documents. Older Hubs without the
+identity may be probed for the exact requested surface, but an inferred result
+does not claim full template parity.
 
 Adopting a future Hub migration requires a separate explicit workflow with a
 preview, exact file diff, preservation plan, validation, and rollback. A plugin

@@ -13,11 +13,18 @@ read-only by default; do not fix findings unless the user separately asks.
 1. Identify the artifact or Git comparison being reviewed and the question the
    review must answer. Do not silently substitute a different base, branch,
    commit, pull request, or working-tree diff.
-2. In a generated Hub, read `AGENTS.md` and
-   `docs/review/change-review.md`. Review Hub-owned coordination material in
-   place. For a repository-owned target, resolve every owner and dispatch the
-   review before inspecting owner code, then return the receipt without
-   monitoring.
+2. In a generated Hub, use the installed setup skill's
+   `scripts/hub_compatibility.py` to check
+   `flightdeck.document.change-review.v1` and, for repository-owned targets,
+   `flightdeck.command.route-plan.v1`. Read `AGENTS.md` and
+   `docs/review/change-review.md` only when available. When only the review
+   document is missing, record the compatibility result and use this skill's
+   bundled `references/review-method.md`; do not claim the Hub-local workflow
+   was read. Review Hub-owned coordination material in place. For a
+   repository-owned target, resolve every owner and dispatch the review before
+   inspecting owner code, then return the receipt without monitoring. If route
+   planning is unavailable, use only the checker's manual exact-path handoff
+   after normal verification fails.
 3. In an owning repository, read applicable instructions, record branch, SHA,
    dirty state, and the exact review target, then inspect the candidate diff and
    enough surrounding code or tests to validate behavior.

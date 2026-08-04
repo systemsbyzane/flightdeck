@@ -15,6 +15,12 @@ Read `references/upgrade-contract.md` completely before an upgrade, rollback,
 or preservation claim. Patch-note-only requests are read-only and may use the
 release ledger immediately.
 
+When a generated Hub is in scope, run the installed setup skill's read-only
+`scripts/hub_compatibility.py` for `flightdeck.command.doctor.v1` or
+`flightdeck.document.plugin-lifecycle.v1` before requiring Hub-local Doctor or
+lifecycle documents. Record incompatibility as preserved-Hub evidence and use
+the bundled upgrade contract; never use plugin upgrade to repair or migrate it.
+
 ## Patch Notes
 
 For an upgrade, run the planner first and use its `target_release_ledger` path.

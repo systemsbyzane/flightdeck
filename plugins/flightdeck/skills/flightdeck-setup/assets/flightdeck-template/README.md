@@ -79,6 +79,8 @@ infrastructure and environment work. Use
 applicability, CKL, and remediation workflows.
 Use [plugin lifecycle](docs/workflows/plugin-lifecycle.md) to understand why a
 plugin update does not rewrite this generated Hub.
+Use [generated-Hub compatibility](docs/workflows/hub-compatibility.md) to
+inspect the versioned command and document surface before newer skills use it.
 
 ## Workload roots
 

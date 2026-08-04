@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import subprocess
 import tempfile
@@ -50,6 +51,15 @@ class BootstrapTest(unittest.TestCase):
     def json_report(self, result: subprocess.CompletedProcess[str]) -> dict:
         self.assertTrue(result.stdout, result.stderr)
         return json.loads(result.stdout)
+
+    def tree_state(self, root: Path) -> str:
+        digest = hashlib.sha256()
+        for path in sorted(candidate for candidate in root.rglob("*") if candidate.is_file()):
+            if ".git" in path.relative_to(root).parts:
+                continue
+            digest.update(str(path.relative_to(root)).encode("utf-8"))
+            digest.update(path.read_bytes())
+        return digest.hexdigest()
 
     def run_scanner(
         self,
@@ -394,13 +404,35 @@ class BootstrapTest(unittest.TestCase):
                 "#!/usr/bin/env ruby\nexit 0\n", encoding="utf-8"
             )
             tampered = self.run_bootstrap(str(target), "--json")
-            self.assertEqual(2, tampered.returncode)
+            self.assertEqual(1, tampered.returncode)
             tampered_report = self.json_report(tampered)
-            self.assertEqual("target-recognition", tampered_report["error"]["stage"])
-            self.assertIn(
-                "unrecognized generated managed content",
-                tampered_report["error"]["message"],
+            self.assertEqual(
+                "preserved_hub_incompatible", tampered_report["status"]
             )
+            self.assertTrue(tampered_report["no_op"])
+
+    def test_preserved_legacy_hub_returns_compatibility_plan_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="flightdeck-bootstrap-legacy-") as directory:
+            target = Path(directory) / "legacy"
+            first = self.run_bootstrap(str(target), "--apply", "--json")
+            self.assertEqual(0, first.returncode, first.stderr)
+            (target / "hub" / "compatibility.json").unlink()
+            before = self.tree_state(target)
+
+            result = self.run_bootstrap(str(target), "--json")
+            self.assertEqual(1, result.returncode, result.stderr)
+            report = self.json_report(result)
+            self.assertEqual("preserved_hub_incompatible", report["status"])
+            self.assertTrue(report["no_op"])
+            self.assertFalse(report["generated"])
+            self.assertEqual(
+                "flightdeck.hub-contract.v1",
+                report["compatibility"]["requirements"]["missing"][0]["id"],
+            )
+            self.assertFalse(
+                report["compatibility"]["migration"]["automatic_changes"]
+            )
+            self.assertEqual(before, self.tree_state(target))
 
     def test_one_prompt_setup_connects_existing_repositories_in_place(self) -> None:
         with tempfile.TemporaryDirectory(prefix="flightdeck-bootstrap-repos-") as directory:

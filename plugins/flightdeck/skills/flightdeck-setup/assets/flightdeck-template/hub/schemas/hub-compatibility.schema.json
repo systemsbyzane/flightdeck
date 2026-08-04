@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/hub-compatibility.schema.json",
+  "title": "Flightdeck generated-Hub compatibility contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "schema",
+    "product",
+    "template_version",
+    "capabilities"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "flightdeck.hub-compatibility/v1"
+    },
+    "schema": {
+      "const": "hub/schemas/hub-compatibility.schema.json"
+    },
+    "product": {
+      "const": "flightdeck"
+    },
+    "template_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capabilities": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^flightdeck\\.(command|document)\\.[a-z0-9-]+\\.v[0-9]+$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/capability"
+      }
+    }
+  },
+  "$defs": {
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "description",
+        "probe",
+        "managed_paths",
+        "fallback"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "command",
+            "document"
+          ]
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "probe": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "help_contains": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "help_contains"
+              ]
+            },
+            {
+              "required": [
+                "path"
+              ]
+            }
+          ]
+        },
+        "managed_paths": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "fallback": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "bundled_reference",
+                "compatibility_report_only",
+                "manual_exact_path_handoff",
+                "stop_and_plan_migration"
+              ]
+            },
+            "reference": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "command"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "probe": {
+                "required": [
+                  "help_contains"
+                ],
+                "not": {
+                  "required": [
+                    "path"
+                  ]
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "probe": {
+                "required": [
+                  "path"
+                ],
+                "not": {
+                  "required": [
+                    "help_contains"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "fallback": {
+                "properties": {
+                  "mode": {
+                    "const": "bundled_reference"
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "fallback": {
+                "required": [
+                  "reference"
+                ]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "fallback": {
+                "not": {
+                  "required": [
+                    "reference"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

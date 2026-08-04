@@ -5,8 +5,13 @@ description: Run and interpret read-only Flightdeck Doctor, status, route-plan, 
 
 # Flightdeck Doctor
 
-Run `bin/flightdeck doctor --json` from the generated Hub root. Doctor is
-read-only: findings do not authorize remediation.
+Before invoking a preserved Hub, run the installed setup skill's
+`scripts/hub_compatibility.py` for `flightdeck.command.doctor.v1` or
+`flightdeck.command.status.v1`, matching the requested command. Run
+`bin/flightdeck doctor --json` only when the required capability is available.
+If it is missing, return the structured compatibility result and migration
+guidance without invoking or modifying the Hub. Doctor is read-only: findings
+do not authorize remediation.
 
 Interpret `ok: false` as detected errors, not a tool failure. Report exact error
 and warning counts, repository/task/sidecar counts, and prioritized actions.
@@ -19,4 +24,3 @@ read-only; only `status --write` mutates the ignored report directory.
 
 Read `references/findings.md` when triaging Doctor codes. Preserve pre-existing
 dirty files and report them without cleanup.
-

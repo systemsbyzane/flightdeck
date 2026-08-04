@@ -13,6 +13,14 @@ For advanced bulk bridge configuration on an existing Flightdeck, read
 `references/configure-bridge-repos.md` completely and follow it end to end.
 That runbook is mandatory.
 
+Before invoking Hub-local bridge or repository commands, run the installed
+setup skill's `scripts/hub_compatibility.py` for the exact required
+capabilities: `flightdeck.command.repo-plan.v1`,
+`flightdeck.command.repo-onboard.v1`, `flightdeck.command.bridge-plan.v1`,
+`flightdeck.command.bridge-install.v1`, and
+`flightdeck.command.doctor.v1` as applicable. Do not invoke a missing
+capability; return its fallback and plan-and-diff migration guidance.
+
 Use:
 
 - `reference`: machine-local `AGENTS.override.md` points to Hub docs.

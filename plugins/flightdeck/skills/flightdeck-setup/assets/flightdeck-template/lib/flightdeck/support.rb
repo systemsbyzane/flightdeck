@@ -173,6 +173,8 @@ module Flightdeck
     end
 
     def capture(*arguments, chdir:, timeout: 20, env: {})
+      return ["", "working directory is unavailable", 127] unless File.directory?(chdir)
+
       output = error = nil
       status = nil
       Timeout.timeout(timeout) do
@@ -186,6 +188,8 @@ module Flightdeck
       [output.to_s.strip, error.to_s.strip, status]
     rescue Timeout::Error
       ["", "command timed out after #{timeout} seconds", 124]
+    rescue SystemCallError => e
+      ["", "command could not start: #{e.class}", 127]
     end
   end
 end

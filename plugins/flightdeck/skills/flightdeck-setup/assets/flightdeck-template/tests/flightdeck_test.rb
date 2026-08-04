@@ -26,7 +26,7 @@ class FlightdeckTest < Minitest::Test
     .gitignore AGENTS.md Makefile README.md bin docs flightdeck.yaml lib scripts tests
   ].freeze
   HUB_CONTROL_PLANE_ENTRIES = %w[
-    automations bridges repositories.yaml schemas templates workflows
+    automations bridges compatibility.json repositories.yaml schemas templates workflows
   ].freeze
   WORKLOAD_ROOTS = %w[charts development environments operations patching research].freeze
 
@@ -715,6 +715,62 @@ class FlightdeckTest < Minitest::Test
       result = Flightdeck::Doctor.new(Flightdeck::Config.new(root: root)).run
       assert_includes result["issues"].map { |item| item["code"] }, "bridge.drift"
       assert result["no_fetch"]
+    end
+  end
+
+  def test_doctor_and_status_report_missing_registered_repository_with_bridge
+    with_hub do |root, config|
+      repository = initialize_repository(root, "missing-bridged-service")
+      commit_repository(repository)
+      config = register_repository(config, "missing-bridged-service", repository)
+      Flightdeck::BridgeStore.new(config).install(
+        repository_id: "missing-bridged-service",
+        mode: "reference",
+        profile: "application"
+      )
+      FileUtils.rm_rf(repository)
+      config = Flightdeck::Config.new(root: root)
+
+      result = Flightdeck::Doctor.new(config).run
+      codes = result.fetch("issues").map { |item| item.fetch("code") }
+      assert_includes codes, "repo.unavailable"
+      assert_includes codes, "bridge.repository_unavailable"
+
+      doctor_output = StringIO.new
+      doctor_status = Flightdeck::CLI.new(
+        root: root,
+        out: doctor_output,
+        err: StringIO.new
+      ).run(["doctor", "--json"])
+      assert_equal 1, doctor_status
+      doctor_result = JSON.parse(doctor_output.string)
+      assert_includes doctor_result.fetch("issues").map { |item| item.fetch("code") }, "repo.unavailable"
+      assert_includes doctor_result.fetch("issues").map { |item| item.fetch("code") }, "bridge.repository_unavailable"
+
+      status_output = StringIO.new
+      status_status = Flightdeck::CLI.new(
+        root: root,
+        out: status_output,
+        err: StringIO.new
+      ).run(["status", "--json"])
+      assert_equal 0, status_status
+      status_result = JSON.parse(status_output.string)
+      assert_includes status_result.fetch("issues").map { |item| item.fetch("code") }, "repo.unavailable"
+      assert_includes status_result.fetch("issues").map { |item| item.fetch("code") }, "bridge.repository_unavailable"
+    end
+  end
+
+  def test_command_capture_normalizes_missing_working_directory
+    with_hub do |root, _config|
+      missing = File.join(root, "missing-working-directory")
+
+      output, error, status = Flightdeck::Support.capture(
+        "git", "status", chdir: missing
+      )
+
+      assert_equal "", output
+      assert_equal "working directory is unavailable", error
+      assert_equal 127, status
     end
   end
 

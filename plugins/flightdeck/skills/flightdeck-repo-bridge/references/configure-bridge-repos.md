@@ -7,6 +7,12 @@ repository connection belong to `flightdeck-setup`. Bridge work configures
 checkouts, bridges, and saved projects; it does not create implementation
 tasks.
 
+Before the first Hub-local command, run the installed setup skill's read-only
+`scripts/hub_compatibility.py` for each command this operation needs. Stop on a
+missing capability and return its declared fallback and plan-and-diff migration
+scope. Do not substitute setup, bootstrap, or a current-template command in a
+preserved Hub.
+
 ## 1. Read authority and declarations
 
 1. Locate the Hub by walking upward to `flightdeck.yaml`.

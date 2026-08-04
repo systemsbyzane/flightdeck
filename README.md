@@ -532,7 +532,10 @@ definitions load.
 Plugin upgrade does not run setup, modify attached repositories, or migrate an
 existing generated Hub. The setup generator has no merge or overwrite mode.
 Any future Hub-template migration is a separate, explicit plan-and-diff
-workflow. See the
+workflow. New Hubs publish a machine-readable capability contract, and newer
+skills use a read-only compatibility checker before requiring Hub-local
+commands or documents. Missing capabilities produce a precise compatibility
+result and migration diff scope without changing the Hub. See the
 [upgrade contract](plugins/flightdeck/skills/flightdeck-upgrade/references/upgrade-contract.md)
 and the machine-readable [release ledger](plugins/flightdeck/releases.json).
 

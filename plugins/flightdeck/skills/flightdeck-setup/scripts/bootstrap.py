@@ -21,6 +21,7 @@ SETUP = SCRIPTS / "setup_flightdeck.py"
 STRUCTURED = SCRIPTS / "validate_structured.py"
 SCANNER = SCRIPTS / "scan_debranding.py"
 LINKS = SCRIPTS / "validate_links.py"
+HUB_COMPATIBILITY = SCRIPTS / "hub_compatibility.py"
 REPOSITORY_ROOT = SKILL_ROOT.parents[3]
 COMMAND_TIMEOUT = 300
 CONFIGURABLE_MANAGED_FILES = {
@@ -281,6 +282,47 @@ def target_state(target: Path, ruby: str) -> str:
     return "generated"
 
 
+def preserved_hub_compatibility(
+    target: Path,
+    python3: str,
+    *,
+    repositories_root: Path | None,
+) -> dict[str, Any] | None:
+    if not target.is_dir() or not any(target.iterdir()):
+        return None
+    required_hub_paths = (
+        target / "flightdeck.yaml",
+        target / "bin" / "flightdeck",
+        target / "hub" / "state" / "repositories.yaml",
+        target / "hub" / "state" / "projects.yaml",
+    )
+    if any(not path.is_file() for path in required_hub_paths):
+        return None
+    requirements = ["flightdeck.command.doctor.v1"]
+    if repositories_root is not None:
+        requirements.extend(
+            [
+                "flightdeck.command.setup-plan.v1",
+                "flightdeck.command.setup-connect.v1",
+            ]
+        )
+    arguments = [
+        python3,
+        str(HUB_COMPATIBILITY),
+        "--hub-root",
+        str(target),
+        "--require-contract",
+    ]
+    for capability_id in requirements:
+        arguments.extend(["--require", capability_id])
+    return json_result(
+        arguments,
+        cwd=SCRIPTS,
+        stage="hub-compatibility",
+        allowed_exit_codes=(0, 1),
+    )
+
+
 def validate(target: Path, python3: str, ruby: str) -> dict[str, Any]:
     ruby_result = run(
         [ruby, "-Ilib", "tests/flightdeck_test.rb"],
@@ -481,6 +523,18 @@ def bootstrap(
     report = base_report(target, "apply" if apply else "preview", preflight_report)
     python3 = str(preflight_report["commands"]["python3"]["path"])
     ruby = str(preflight_report["commands"]["ruby"]["path"])
+    compatibility = preserved_hub_compatibility(
+        target,
+        python3,
+        repositories_root=repositories_root,
+    )
+    if compatibility is not None:
+        report["compatibility"] = compatibility
+        if compatibility.get("compatible") is not True:
+            report["status"] = "preserved_hub_incompatible"
+            report["no_op"] = True
+            report["target_state"] = "preserved_generated_hub"
+            return report
     state = target_state(target, ruby)
     if repositories_root is not None:
         plan_hub = target if state == "generated" else TEMPLATE
@@ -561,6 +615,19 @@ def human_output(report: dict[str, Any]) -> str:
                 f"{summary['discovered']} discovered, {summary['ready']} ready, "
                 f"{summary['noop']} already connected, {summary['blocked']} blocked."
             )
+        return "\n".join(lines)
+
+    if report["status"] == "preserved_hub_incompatible":
+        compatibility = report["compatibility"]
+        lines.extend(
+            [
+                "Preserved Hub compatibility: incompatible.",
+                "No setup, bootstrap, regeneration, overwrite, or Hub mutation was performed.",
+                "Review the structured compatibility result and its plan-and-diff migration guidance.",
+            ]
+        )
+        for item in compatibility.get("requirements", {}).get("missing", []):
+            lines.append(f"Missing {item['id']}: {item['reason']}")
         return "\n".join(lines)
 
     validation = report["validation"]
@@ -686,7 +753,7 @@ def main() -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         print(human_output(report))
-    return 0
+    return 1 if report.get("status") == "preserved_hub_incompatible" else 0
 
 
 if __name__ == "__main__":
