@@ -42,7 +42,7 @@ jobs:
 
       - name: Run public source-local validation
         env:
-          LOCAL_EVIDENCE: ${{ runner.temp }}/flightdeck-validation
+          LOCAL_EVIDENCE: ${{ runner.temp }}/.flightdeck-local/flightdeck-validation
         run: make public-validate
 
       - name: Confirm validation did not modify source
