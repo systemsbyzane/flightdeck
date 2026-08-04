@@ -1,7 +1,7 @@
 {
   "name": "flightdeck",
-  "version": "0.1.0+codex.20260803205157",
-  "description": "Coordinate portable multi-repository engineering, operations, research, artifacts, and compliance work.",
+  "version": "0.1.0+codex.20260803210212",
+  "description": "Coordinate portable multi-repository engineering, operations, research, artifacts, compliance, and opt-in durable Missions.",
   "author": {
     "name": "Flightdeck Maintainers",
     "url": "https://github.com/systemsbyzane/flightdeck"
@@ -11,7 +11,9 @@
   "keywords": [
     "codex",
     "coordination",
+    "missions",
     "multi-repository",
+    "orchestration",
     "project-routing",
     "workflow"
   ],
@@ -19,7 +21,7 @@
   "interface": {
     "displayName": "Flightdeck",
     "shortDescription": "Portable multi-project engineering coordination",
-    "longDescription": "Generates a local control plane, discovers and connects existing repositories in place with safe local bridges, creates right-sized plans, routes findings-first reviews to exact owning projects, preserves approval boundaries, validates workspace health, upgrades safely with patch notes, and provides reusable engineering, CI/CD, platform, database, automation, artifact, compliance, and STIG workflows.",
+    "longDescription": "Generates a local control plane, discovers and connects existing repositories in place with safe local bridges, routes exact owning tasks, and optionally coordinates durable Missions with bounded observation and controlled fan-in. It preserves approval boundaries, validates workspace health, upgrades safely with patch notes, and provides reusable engineering, CI/CD, platform, database, automation, artifact, compliance, and STIG workflows.",
     "developerName": "Flightdeck Maintainers",
     "category": "Developer Tools",
     "websiteURL": "https://github.com/systemsbyzane/flightdeck",
@@ -30,7 +32,7 @@
     ],
     "defaultPrompt": [
       "Set up Flightdeck for the Git repositories under this folder.",
-      "Plan or review this cross-repository change, including owners, dependencies, risks, findings, and validation.",
+      "Run this cross-project outcome as a supervised Flightdeck Mission through review-ready, preserving every approval boundary.",
       "Upgrade my Flightdeck plugin without changing my existing Hub or repositories, and show me what changed."
     ],
     "brandColor": "#0A1829",

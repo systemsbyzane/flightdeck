@@ -23,7 +23,7 @@
     },
     "template_version": {
       "type": "string",
-      "minLength": 1
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
     },
     "capabilities": {
       "type": "object",
@@ -173,6 +173,9 @@
           },
           "then": {
             "properties": {
+              "kind": {
+                "const": "document"
+              },
               "fallback": {
                 "required": [
                   "reference"

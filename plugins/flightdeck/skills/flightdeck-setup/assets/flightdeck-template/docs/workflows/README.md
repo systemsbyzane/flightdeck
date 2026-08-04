@@ -5,6 +5,8 @@ and runtime validation separated.
 
 - [Thread routing](thread-routing.md) chooses the owning Codex project,
   execution mode, and dispatch boundary.
+- [Missions](missions.md) defines opt-in durable multi-task graphs, bounded
+  observation, controlled fan-in, and operator-only completion.
 - [Planning](planning.md) creates a right-sized, read-only plan without forcing
   every request through one template.
 - [CI/CD and delivery](ci-cd.md) correlates exact source revisions with
@@ -39,3 +41,7 @@ and runtime validation separated.
 
 Use the Hub for coordination. Use the owning repository project for code edits,
 tests, Git history, and implementation evidence.
+
+Direct dispatch remains the default and returns its receipt without monitoring.
+A Mission is explicit and keeps this Codex task as its control room; it is not a
+separate dashboard or background service.

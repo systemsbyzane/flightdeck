@@ -233,6 +233,7 @@
         "docs/workflows/configure-bridge-repos.md",
         "docs/workflows/database.md",
         "docs/workflows/hub-compatibility.md",
+        "docs/workflows/missions.md",
         "docs/workflows/multirepo-coordination.md",
         "docs/workflows/operations.md",
         "docs/workflows/planning.md",
@@ -293,6 +294,8 @@
         "hub/schemas/flightdeck.schema.json",
         "hub/schemas/hub-compatibility.schema.json",
         "hub/schemas/local-repositories.schema.json",
+        "hub/schemas/mission-observation.schema.json",
+        "hub/schemas/mission.schema.json",
         "hub/schemas/project-verifications.schema.json",
         "hub/schemas/repository-declarations.schema.json",
         "hub/schemas/task.schema.json",
@@ -328,6 +331,9 @@
         "lib/flightdeck/config.rb",
         "lib/flightdeck/doctor.rb",
         "lib/flightdeck/inspections.rb",
+        "lib/flightdeck/mission_graph.rb",
+        "lib/flightdeck/mission_store.rb",
+        "lib/flightdeck/mission_sync.rb",
         "lib/flightdeck/repo_planner.rb",
         "lib/flightdeck/repository_store.rb",
         "lib/flightdeck/route_planner.rb",
@@ -494,6 +500,21 @@
       ]
     },
     {
+      "id": "mission-method",
+      "status": "added",
+      "source_count": 0,
+      "source_paths": [],
+      "candidate_paths": [],
+      "plugin_count": 3,
+      "plugin_paths": [
+        "skills/flightdeck-mission/**"
+      ],
+      "source_mapping_ids": [
+        "coordination-entry-documents",
+        "reusable-method-guides"
+      ]
+    },
+    {
       "id": "planning-method",
       "status": "added",
       "source_count": 0,
@@ -601,7 +622,7 @@
       "source_count": 0,
       "source_paths": [],
       "candidate_paths": [],
-      "plugin_count": 18,
+      "plugin_count": 21,
       "plugin_paths": [
         "skills/flightdeck-setup/SKILL.md",
         "skills/flightdeck-setup/agents/**",

@@ -17,6 +17,7 @@
 <p align="center">
   <a href="#install-in-two-commands">Install</a> ·
   <a href="#see-it-route">Live tour</a> ·
+  <a href="#run-a-mission">Missions</a> ·
   <a href="#choose-your-path">Quick starts</a> ·
   <a href="#safety-and-approvals">Safety</a>
 </p>
@@ -25,6 +26,10 @@ Flightdeck gives Codex a safe way to coordinate work spread across repositories,
 environments, research spaces, and compliance workspaces. It finds the exact
 owner, verifies the saved project path, creates or resumes the right task,
 returns a receipt, and stops.
+
+When an outcome genuinely spans several persistent Codex tasks, Flightdeck can
+run an opt-in Mission: a durable dependency graph that can dispatch, watch, or
+supervise only the declared work under bounded safety rules.
 
 Your repositories stay separate. Their instructions, Git history, tests, and
 artifacts remain authoritative.
@@ -81,6 +86,104 @@ resumes one task, returns the receipt, and does not monitor the child task.
     </td>
   </tr>
 </table>
+
+## What is a mission?
+
+A Mission is an opt-in durable parent record that links exact, verified
+persistent Codex tasks for one outcome. It can preserve a graph and receipts,
+refresh compact child state, or advance declared dependencies from bounded
+child declarations and core-materialized typed output references.
+
+A Mission is not a separate dashboard. The Codex task where you start it remains
+the control room, and every child stays in its owning Codex project. Ordinary
+Flightdeck dispatch remains the default: one owner, one receipt, then stop.
+
+## What's new?
+
+- `dispatch_only`, `watch_only`, and `supervised` Mission modes;
+- required and optional graph nodes with controlled fan-in;
+- exact project, host, and task identity, including pending `clientThreadId`
+  reconciliation;
+- bounded waits of at most eight tasks per call with opaque per-task cursors;
+- normalized observations, bounded output declarations, core-materialized
+  references, and a two-phase outbox;
+- deterministic status and explicit stop conditions; and
+- operator-only completion after the Mission reaches review-ready.
+
+Child task text remains untrusted display material. Mission state never turns
+prose into authority or stores raw evidence, credentials, or artifact bodies.
+
+## Run a mission
+
+Start a fresh Codex task after installing or upgrading, then ask naturally:
+
+```text
+Run this as a supervised Flightdeck mission. Coordinate the backend, frontend,
+and chart owners through review-ready, but do not commit, open a PR, deploy, or
+close the mission without asking me.
+```
+
+Choose the least powerful mode:
+
+| Mode | What it does | What it never does |
+| --- | --- | --- |
+| `dispatch_only` | Persists the graph and verified dispatch receipts | Waits, reads, follows up, or hands off dependencies |
+| `watch_only` | Refreshes compact observations and derived status | Sends task messages or advances the graph |
+| `supervised` | Forwards core-materialized artifact/task references to declared ready nodes | Expands authorization or performs external actions |
+
+Natural intent maps conservatively: a bare Mission defaults to
+`dispatch_only`, “monitor” selects `watch_only`, and “coordinate end-to-end” or
+“take this to review-ready” selects `supervised` unless you set another mode.
+
+Commit, push, PR/comment, publication, deployment, environment mutation,
+external communication, compliance submission, risk acceptance, and closure
+remain separate approval boundaries in every mode. See the complete
+[Mission contract and examples](docs/missions.md).
+
+Mission, node, and outbox-action `authorization_boundary` values must match
+exactly. Missing or different values fail closed; Mission synchronization also
+rejects non-regular, unreadable, or oversized observation input before reading
+it. A dispatch receipt containing only `clientThreadId` remains
+`dispatch_pending` and is never used as a wait target; exact reconciliation
+must record both that original client ID and the resolved task ID first. When
+the create followed a prepared dependency action, both that action and pending
+receipt remain durable; uncertainty never authorizes a duplicate create.
+
+Running, approval-needed, blocked, runtime-failure, cancelled, and `notLoaded`
+snapshots contain normalized tool state only and cannot carry a child outcome.
+Only final `review_ready` and `failed_validation` observations require the exact
+normalized child outcome, including ordered per-node criterion dispositions.
+Fan-in requires every criterion covered by required nodes, every required
+assignment passed, and producer-bound typed refs materialized by core from
+closed child declarations after an exact task receipt. Children never author or
+repair canonical refs or task/resolver bindings.
+
+`mission new` persists the generated Hub's configured finite defaults: 50
+units, 3 retries, 200 actions, 65,536 forwarded bytes, 604,800 seconds total
+duration, a 3,600-second stale threshold, and a 2,097,152-byte Mission record.
+Inspect them with `mission show --json` or `mission status --json`; there are no
+per-command budget flags and Mission YAML is not hand-edited.
+The complete graph is declared before dispatch and freezes on the first runtime
+receipt or observation. A downstream task is dispatch-eligible only when
+exactly one matching action is prepared with the complete parent set and at least one accepted,
+core-materialized automatic ref from every parent; its refs must equal the
+complete eligible accepted set. Validation alone is not
+enough, and terminal `check:`/`review:` evidence cannot start it. Typed
+references do not move artifacts; prove the
+consumer can resolve them, co-locate compatible work, or stop. Independent
+review uses a separate runtime task.
+
+`watch_only` and `supervised` require repeatable success criteria and exact
+six-field authorized targets. The core assigns ordered criterion IDs and derives
+a scope boundary from the canonical Mission intent and target set; callers do
+not supply the token. Nodes declare their criterion assignments. Automated
+handoff accepts only core-materialized canonical artifact or task references;
+`check:` and `review:` remain terminal operator evidence. Action resolver
+metadata is non-null only when that action transports an artifact. Every sync
+apply also requires the exact generation-bound token returned by sync plan.
+Only the internal prepared `awaiting_handoff` receipt can receive delivery;
+status renders it as `running`/`handing_off`. Blocked, stale, pending, and
+unknown consumers are non-actionable.
 
 ## Choose your path
 
@@ -233,10 +336,11 @@ GitHub plugin
 setup skill
     ↓
 generated Flightdeck Hub
-    ↓
-verified owning project
-    ↓
-task receipt → stop
+    ├─ ordinary dispatch → verified owner → task receipt → stop
+    └─ explicit Mission  → durable graph of verified tasks
+                            ├─ dispatch_only → receipts → stop
+                            ├─ watch_only → compact observations → stop
+                            └─ supervised → controlled fan-in → operator close
 ```
 
 - This repository contains the plugin, focused skills, setup tools, and the Hub
@@ -247,7 +351,8 @@ task receipt → stop
 - The Hub coordinates ownership and handoff; the owning project performs the
   work.
 
-Flightdeck is a coordinator, not a monorepo and not a background task monitor.
+Flightdeck is a coordinator, not a monorepo or background service. The Codex
+task remains the Mission control room.
 
 ## What gets installed
 
@@ -266,6 +371,8 @@ Installing the plugin makes these focused skills available:
 - STIG evaluation and deterministic CKL tools;
 - safe plugin upgrade planning, preservation verification, and patch notes;
 - safe recurring-automation design and review.
+- opt-in durable Mission dispatch, observation, and supervised dependency
+  coordination.
 
 The plugin does not install repositories, credentials, scheduled jobs, document
 engines, clusters, or a Hub automatically.
@@ -451,8 +558,13 @@ For project-owned work, Flightdeck:
 6. verifies the bridge handoff and instruction order;
 7. searches recent tasks and resumes a matching objective or creates one;
 8. returns project key, runtime project ID, task ID, mode, and authorization
-   boundary;
+boundary;
 9. stops without reading, polling, waiting for, or monitoring the child task.
+
+That receipt-and-stop behavior remains the default. Explicit Mission intent
+uses a separate ignored parent record and the mode-specific contract in
+[Flightdeck Missions](docs/missions.md); it never silently changes an ordinary
+dispatch into monitoring.
 
 The child reads its active repository `AGENTS.md` first and the verified Hub
 bridge second. Local mode is the default for read-only or intentional
@@ -465,6 +577,7 @@ that genuinely belongs there.
 | Prompt | Expected route |
 |---|---|
 | `Run a read-only workspace health check.` | Hub Doctor; no remediation |
+| `Run this multi-project outcome as a supervised Mission through review-ready.` | Durable Mission graph; bounded controlled fan-in; operator-only close |
 | `Configure bridge repos.` | Bridge runbook; no implementation task |
 | `Add this API behavior in the example service.` | Owning repository task, normally Worktree mode |
 | `Patch the fixable image findings without changing runtime contracts.` | Owning image or consumer repository via patching workflow |
@@ -488,6 +601,8 @@ approval remains required for:
 - compliance submission;
 - risk acceptance;
 - control, finding, or POA&M closure claims.
+- Mission closure or any attempt to broaden its original authorization
+  envelope.
 
 Flightdeck preserves dirty and untracked user state. It does not clean, reset,
 stash, force-push, overwrite unmanaged instruction files, expose sensitive
@@ -497,6 +612,7 @@ evidence, or treat client-side authorization as an enforcement boundary.
 
 Start with the generated Hub’s `README.md`, then:
 
+- `docs/workflows/missions.md` for durable multi-task coordination;
 - `docs/README.md` for the complete guide map;
 - `docs/codex-ui-workflow.md` for the project/task mental model;
 - `docs/workflows/thread-routing.md` for owner and mode selection;
@@ -538,6 +654,11 @@ commands or documents. Missing capabilities produce a precise compatibility
 result and migration diff scope without changing the Hub. See the
 [upgrade contract](plugins/flightdeck/skills/flightdeck-upgrade/references/upgrade-contract.md)
 and the machine-readable [release ledger](plugins/flightdeck/releases.json).
+
+Mission commands belong to generated-Hub template `1.1.0`. An existing Hub
+without them is preserved: Mission intent stops with an exact managed
+plan-and-diff migration scope. It does not silently fall back to ordinary
+dispatch while claiming Mission behavior.
 
 ## Uninstalling
 
@@ -584,9 +705,19 @@ after reviewing their contents and backups.
 ## Contributor validation
 
 Read [AGENTS.md](AGENTS.md) before changing the plugin. The repository
-`Makefile` exposes a self-contained `make validate` suite and a source-backed
-release suite. For the required full comparison against a read-only reference
-Hub, run:
+`Makefile` exposes a public source-local gate, focused Mission suites, and a
+separate source-backed release gate:
+
+```sh
+make public-validate
+make mission-test
+make mission-acceptance
+make mission-stress
+```
+
+`public-validate` and the Mission targets use only synthetic local fixtures;
+they do not establish installed Codex task behavior. For the required full
+comparison against a read-only reference Hub, run:
 
 ```sh
 make release-validate \

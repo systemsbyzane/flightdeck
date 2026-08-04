@@ -1,6 +1,6 @@
 ---
 name: flightdeck
-description: Coordinate portable multi-repository work from a generated Flightdeck using exact-path project verification and separate logical/runtime project identities. Use when a request begins in a Hub, spans projects or environments, needs ownership routing, planning, review, CI/CD, platform, database, STIG, or plugin lifecycle coordination, asks to connect repositories, requires an owning Codex project task, or must preserve explicit approval and no-monitoring boundaries.
+description: Coordinate portable multi-repository work from a generated Flightdeck using exact-path project verification and separate logical/runtime project identities. Use when a request begins in a Hub, spans projects or environments, needs ownership routing, planning, review, CI/CD, platform, database, STIG, plugin lifecycle, or opt-in mission coordination, asks to connect repositories, requires an owning Codex project task, or must preserve explicit approval boundaries.
 ---
 
 # Flightdeck
@@ -22,6 +22,12 @@ STIG-remediation intent, use `$flightdeck-stig`.
 For Flightdeck plugin update, reinstall, preservation, rollback, version, or
 patch-note intent, use `$flightdeck-upgrade`. An existing Hub is protected user
 state and is never regenerated as part of a plugin upgrade.
+For explicit “mission,” “coordinate end-to-end,” “take this to review-ready,”
+dependent-task monitoring, mission sync/status, supervision, consolidation, or
+closure intent, use `$flightdeck-mission`. A mission is the only opt-in
+exception to the ordinary receipt-and-stop boundary. Its core derives the
+authorization boundary from exact persisted targets and assigns criterion IDs;
+never ask the operator to mint either value.
 
 Before requiring a Hub-local command or document, read
 `references/hub-compatibility.md` and run the bundled read-only compatibility
@@ -54,7 +60,8 @@ skill without expanding the existing authorization boundary.
 5. For repository-owned work, require a verified `bridge_handoff` and include
    it completely in the child prompt.
 
-Read `references/dispatch.md` before creating or resuming a project task.
+Read `references/dispatch.md` before creating or resuming a project task. Do
+not infer mission intent merely because a request spans projects.
 For initial repository discovery and connection, use `$flightdeck-setup`.
 For advanced bridge mode changes, migration, or drift repair, use
 `$flightdeck-repo-bridge` and its mandatory
@@ -78,8 +85,10 @@ Worktree. A repo-native bridge remains tracked and is read in place.
 
 After a successful create or resume response, return the logical project key,
 opaque runtime project ID, task ID, mode, and authorization boundary
-immediately. Do not read, wait for, poll, or monitor the child task.
-Consolidate only after a later explicit user request.
+immediately. For ordinary dispatch, do not read, wait for, poll, or monitor the
+child task; consolidate only after a later explicit user request. For explicit
+mission intent, transfer control to `$flightdeck-mission` and monitor only the
+exact tasks persisted in that mission.
 
 ## Project Registration
 
@@ -107,6 +116,6 @@ publication, deployment, shared environment mutation, external communication,
 compliance submission, risk acceptance, and closure claims. Never place
 credentials or sensitive evidence in Hub state or task prompts.
 
-Use the specialized bundled skill for planning, review, CI/CD, platform,
+Use the specialized bundled skill for mission coordination, planning, review, CI/CD, platform,
 database, development, charts, patching, research, artifacts, compliance,
 STIG, setup, Doctor, repo-bridge, or plugin-upgrade work.

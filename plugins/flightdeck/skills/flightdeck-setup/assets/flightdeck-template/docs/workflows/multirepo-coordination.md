@@ -4,6 +4,11 @@ Use this workflow when one multi-repository application feature touches backend,
 optionally charts. The hub coordinates the feature; repo-scoped Codex threads do
 the implementation.
 
+The default flow dispatches every owner, returns the receipts, and stops. When
+the user explicitly asks Flightdeck to persist, watch, or supervise the outcome,
+represent the same split as a [Mission](missions.md); do not treat every
+multi-repository change as a Mission.
+
 ## Coordinator Contract
 
 The hub thread owns:
@@ -17,6 +22,13 @@ The hub thread owns:
 
 The hub thread does not edit application code inside nested repos. It starts or
 continues the actual repo projects and summarizes their outputs.
+
+For an explicit Mission, the Hub also owns the ignored parent graph, compact
+observation checkpoints, and prepared outbox receipts. It does not own child
+prose or artifact bodies. Required and optional dependencies are declared
+before dispatch, and only canonical machine-verifiable producer-bound artifact
+or task references cross automated graph edges. Check/review evidence is
+operator-terminal only.
 
 ## Thread Tool Flow
 
@@ -47,6 +59,12 @@ continues the actual repo projects and summarizes their outputs.
    paths, branch expectations, and check status in a handoff packet or in the
    Hub response, then return immediately. Do not poll, wait, or read child
    progress after dispatch.
+
+In Mission mode, record the same exact identities in the parent. A pending
+`clientThreadId` or unknown create outcome must be reconciled before another
+create. `dispatch_only` then stops; `watch_only` uses bounded compact waits;
+`supervised` may advance only dependency-ready nodes through the two-phase
+outbox. No mode can infer external authorization.
 
 ## Repo Split
 
@@ -129,3 +147,7 @@ The hub final summary for a coordinated feature should include:
 - cross-repo compatibility notes
 - remaining manual checks before GitHub `@codex review`
 
+For a Mission, validated required fan-in may derive `review_ready`, but it may
+not derive `complete`. Only the operator-requested `mission close` command can
+complete the Mission, and commit, PR, deployment, publication, risk acceptance,
+or external communication remains separately authorized.

@@ -1,0 +1,25 @@
+{
+  "name": "sample-plugin",
+  "version": "1.2.3",
+  "description": "Synthetic plugin fixture.",
+  "author": {
+    "name": "Synthetic Maintainers",
+    "email": "  ",
+    "url": "http://example.com/maintainers"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Sample Plugin",
+    "shortDescription": "Synthetic public validation fixture",
+    "longDescription": "Exercises the dependency-light public manifest validator.",
+    "developerName": "Synthetic Maintainers",
+    "category": "Developer Tools",
+    "websiteURL": "/relative/website",
+    "privacyPolicyURL": "ftp://example.com/privacy",
+    "termsOfServiceURL": "https://",
+    "capabilities": ["Read"],
+    "defaultPrompt": ["Validate this synthetic fixture."],
+    "brandColor": "#12345G",
+    "composerIcon": "./assets/icon.png"
+  }
+}

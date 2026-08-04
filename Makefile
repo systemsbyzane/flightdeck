@@ -24,6 +24,7 @@ endif
 
 .PHONY: \
 	acceptance debranding fresh-hub full-local links marketplace-validate \
+	mission-acceptance mission-stress mission-test public-validate \
 	plugin-validate preflight process-inventory process-inventory-source \
 	private-neutralization-required release-validate ruby-tests \
 	semantic-parity-local skills-validate structured \
@@ -70,6 +71,15 @@ acceptance:
 	$(PYTHON) $(SETUP)/scripts/acceptance_harness.py \
 		--json "$(LOCAL_EVIDENCE)/acceptance.json"
 
+mission-test:
+	$(PYTHON) -m unittest discover -s $(SETUP)/tests -p 'test_mission_acceptance.py' -v
+
+mission-acceptance: acceptance
+
+mission-stress:
+	PYTHONPATH="$(SETUP)/tests" $(PYTHON) -m unittest -v \
+		test_mission_acceptance.MissionAcceptanceTest.test_stress_100_missions_16_children_and_10000_replayed_snapshots
+
 process-inventory:
 	@mkdir -p "$(LOCAL_EVIDENCE)"
 	$(PYTHON) $(SETUP)/scripts/process_inventory.py \
@@ -87,6 +97,8 @@ process-inventory-source:
 		--json "$(LOCAL_EVIDENCE)/process-inventory-source.json"
 
 validate: plugin-validate marketplace-validate skills-validate structured test preflight links debranding fresh-hub acceptance process-inventory
+
+public-validate: marketplace-validate structured test preflight links debranding fresh-hub acceptance process-inventory
 
 semantic-parity-local:
 	@test -n "$(SOURCE_HUB)" || { echo "SOURCE_HUB is required"; exit 2; }

@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/mission-observation.schema.json",
+  "title": "Flightdeck Mission Observation Batch",
+  "description": "Normalized child status envelopes. Raw final text, evidence, messages, and arbitrary payload fields are forbidden.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_version", "kind", "schema", "mission_id", "observed_at", "observations"],
+  "properties": {
+    "api_version": {"const": "flightdeck.dev/v1alpha1"},
+    "kind": {"const": "MissionObservationBatch"},
+    "schema": {"const": "hub/schemas/mission-observation.schema.json"},
+    "mission_id": {"$ref": "#/$defs/id"},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "observations": {"type": "array", "items": {"$ref": "#/$defs/observation"}}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$", "maxLength": 128},
+    "opaque": {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^\\u0000-\\u001f\\u007f]+$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "outputDeclaration": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["type", "artifact_id", "digest"],
+          "properties": {
+            "type": {"$ref": "#/$defs/id"},
+            "artifact_id": {"$ref": "#/$defs/id"},
+            "digest": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["type", "codex_task"],
+          "properties": {"type": {"$ref": "#/$defs/id"}, "codex_task": {"const": true}}
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["type", "ref", "digest"],
+          "properties": {
+            "type": {"$ref": "#/$defs/id"},
+            "ref": {"type": "string", "maxLength": 1536, "pattern": "^(?:check|review):[A-Za-z0-9][A-Za-z0-9._~:/#@+\\-]{0,1534}$"},
+            "digest": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]}
+          }
+        }
+      ]
+    },
+    "criterionResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["criterion_id", "disposition", "status_code"],
+      "properties": {
+        "criterion_id": {"$ref": "#/$defs/id"},
+        "disposition": {"enum": ["passed", "failed", "blocked", "degraded"]},
+        "status_code": {"$ref": "#/$defs/id"}
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "code", "validation", "output_declarations", "criterion_results"],
+      "properties": {
+        "schema_version": {"const": "flightdeck.child-outcome/v1"},
+        "code": {"$ref": "#/$defs/id"},
+        "validation": {"enum": ["passed", "failed", "not_applicable"]},
+        "output_declarations": {"type": "array", "items": {"$ref": "#/$defs/outputDeclaration"}},
+        "criterion_results": {"type": "array", "items": {"$ref": "#/$defs/criterionResult"}}
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_id", "logical_project_key", "runtime_project_id", "project_path_digest",
+        "host_id", "task_id", "cursor", "revision", "event_id", "observed_state", "status_code",
+        "observed_at", "worktree_ready"
+      ],
+      "properties": {
+        "node_id": {"$ref": "#/$defs/id"},
+        "logical_project_key": {"$ref": "#/$defs/id"},
+        "runtime_project_id": {"$ref": "#/$defs/opaque"},
+        "project_path_digest": {"$ref": "#/$defs/sha256"},
+        "host_id": {"$ref": "#/$defs/opaque"},
+        "task_id": {"$ref": "#/$defs/opaque"},
+        "cursor": {"$ref": "#/$defs/opaque"},
+        "revision": {"type": "integer", "minimum": 0},
+        "event_id": {"$ref": "#/$defs/opaque"},
+        "observed_state": {
+          "enum": ["running", "needs_approval", "blocked", "failed_validation", "runtime_failure", "review_ready", "cancelled", "notLoaded"]
+        },
+        "status_code": {"$ref": "#/$defs/id"},
+        "observed_at": {"type": "string", "format": "date-time"},
+        "worktree_ready": {"type": "boolean"},
+        "outcome": {"$ref": "#/$defs/outcome"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"observed_state": {"enum": ["review_ready", "failed_validation"]}},
+            "required": ["observed_state"]
+          },
+          "then": {"required": ["outcome"]},
+          "else": {"not": {"required": ["outcome"]}}
+        }
+      ]
+    }
+  }
+}

@@ -10,6 +10,7 @@ workspace:
   root: "__FLIGHTDECK_ROOT__"
   coordination_project_key: flightdeck
   task_records_root: hub/tasks
+  mission_records_root: hub/missions
   report_root: hub/reports
   policy_root: docs
   local_registry: hub/state/repositories.yaml
@@ -220,6 +221,20 @@ automation_templates:
   root: hub/automations
   activation_policy: explicit_user_enablement
   default_enabled: false
+
+mission_control:
+  default_mode: dispatch_only
+  allowed_modes: [dispatch_only, watch_only, supervised]
+  allowed_actions: [observe, dependency_handoff, offer_fan_in]
+  explicit_close_required: true
+  budgets:
+    max_units: 50
+    max_retries: 3
+    max_actions: 200
+    max_forwarded_bytes: 65536
+    max_duration_seconds: 604800
+    stale_after_seconds: 3600
+    max_record_bytes: 2097152
 
 routing:
   default_coordination_project_key: flightdeck
