@@ -10,6 +10,8 @@ module Flightdeck
     LIST_SCHEMA = "hub/schemas/mission-list.schema.json"
     LIST_DEFAULT_LIMIT = 50
     LIST_MAX_LIMIT = 100
+    LIST_MAX_MISSIONS = 1_000
+    LIST_MAX_RECORD_BYTES = 262_144
     LIST_CURSOR_PREFIX = "v1."
     LIST_TERMINAL_STATES = %w[review_ready failed_validation runtime_failure cancelled complete].freeze
     LIST_ATTENTION_STATES = %w[
@@ -886,9 +888,16 @@ module Flightdeck
         raise ListError.new("invalid_hub_root", "Selected Hub Mission root is not a regular directory.")
       end
 
-      Dir.children(root).sort.filter_map do |entry|
+      entries = []
+      Dir.each_child(root) do |entry|
         next if entry == ".lock"
 
+        entries << entry
+        if entries.length > LIST_MAX_MISSIONS
+          raise ListError.new("mission_limit_exceeded", "Selected Hub exceeds the Mission list safety limit.")
+        end
+      end
+      entries.sort.filter_map do |entry|
         begin
           Support.validate_slug!(entry, label: "mission slug")
         rescue UsageError
@@ -911,9 +920,9 @@ module Flightdeck
     end
 
     def mission_list_summary(mission_id)
-      mission = fetch(mission_id)
+      mission = fetch_list_record(mission_id)
       validate_or_raise!(mission, expected_slug: mission_id)
-      mission = status_view(mission)
+      mission = read_only_status_view(mission)
       node_values = Array(mission.dig("spec", "graph", "nodes"))
       states = node_values.map { |node| node["observed_state"] }
       {
@@ -962,6 +971,49 @@ module Flightdeck
       mission_id
     rescue ArgumentError, UsageError
       raise ListError.new("invalid_cursor", "Cursor is invalid.", exit_status: 2)
+    end
+
+    def read_only_status_view(mission)
+      view = Support.stringify(mission)
+      apply_stale_states!(view)
+      prepared_handoff_nodes = outbox(view).filter_map do |action|
+        action.dig("payload", "node_id") if action["type"] == "dependency_handoff" && action["status"] == "prepared"
+      end
+      nodes(view).each do |node|
+        next unless node["observed_state"] == "awaiting_handoff" && prepared_handoff_nodes.include?(node["id"])
+
+        node["observed_state"] = "running"
+        node["status_code"] = "handing_off"
+      end
+      derive_state!(view, touch: false)
+      view["status"]["fan_in_ready"] = fan_in_ready?(view)
+      view["status"]["prepared_actions"] = outbox(view).count { |action| action["status"] == "prepared" }
+      view
+    end
+
+    def fetch_list_record(mission_id)
+      path = mission_path(mission_id)
+      expected = File.lstat(path)
+      unless expected.file? && !expected.symlink?
+        raise ValidationError, "Mission record is not a regular file"
+      end
+      max_bytes = [config.mission_budgets.fetch("max_record_bytes"), LIST_MAX_RECORD_BYTES].min
+      content = File.open(path, "rb") do |file|
+        opened = file.stat
+        unless opened.file? && opened.dev == expected.dev && opened.ino == expected.ino
+          raise ValidationError, "Mission record changed while being read"
+        end
+        value = file.read(max_bytes + 1)
+        raise ValidationError, "Mission record exceeds maximum size" if value.bytesize > max_bytes
+
+        value
+      end
+      value = Support.safe_yaml(content, source: "Mission record")
+      raise ValidationError, "Mission record must contain a mapping" unless value.is_a?(Hash)
+
+      value
+    rescue SystemCallError
+      raise ValidationError, "Mission record is unavailable"
     end
 
     def build_complete_mission(slug:, title:, outcome:, mode:, success_criteria:, non_goals:,

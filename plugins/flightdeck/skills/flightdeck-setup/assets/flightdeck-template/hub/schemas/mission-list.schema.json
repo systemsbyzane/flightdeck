@@ -47,7 +47,8 @@
                 "unsupported_hub_contract",
                 "invalid_limit",
                 "invalid_cursor",
-                "malformed_mission_record"
+                "malformed_mission_record",
+                "mission_limit_exceeded"
               ]
             },
             "message": {"type": "string", "minLength": 1, "maxLength": 256},

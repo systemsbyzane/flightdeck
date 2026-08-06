@@ -82,8 +82,8 @@ module Flightdeck
     rescue MissionStore::ListError => e
       emit_mission_list_error(e.code, e.message, mission_id: e.mission_id)
       e.exit_status
-    rescue UsageError, OptionParser::ParseError => e
-      emit_mission_list_error("invalid_request", e.message)
+    rescue UsageError, OptionParser::ParseError
+      emit_mission_list_error("invalid_request", "Mission list request is invalid.")
       2
     rescue ConfigurationError, ValidationError, SystemCallError
       emit_mission_list_error("invalid_hub_root", "Selected Hub root is not a valid Flightdeck Hub.")

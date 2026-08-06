@@ -201,6 +201,7 @@
       },
       "managed_paths": [
         "bin/flightdeck",
+        "docs/workflows/mission-authoring-api.md",
         "lib/flightdeck/cli.rb",
         "lib/flightdeck/mission_graph.rb",
         "lib/flightdeck/mission_store.rb",

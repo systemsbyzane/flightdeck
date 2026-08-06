@@ -58,13 +58,13 @@ selects `supervised` unless the user sets a different boundary.
 
 ## Run a mission
 
-Generated-Hub template `1.2.0` adds exactly one neutral desktop-client
-capability, `flightdeck.command.mission-authoring.v1`. It provides closed JSON
-catalog, complete preview, explicitly confirmed atomic create, and read-only
-operation recovery commands without exposing Mission YAML or generic command
-execution. Older Hubs remain selectable but unsupported for this capability;
-they are never regenerated or migrated automatically. The exact client
-contract lives in the generated template's
+Generated-Hub template `1.2.0` adds two independent neutral desktop-client
+capabilities: `flightdeck.command.mission-list.v1` for bounded read-only
+discovery and `flightdeck.command.mission-authoring.v1` for closed JSON catalog,
+complete preview, explicitly confirmed atomic create, and read-only operation
+recovery without exposing Mission YAML or generic command execution. Older Hubs
+remain selectable but unsupported for either missing capability; they are never
+regenerated or migrated automatically. The exact client contract lives in the generated template's
 [Mission authoring API](../plugins/flightdeck/skills/flightdeck-setup/assets/flightdeck-template/docs/workflows/mission-authoring-api.md).
 
 In a fresh Codex task with a Mission-capable Hub, ask naturally:

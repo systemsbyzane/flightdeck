@@ -77,9 +77,21 @@ installed Mission skill checks the Hub's `flightdeck.command.mission-manage.v1`,
 `flightdeck.command.mission-sync.v1`, and
 `flightdeck.document.mission-control.v1` capabilities before use.
 
-Typed client Mission authoring first appears in template `1.2.0` and advertises
-only `flightdeck.command.mission-authoring.v1`. A client must require that exact
-capability rather than inferring it from the four older Mission capabilities.
+Template `1.2.0` introduces two independent typed desktop-client capabilities:
+`flightdeck.command.mission-list.v1` for bounded read-only list views and
+`flightdeck.command.mission-authoring.v1` for guided catalog, preview, confirmed
+create, and recovery. A client must require the exact capability it needs from
+the regular `hub/compatibility.json` manifest rather than infer support from
+the four older Mission capabilities or run Doctor/status as a capability probe.
+
+For a preserved Hub that needs both desktop surfaces, the later separately
+authorized migration must compare the exact managed paths returned by the
+compatibility checker for both capabilities, plus `hub/compatibility.json`.
+That comparison does not include ignored Mission records, operations, tasks,
+reports, attached repositories, or client dispatch state. Neither capability
+enables managed local dispatch: source-path reconciliation, lock-publication,
+exclusive ownership, and unknown provider outcomes stay fail-closed client
+gates until independently proven.
 
 If a Mission command is missing, the only valid behavior is
 `stop_and_plan_migration` with the exact managed paths from the compatibility

@@ -2086,6 +2086,14 @@ class FlightdeckTest < Minitest::Test
       assert_equal 2, cli.run(["mission", "list", "--hub-root", root, "--cursor", "not-a-v1-cursor"])
       assert_equal "invalid_cursor", JSON.parse(output.string).dig("error", "code")
 
+      output.truncate(0)
+      output.rewind
+      assert_equal 2, cli.run(["mission", "list", "--hub-root", root, "--unknown-#{'x' * 512}"])
+      invalid_request = JSON.parse(output.string)
+      assert_equal "invalid_request", invalid_request.dig("error", "code")
+      assert_equal "Mission list request is invalid.", invalid_request.dig("error", "message")
+      assert_operator invalid_request.dig("error", "message").bytesize, :<=, 256
+
       assert_equal before_bytes, File.binread(alpha_path)
       assert_equal before_status, store.status("alpha-mission")
       assert_equal before_validation, store.validate("alpha-mission")
@@ -2138,6 +2146,20 @@ class FlightdeckTest < Minitest::Test
       refute error.key?("missions")
     end
 
+    with_hub do |root, config|
+      create_mission(config, slug: "oversized-mission")
+      path = File.join(config.mission_dir, "oversized-mission", "mission.yaml")
+      File.binwrite(path, "x" * (config.mission_budgets.fetch("max_record_bytes") + 1))
+
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
+      assert_equal 1, cli.run(["mission", "list", "--hub-root", root])
+      error = JSON.parse(output.string)
+      assert_equal "malformed_mission_record", error.dig("error", "code")
+      assert_equal "oversized-mission", error.dig("error", "mission_id")
+      refute_includes output.string, root
+    end
+
     with_hub do |root, _config|
       compatibility_path = File.join(root, "hub", "compatibility.json")
       compatibility = JSON.parse(File.read(compatibility_path))
@@ -2159,6 +2181,8 @@ class FlightdeckTest < Minitest::Test
     assert_equal 100, schema.dig("$defs", "success", "properties", "missions", "maxItems")
     assert_includes schema.dig("$defs", "error", "properties", "error", "properties", "code", "enum"),
                     "unsupported_hub_contract"
+    assert_includes schema.dig("$defs", "error", "properties", "error", "properties", "code", "enum"),
+                    "mission_limit_exceeded"
 
     compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
     capability = compatibility.dig("capabilities", "flightdeck.command.mission-list.v1")

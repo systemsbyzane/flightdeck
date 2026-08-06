@@ -14,11 +14,42 @@ call generic Flightdeck commands through this contract. Catalog, plan, and
 operation recovery are read-only. Create persists one complete Mission record;
 it does not create, resume, dispatch, observe, execute, or close Codex tasks.
 
-Before enabling the controls, read `hub/compatibility.json` and require the
-exact capability ID. A Hub without it remains selectable, but the client must
-show a diagnosable unsupported state. Do not infer support from a plugin
-version, probe older Mission commands as a substitute, regenerate the Hub, or
-automatically apply the compatibility checker's migration plan.
+Before enabling the controls, read the regular non-symlink
+`hub/compatibility.json` and require the exact capability ID. This versioned,
+bounded manifest is the lightweight client probe: it does not run Doctor,
+status, repository discovery, or a generic command. A Hub without the required
+capability remains selectable, but the client must show a diagnosable
+unsupported state. Do not infer support from a plugin version, probe older
+Mission commands as a substitute, regenerate the Hub, or automatically apply
+the compatibility checker's migration plan.
+
+The authoring capability is independent of task dispatch. It never proves a
+managed Worktree's source-path reconciliation, exclusive ownership, lock
+publication, or provider receipt. A desktop client must keep managed dispatch
+disabled unless its own separately reviewed control plane proves all of those
+conditions. An unknown task or create outcome remains recovery-only: never
+retry, guess identity, or create a replacement task.
+
+## Read-only Mission listing
+
+Require `flightdeck.command.mission-list.v1` before invoking:
+
+```text
+bin/flightdeck mission list --hub-root /absolute/path/to/selected-hub \
+  --limit 50 [--cursor OPAQUE_CURSOR] [--json]
+```
+
+This is the only plugin-owned list surface for a selected Hub. It returns the
+closed `flightdeck.mission-list/v1` projection: stable Mission ID, bounded
+display title, mode, state, timestamps, generation, fan-in readiness, and unit
+progress counts. The cursor is opaque; the default limit is 50 and the maximum
+is 100. The result contains no Mission YAML, outcome text, task or project
+identity, raw path, output reference, outbox record, credential, or evidence.
+Malformed records fail the whole page closed with a stable error and no partial
+results. Core scans at most 1,000 Mission entries and reads at most 262,144
+bytes per record; a limit breach is a stable closed error, never a partial page.
+Listing is not a recovery mechanism for an unknown authoring create:
+recover only through the original authoring operation ID.
 
 ## Commands and schemas
 

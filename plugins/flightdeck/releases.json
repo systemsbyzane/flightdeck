@@ -325,6 +325,36 @@
         "For an existing Hub, request and explicitly approve the compatibility checker's exact managed plan-and-diff migration before using Mission commands.",
         "Mission intent on a Hub without the required Mission capabilities must stop; do not silently fall back to ordinary dispatch or claim Mission behavior."
       ]
+    },
+    {
+      "version": "0.1.0+codex.20260806123251",
+      "date": "2026-08-06",
+      "summary": "Capability-gated desktop Mission discovery and authoring control plane.",
+      "changes": [
+        {
+          "category": "added",
+          "text": "Added the bounded read-only flightdeck.command.mission-list.v1 contract for selected-Hub Mission summaries, opaque pagination, stable errors, and no YAML scraping."
+        },
+        {
+          "category": "added",
+          "text": "Added the capability-gated flightdeck.command.mission-authoring.v1 catalog, complete preview, explicit confirmed create, and exact operation recovery contract with core-owned identities and authorization boundaries."
+        },
+        {
+          "category": "changed",
+          "text": "Documented hub/compatibility.json as the lightweight versioned client probe. Full Doctor and status remain separate diagnostics and are not required to discover these two contracts."
+        },
+        {
+          "category": "fixed",
+          "text": "Preserved pending and unknown Mission authoring outcomes as exact operation recovery states; neither listing nor authoring capability support authorizes task creation retries, Worktree preservation, or dispatch ownership inference."
+        }
+      ],
+      "breaking_changes": [],
+      "migration": [
+        "Start a fresh Codex task after upgrading so the revised Flightdeck skills and client-contract guidance load.",
+        "Existing generated Hubs are preserved and are never automatically migrated, regenerated, or edited by plugin upgrade.",
+        "For a selected preserved Hub, run the read-only compatibility checker for flightdeck.command.mission-list.v1 and flightdeck.command.mission-authoring.v1, then compare only its reported managed paths against a separately generated candidate before any separately authorized migration.",
+        "Do not enable managed local dispatch solely because either capability is present; client-side source-path reconciliation, exclusive ownership, lock publication, and ambiguous provider outcomes remain independently fail-closed gates."
+      ]
     }
   ]
 }
