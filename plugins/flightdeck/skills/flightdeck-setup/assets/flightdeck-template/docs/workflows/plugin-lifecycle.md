@@ -77,6 +77,10 @@ installed Mission skill checks the Hub's `flightdeck.command.mission-manage.v1`,
 `flightdeck.command.mission-sync.v1`, and
 `flightdeck.document.mission-control.v1` capabilities before use.
 
+Typed client Mission authoring first appears in template `1.2.0` and advertises
+only `flightdeck.command.mission-authoring.v1`. A client must require that exact
+capability rather than inferring it from the four older Mission capabilities.
+
 If a Mission command is missing, the only valid behavior is
 `stop_and_plan_migration` with the exact managed paths from the compatibility
 checker. Do not run setup, regenerate the Hub, edit ignored Mission state, or

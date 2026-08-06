@@ -168,6 +168,14 @@ bin/flightdeck mission next-actions example-release --json
 bin/flightdeck mission status example-release --json
 ```
 
+Desktop clients use the closed, capability-gated
+[Mission authoring API](docs/workflows/mission-authoring-api.md), never Mission
+YAML or generic command passthrough. Require exactly
+`flightdeck.command.mission-authoring.v1`, preview the complete graph, confirm
+its exact plan identity/generation/digest/token, submit create once with one
+opaque operation ID, and recover ambiguity through the read-only operation
+command.
+
 Read-only commands do not fetch, clone, edit, register projects, or mutate
 environments. Generated state is ignored.
 

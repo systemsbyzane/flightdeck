@@ -524,6 +524,13 @@ Hubs are never automatically migrated. Before Mission work, the installed skill
 checks `hub/compatibility.json` for the Mission command and document
 capabilities.
 
+The neutral typed desktop-client authoring surface first appears in template
+`1.2.0` as exactly `flightdeck.command.mission-authoring.v1`. Its catalog,
+preview, confirmed create, and recovery contract is documented in
+[Mission authoring API](mission-authoring-api.md). Older Hubs remain selectable
+but diagnosably unsupported for that capability; existing Mission commands do
+not imply authoring support.
+
 If a command capability is missing, stop and return the checker's exact managed
 plan-and-diff scope. Do not run setup, overwrite the Hub, touch ignored state,
 or silently turn the request into direct dispatch. The bundled Mission

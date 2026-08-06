@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/mission-authoring-operation-request.schema.json",
+  "title": "Flightdeck Mission authoring operation request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "operation_id"],
+  "properties": {
+    "schema_version": {"const": "flightdeck.mission-authoring.operation-request/v1"},
+    "operation_id": {"$ref": "mission-authoring-types.schema.json#/$defs/operationId"}
+  }
+}

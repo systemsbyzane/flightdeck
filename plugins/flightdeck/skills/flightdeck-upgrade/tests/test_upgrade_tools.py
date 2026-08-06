@@ -120,13 +120,14 @@ class PatchNotesTests(unittest.TestCase):
                 / "compatibility.json"
             ).read_text(encoding="utf-8")
         )
-        self.assertEqual(compatibility["template_version"], "1.1.0")
+        self.assertEqual(compatibility["template_version"], "1.2.0")
         capabilities = compatibility["capabilities"]
         command_ids = (
             "flightdeck.command.mission-manage.v1",
             "flightdeck.command.mission-plan.v1",
             "flightdeck.command.mission-status.v1",
             "flightdeck.command.mission-sync.v1",
+            "flightdeck.command.mission-authoring.v1",
         )
         for capability_id in command_ids:
             self.assertEqual(

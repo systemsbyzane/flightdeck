@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/mission-authoring-catalog-result.schema.json",
+  "title": "Flightdeck Mission authoring catalog result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "schema", "ok", "capability", "catalog_generation", "targets", "warnings"],
+  "properties": {
+    "schema_version": {"const": "flightdeck.mission-authoring.catalog-result/v1"},
+    "schema": {"const": "hub/schemas/mission-authoring-catalog-result.schema.json"},
+    "ok": {"const": true},
+    "capability": {"const": "flightdeck.command.mission-authoring.v1"},
+    "catalog_generation": {"type": "string", "pattern": "^catalog-[0-9a-f]{48}$"},
+    "targets": {"type": "array", "maxItems": 1000, "items": {"$ref": "mission-authoring-types.schema.json#/$defs/catalogTarget"}},
+    "warnings": {"type": "array", "maxItems": 1000, "items": {"$ref": "mission-authoring-types.schema.json#/$defs/warning"}}
+  }
+}

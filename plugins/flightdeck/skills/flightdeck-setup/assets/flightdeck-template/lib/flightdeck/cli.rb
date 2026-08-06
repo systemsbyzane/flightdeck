@@ -3,6 +3,7 @@
 require "optparse"
 require_relative "bridge_bulk_store"
 require_relative "doctor"
+require_relative "mission_authoring"
 require_relative "mission_sync"
 require_relative "repo_planner"
 require_relative "repository_store"
@@ -326,6 +327,9 @@ module Flightdeck
 
     def mission(config, argv)
       subcommand = argv.shift
+      if %w[authoring-catalog authoring-plan authoring-create authoring-operation].include?(subcommand)
+        return mission_authoring(config, subcommand, argv)
+      end
       store = MissionStore.new(config)
       case subcommand
       when "new"
@@ -474,6 +478,37 @@ module Flightdeck
       0
     end
 
+    def mission_authoring(config, subcommand, argv)
+      options = { json: false }
+      OptionParser.new do |parser|
+        parser.on("--request FILE") { |value| options[:request_path] = value }
+        parser.on("--json") { options[:json] = true }
+      end.parse!(argv)
+      empty!(argv)
+      raise UsageError, "--request is required" unless options[:request_path]
+
+      request = MissionAuthoring.load_request(options.fetch(:request_path))
+      authoring = MissionAuthoring.new(config)
+      result = case subcommand
+               when "authoring-catalog" then authoring.catalog(request)
+               when "authoring-plan" then authoring.plan(request)
+               when "authoring-create" then authoring.create(request)
+               when "authoring-operation" then authoring.operation(request)
+               end
+      json(result)
+      0
+    rescue UsageError, ValidationError => e
+      json(MissionAuthoring.error_result(subcommand.to_s.delete_prefix("authoring-"), e))
+      1
+    rescue StandardError
+      error = MissionAuthoring::ContractError.new(
+        "internal_error",
+        "Mission authoring failed closed; recover a create only with its original operation ID"
+      )
+      json(MissionAuthoring.error_result(subcommand.to_s.delete_prefix("authoring-"), error))
+      1
+    end
+
     def help
       @out.puts <<~HELP
         Flightdeck command line
@@ -499,6 +534,10 @@ module Flightdeck
           bin/flightdeck mission show SLUG [--json]
           bin/flightdeck mission validate SLUG [--json]
           bin/flightdeck mission status SLUG [--json]
+          bin/flightdeck mission authoring-catalog --request FILE [--json]
+          bin/flightdeck mission authoring-plan --request FILE [--json]
+          bin/flightdeck mission authoring-create --request FILE [--json]
+          bin/flightdeck mission authoring-operation --request FILE [--json]
           bin/flightdeck mission add SLUG NODE --project-key KEY --runtime-project-id ID (--project-path PATH|--project-path-digest SHA256) --host-id HOST --execution-mode local|worktree --access-mode read_only|write --work-type TYPE (--required|--optional) [--criterion-id ID] [--depends-on NODE] [--accepts TYPE] --allows-output TYPE [--artifact-resolver-kind same_host_workspace|external_approved --artifact-resolver-id ID] [--json]
           bin/flightdeck mission record-dispatch SLUG NODE --runtime-project-id ID --host-id HOST [--task-id ID [--pending-client-id ID]|--pending-client-id ID|--dispatch-unknown] [--project-path PATH|--project-path-digest SHA256] [--json]
           bin/flightdeck mission sync-plan SLUG --observations FILE [--json]
@@ -512,11 +551,17 @@ module Flightdeck
           bin/flightdeck mission close SLUG [--json]
 
         doctor, status, setup plan, route plan, repo plan, bridge plan, mission show,
-        mission validate, mission status, mission sync-plan, mission outbox, and
-        mission next-actions are read-only.
+        mission validate, mission status, mission authoring-catalog, mission
+        authoring-plan, mission authoring-operation, mission sync-plan, mission
+        outbox, and mission next-actions are read-only.
         status --write, setup connect, repo onboard, bridge install, task new,
-        task transition, and mission mutations use explicit state-changing names
-        and write only their documented scope.
+        task transition, mission authoring-create, and other mission mutations use
+        explicit state-changing names and write only their documented scope.
+        Mission authoring commands accept only their closed versioned JSON request
+        schemas and always emit a closed JSON result. Create requires the exact
+        current plan identity, generation, digest, token, and one opaque operation ID.
+        Never retry an unknown authoring-create result; query authoring-operation
+        with the original operation ID.
         Mission mode defaults to dispatch_only; only watch_only and supervised accept explicit sync.
         watch_only and supervised require explicit --success-criterion and --authorized-target-json.
         dispatch_only derives one success criterion from --outcome when none is supplied.

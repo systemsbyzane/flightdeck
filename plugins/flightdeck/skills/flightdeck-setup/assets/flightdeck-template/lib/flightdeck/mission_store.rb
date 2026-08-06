@@ -117,6 +117,53 @@ module Flightdeck
       mission
     end
 
+    # Builds and validates a complete Mission without persisting it. This is the
+    # service-side preview boundary used by typed authoring clients.
+    def preview_complete(slug:, title:, outcome:, mode: nil, success_criteria: nil, non_goals: [],
+                         authorized_targets: [], nodes: [])
+      mission = build_complete_mission(
+        slug: slug,
+        title: title,
+        outcome: outcome,
+        mode: mode,
+        success_criteria: success_criteria,
+        non_goals: non_goals,
+        authorized_targets: authorized_targets,
+        nodes: nodes
+      )
+      validate_or_raise!(mission, expected_slug: slug)
+      mission
+    end
+
+    # Persists the already-complete graph as one Mission record. No partial
+    # Mission is visible if graph construction or the final atomic write fails.
+    def create_complete(slug:, title:, outcome:, mode: nil, success_criteria: nil, non_goals: [],
+                        authorized_targets: [], nodes: [], authoring_binding: nil)
+      mission = preview_complete(
+        slug: slug,
+        title: title,
+        outcome: outcome,
+        mode: mode,
+        success_criteria: success_criteria,
+        non_goals: non_goals,
+        authorized_targets: authorized_targets,
+        nodes: nodes
+      )
+      if authoring_binding
+        value = Support.stringify(authoring_binding)
+        required = %w[operation_digest plan_id plan_digest]
+        unless value.keys.sort == required.sort &&
+               MissionStore::SHA256.match?(value["operation_digest"].to_s) &&
+               MissionStore::SHA256.match?(value["plan_digest"].to_s) &&
+               value["plan_id"].to_s.match?(/\Aplan-[0-9a-f]{48}\z/)
+          raise UsageError, "Mission authoring binding is invalid"
+        end
+        mission["metadata"]["authoring"] = required.to_h { |field| [field, value.fetch(field)] }
+      end
+      validate_or_raise!(mission, expected_slug: slug)
+      persist_complete_mission!(mission)
+    end
+
     def fetch(slug)
       Support.validate_slug!(slug, label: "mission slug")
       path = mission_path(slug)
@@ -687,6 +734,16 @@ module Flightdeck
       %w[title created_at updated_at].each do |field|
         errors << "metadata.#{field} is required" unless Support.present?(mission.dig("metadata", field))
       end
+      authoring = mission.dig("metadata", "authoring")
+      if authoring
+        unless authoring.is_a?(Hash) && authoring.keys.sort == %w[operation_digest plan_digest plan_id]
+          errors << "metadata.authoring must be a closed operation and plan binding"
+        else
+          errors << "metadata.authoring operation_digest must be sha256" unless SHA256.match?(authoring["operation_digest"].to_s)
+          errors << "metadata.authoring plan_digest must be sha256" unless SHA256.match?(authoring["plan_digest"].to_s)
+          errors << "metadata.authoring plan_id is invalid" unless authoring["plan_id"].to_s.match?(/\Aplan-[0-9a-f]{48}\z/)
+        end
+      end
       %w[metadata.created_at metadata.updated_at].each do |field|
         Time.iso8601(Support.dig_path(mission, field).to_s)
       rescue ArgumentError
@@ -771,6 +828,201 @@ module Flightdeck
     end
 
     private
+
+    def build_complete_mission(slug:, title:, outcome:, mode:, success_criteria:, non_goals:,
+                               authorized_targets:, nodes:)
+      Support.validate_slug!(slug, label: "mission slug")
+      validate_text!(title, "--title", max: 256)
+      validate_text!(outcome, "--outcome", max: 2048)
+      selected_mode = (mode || config.mission_defaults.fetch("default_mode", "dispatch_only")).to_s
+      raise UsageError, "unknown mission mode: #{selected_mode}" unless MODES.include?(selected_mode)
+
+      criterion_texts = Array(success_criteria).map do |value|
+        normalize_bounded_text!(value, "success criterion")
+      end
+      if criterion_texts.empty? && selected_mode == "dispatch_only"
+        criterion_texts = [outcome.to_s.strip]
+      elsif criterion_texts.empty?
+        raise UsageError, "at least one --success-criterion is required for #{selected_mode} missions"
+      end
+      goals_excluded = Array(non_goals).map { |value| normalize_bounded_text!(value, "non-goal") }
+      raise UsageError, "success criteria must be unique" unless criterion_texts.uniq.length == criterion_texts.length
+      raise UsageError, "non-goals must be unique" unless goals_excluded.uniq.length == goals_excluded.length
+      criteria = criterion_texts.each_with_index.map do |text, index|
+        { "id" => format("criterion-%03d", index + 1), "text" => text }
+      end
+      targets = normalize_authorized_targets!(authorized_targets)
+      raise UsageError, "at least one authorized target is required" if targets.empty?
+      authorization_boundary = derive_authorization_boundary(slug, targets, criteria, goals_excluded)
+      now = timestamp
+      mission = {
+        "api_version" => "flightdeck.dev/v1alpha1",
+        "kind" => "MissionRecord",
+        "schema" => "hub/schemas/mission.schema.json",
+        "metadata" => {
+          "id" => slug,
+          "title" => title.to_s.strip,
+          "created_at" => now,
+          "updated_at" => now
+        },
+        "spec" => {
+          "mode" => selected_mode,
+          "outcome" => outcome.to_s.strip,
+          "success_criteria" => criteria,
+          "non_goals" => goals_excluded,
+          "authorized_targets" => targets,
+          "authorization_boundary" => authorization_boundary,
+          "budgets" => config.mission_budgets,
+          "graph" => { "nodes" => [] }
+        },
+        "status" => {
+          "state" => "planned",
+          "generation" => 0,
+          "closed_at" => nil,
+          "checkpoint" => { "number" => 0, "at" => nil, "generation" => 0 },
+          "outbox" => [],
+          "history" => [
+            { "at" => now, "event" => "created", "state" => "planned" }
+          ]
+        }
+      }
+
+      Array(nodes).each do |node|
+        append_complete_node!(mission, node)
+      end
+      enforce_criterion_coverage!(mission)
+      mission
+    end
+
+    def append_complete_node!(mission, attributes)
+      unless attributes.is_a?(Hash) && attributes.keys.all? { |key| key.is_a?(Symbol) }
+        raise UsageError, "complete Mission node input must use typed fields"
+      end
+      node_id = attributes.fetch(:node_id)
+      logical_project_key = attributes.fetch(:logical_project_key)
+      runtime_project_id = attributes.fetch(:runtime_project_id)
+      project_path_digest = attributes.fetch(:project_path_digest)
+      host_id = attributes.fetch(:host_id)
+      execution_mode = attributes.fetch(:execution_mode).to_s
+      access_mode = attributes.fetch(:access_mode).to_s
+      work_type = attributes.fetch(:work_type)
+      required = attributes.fetch(:required)
+      dependencies = Array(attributes.fetch(:dependencies, [])).map(&:to_s)
+      accepted_input_types = Array(attributes.fetch(:accepted_input_types, [])).map(&:to_s)
+      allowed_output_types = Array(attributes.fetch(:allowed_output_types)).map(&:to_s)
+      criterion_ids = Array(attributes.fetch(:criterion_ids, [])).map(&:to_s)
+
+      Support.validate_identifier!(node_id, label: "node ID")
+      Support.validate_identifier!(logical_project_key, label: "logical project key")
+      validate_opaque!(runtime_project_id, "runtime project ID")
+      validate_opaque!(host_id, "host ID")
+      Support.validate_identifier!(work_type, label: "work type")
+      raise UsageError, "required must be boolean" unless [true, false].include?(required)
+      raise UsageError, "execution mode must be local or worktree" unless EXECUTION_MODES.include?(execution_mode)
+      raise UsageError, "access mode must be read_only or write" unless %w[read_only write].include?(access_mode)
+      unless SHA256.match?(project_path_digest.to_s)
+        raise UsageError, "project path digest must be a lowercase sha256"
+      end
+      target = {
+        "logical_project_key" => logical_project_key.to_s,
+        "runtime_project_id" => runtime_project_id.to_s,
+        "project_path_digest" => project_path_digest.to_s,
+        "host_id" => host_id.to_s,
+        "execution_mode" => execution_mode,
+        "access_mode" => access_mode
+      }
+      unless mission.dig("spec", "authorized_targets").include?(target)
+        raise ValidationError, "node #{node_id} is outside the mission authorized target scope"
+      end
+
+      known_criteria = mission.dig("spec", "success_criteria").map { |criterion| criterion["id"] }
+      raise UsageError, "criterion IDs must be unique" unless criterion_ids.uniq.length == criterion_ids.length
+      criterion_ids.each { |id| Support.validate_identifier!(id, label: "criterion ID") }
+      unknown_criteria = criterion_ids - known_criteria
+      raise UsageError, "unknown criterion IDs: #{unknown_criteria.join(', ')}" unless unknown_criteria.empty?
+      raise UsageError, "required nodes must declare at least one criterion ID" if required && criterion_ids.empty?
+
+      raise UsageError, "dependencies must be unique" unless dependencies.uniq.length == dependencies.length
+      raise UsageError, "accepted input types must be unique" unless accepted_input_types.uniq.length == accepted_input_types.length
+      raise UsageError, "allowed output types must be unique" unless allowed_output_types.uniq.length == allowed_output_types.length
+      dependencies.each { |id| Support.validate_identifier!(id, label: "dependency node ID") }
+      accepted_input_types.each { |value| Support.validate_identifier!(value, label: "accepted input type") }
+      allowed_output_types.each { |value| Support.validate_identifier!(value, label: "allowed output type") }
+      raise UsageError, "at least one allowed output type is required" if allowed_output_types.empty?
+      if dependencies.any? && accepted_input_types.empty?
+        raise UsageError, "a node with dependencies requires at least one accepted input type"
+      end
+
+      node_values = mission.dig("spec", "graph", "nodes")
+      raise ValidationError, "mission node already exists: #{node_id}" if node_values.any? { |node| node["id"] == node_id }
+      max_units = mission.dig("spec", "budgets", "max_units").to_i
+      raise ValidationError, "mission unit budget exhausted (max #{max_units})" if node_values.length >= max_units
+      now = timestamp
+      node_values << {
+        "id" => node_id.to_s,
+        "logical_project_key" => logical_project_key.to_s,
+        "runtime_project_id" => runtime_project_id.to_s,
+        "project_path" => nil,
+        "project_path_digest" => project_path_digest.to_s,
+        "host_id" => host_id.to_s,
+        "task_id" => nil,
+        "pending_client_id" => nil,
+        "execution_mode" => execution_mode,
+        "access_mode" => access_mode,
+        "work_type" => work_type.to_s,
+        "required" => required,
+        "dependencies" => dependencies,
+        "accepted_input_types" => accepted_input_types,
+        "allowed_output_types" => allowed_output_types,
+        "authorization_boundary" => mission.dig("spec", "authorization_boundary"),
+        "artifact_resolver" => nil,
+        "criterion_ids" => criterion_ids,
+        "cursor" => nil,
+        "revision" => nil,
+        "event_id" => nil,
+        "event_digest" => nil,
+        "seen_event_ids" => [],
+        "observed_state" => "planned",
+        "retries" => 0,
+        "created_at" => now,
+        "updated_at" => now,
+        "dispatched_at" => nil,
+        "observed_at" => nil,
+        "status_code" => nil,
+        "outcome_code" => nil,
+        "validation_status" => nil,
+        "output_declarations" => [],
+        "output_refs" => [],
+        "criterion_results" => []
+      }
+      graph_errors = MissionGraph.new(node_values).validate
+      raise ValidationError, graph_errors.join("; ") unless graph_errors.empty?
+
+      record_event!(mission, "node_added", "node_id" => node_id.to_s)
+      derive_state!(mission)
+    rescue KeyError => e
+      raise UsageError, "complete Mission node missing field: #{e.key}"
+    end
+
+    def persist_complete_mission!(mission)
+      slug = mission.dig("metadata", "id")
+      validate_or_raise!(mission, expected_slug: slug)
+      FileUtils.mkdir_p(config.mission_dir)
+      root_lock = File.join(config.mission_dir, ".lock")
+      with_file_lock(root_lock, File::LOCK_EX) do
+        directory = mission_dir(slug)
+        raise ValidationError, "mission already exists: #{slug}" if File.exist?(directory)
+
+        Dir.mkdir(directory, 0o700)
+        begin
+          Support.atomic_yaml(mission_path(slug), mission)
+        rescue StandardError
+          Dir.rmdir(directory) if Dir.exist?(directory) && Dir.empty?(directory)
+          raise
+        end
+      end
+      mission
+    end
 
     def validate_nodes(node_values, mission)
       errors = []
