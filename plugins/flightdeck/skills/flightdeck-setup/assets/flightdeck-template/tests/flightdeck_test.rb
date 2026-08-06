@@ -879,6 +879,50 @@ class FlightdeckTest < Minitest::Test
     end
   end
 
+  def test_setup_connect_blocks_portable_and_local_identity_conflict_before_mutation
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      repository = initialize_repository(repositories_root, "flightdeck-client")
+      commit_repository(repository)
+      initial = Flightdeck::SetupStore.new(config).connect(repositories_root: repositories_root)
+      assert_equal true, initial["ok"], initial.inspect
+      config = Flightdeck::Config.new(root: root)
+      git("remote", "add", "origin", "https://github.com/example/flightdeck-client.git", chdir: repository)
+      git("update-ref", "refs/remotes/origin/main", "HEAD", chdir: repository)
+      git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main", chdir: repository)
+      config = write_declarations(
+        config,
+        [
+          {
+            "id" => "flightdeck-client", "placement" => "attached", "workload" => "development",
+            "provider" => "github", "locator" => "example/flightdeck-client", "owner" => "example",
+            "default_branch" => "main", "default_branch_verified" => false,
+            "bridge" => { "profile" => "application", "mode" => "reference" },
+            "codex_project" => { "expectation" => "saved_exact_path", "logical_key" => "flightdeck-client" }
+          }
+        ]
+      )
+      declarations_before = File.binread(config.repository_declarations_path)
+      registry_before = File.binread(config.local_registry_path)
+      bridge_before = File.binread(File.join(repository, "AGENTS.override.md"))
+      doctor_before = Flightdeck::Doctor.new(config).run.dig("summary", "errors")
+
+      plan = Flightdeck::SetupStore.new(config).plan(repositories_root: repositories_root)
+      item = plan.fetch("repositories").first
+      assert_equal "blocked", item["status"]
+      assert_includes item.fetch("blockers").join(" "), "existing local registration provider differs"
+      assert_includes item.fetch("blockers").join(" "), "existing local registration default_branch_verified differs"
+
+      result = Flightdeck::SetupStore.new(config).connect(repositories_root: repositories_root)
+      assert_equal false, result["changed"]
+      assert_equal "connected_with_blockers", result["status"]
+      assert_equal declarations_before, File.binread(config.repository_declarations_path)
+      assert_equal registry_before, File.binread(config.local_registry_path)
+      assert_equal bridge_before, File.binread(File.join(repository, "AGENTS.override.md"))
+      assert_equal doctor_before, Flightdeck::Doctor.new(Flightdeck::Config.new(root: root)).run.dig("summary", "errors")
+    end
+  end
+
   def test_setup_connect_reports_empty_authorized_root_without_claiming_ready
     with_hub do |root, config|
       repositories_root = File.join(File.dirname(root), "empty-repositories")
@@ -2175,6 +2219,24 @@ class FlightdeckTest < Minitest::Test
     end
   end
 
+  def test_mission_list_fails_closed_when_same_record_changes_during_read
+    with_hub do |_root, config|
+      create_mission(config, slug: "changing-mission")
+      path = File.join(config.mission_dir, "changing-mission", "mission.yaml")
+      store = Flightdeck::MissionStore.new(
+        config,
+        after_list_record_read: lambda do |changed_path|
+          File.binwrite(changed_path, "#{File.binread(changed_path)}\n")
+        end
+      )
+
+      error = assert_raises(Flightdeck::MissionStore::ListError) { store.list_page }
+      assert_equal "malformed_mission_record", error.code
+      assert_equal "changing-mission", error.mission_id
+      assert File.file?(path)
+    end
+  end
+
   def test_mission_list_schema_and_capability_are_declared
     schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "mission-list.schema.json")))
     assert_equal "https://flightdeck.dev/schemas/mission-list.schema.json", schema["$id"]
@@ -3144,6 +3206,15 @@ class FlightdeckTest < Minitest::Test
       assert_raises(Flightdeck::MissionAuthoring::ContractError, Flightdeck::ValidationError) do
         authoring_plan(authoring, cycle)
       end
+
+      bounded = authoring_draft(target)
+      bounded.fetch("nodes").first["id"] = "a#{'b' * 127}"
+      assert_equal 128, bounded.fetch("nodes").first.fetch("id").bytesize
+      authoring_plan(authoring, bounded)
+      oversized = Marshal.load(Marshal.dump(bounded))
+      oversized.fetch("nodes").first["id"] = "a#{'b' * 128}"
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring_plan(authoring, oversized) }
+      assert_equal "malformed_request", error.code
     end
   end
 
@@ -3263,6 +3334,36 @@ class FlightdeckTest < Minitest::Test
       )
       assert_equal "created", recovered["outcome"]
       assert_equal plan.dig("mission", "id"), recovered["mission_id"]
+    end
+  end
+
+  def test_mission_authoring_post_commit_fault_remains_unknown_and_consumed
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      plan = authoring_plan(authoring, draft)
+      request = authoring_create_request(plan, draft, "client-operation-post-commit")
+      original = Flightdeck::MissionStore.instance_method(:persist_complete_mission!)
+      Flightdeck::MissionStore.define_method(:persist_complete_mission!) do |mission|
+        original.bind(self).call(mission)
+        raise IOError, "synthetic post-commit failure"
+      end
+
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring.create(request) }
+      assert_equal "unknown_outcome", error.code
+      operation_path = Dir.glob(File.join(config.mission_dir, ".authoring-operations", "*.json")).first
+      assert_equal "unresolved", JSON.parse(File.read(operation_path)).fetch("state")
+      assert File.file?(File.join(config.mission_dir, plan.dig("mission", "id"), "mission.yaml"))
+      recovered = Flightdeck::MissionAuthoring.new(config).operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-post-commit"
+      )
+      assert_equal "created", recovered["outcome"]
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.create(authoring_create_request(plan, draft, "client-operation-after-post-commit"))
+      end
+      assert_equal "consumed_plan", error.code
+    ensure
+      Flightdeck::MissionStore.define_method(:persist_complete_mission!, original) if original
     end
   end
 
@@ -3409,6 +3510,33 @@ class FlightdeckTest < Minitest::Test
       assert_equal 1, status
       assert_equal false, result["ok"]
       assert_equal "malformed_request", result.dig("error", "code")
+    end
+  end
+
+  def test_mission_authoring_requires_declared_capability_before_any_operation_state
+    with_authoring_fixture do |root, config, authoring, _catalog, target|
+      compatibility_path = File.join(root, "hub", "compatibility.json")
+      compatibility = JSON.parse(File.read(compatibility_path))
+      compatibility.fetch("capabilities").delete(Flightdeck::MissionAuthoring::CAPABILITY)
+      Flightdeck::Support.atomic_write(compatibility_path, JSON.pretty_generate(compatibility))
+      draft = authoring_draft(target)
+      plan_request = { "schema_version" => Flightdeck::MissionAuthoring::PLAN_REQUEST, "draft" => draft }
+      create_request = {
+        "schema_version" => Flightdeck::MissionAuthoring::CREATE_REQUEST,
+        "operation_id" => "unsupported-operation",
+        "confirmation" => { "plan_id" => "plan-#{'a' * 48}", "plan_generation" => "generation-#{'a' * 48}", "plan_digest" => "a" * 64, "plan_token" => "a" * 64 },
+        "draft" => draft
+      }
+      [
+        -> { authoring.catalog("schema_version" => Flightdeck::MissionAuthoring::CATALOG_REQUEST) },
+        -> { authoring.plan(plan_request) },
+        -> { authoring.create(create_request) },
+        -> { authoring.operation("schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST, "operation_id" => "unsupported-operation") }
+      ].each do |callable|
+        error = assert_raises(Flightdeck::MissionAuthoring::ContractError, &callable)
+        assert_equal "unsupported_hub_contract", error.code
+      end
+      refute Dir.exist?(File.join(config.mission_dir, ".authoring-operations"))
     end
   end
 end

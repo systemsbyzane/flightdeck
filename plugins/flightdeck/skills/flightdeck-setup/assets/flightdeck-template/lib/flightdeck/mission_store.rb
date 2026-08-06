@@ -58,9 +58,10 @@ module Flightdeck
 
     attr_reader :config
 
-    def initialize(config, clock: -> { Time.now.utc })
+    def initialize(config, clock: -> { Time.now.utc }, after_list_record_read: nil)
       @config = config
       @clock = clock
+      @after_list_record_read = after_list_record_read
     end
 
     def create(slug:, title:, outcome:, mode: nil, success_criteria: nil, non_goals: [],
@@ -1008,12 +1009,24 @@ module Flightdeck
 
         value
       end
+      @after_list_record_read&.call(path)
+      actual = File.lstat(path)
+      unless same_file_snapshot?(expected, actual)
+        raise ValidationError, "Mission record changed while being read"
+      end
       value = Support.safe_yaml(content, source: "Mission record")
       raise ValidationError, "Mission record must contain a mapping" unless value.is_a?(Hash)
 
       value
     rescue SystemCallError
       raise ValidationError, "Mission record is unavailable"
+    end
+
+    def same_file_snapshot?(expected, actual)
+      actual.file? && !actual.symlink? &&
+        expected.dev == actual.dev && expected.ino == actual.ino &&
+        expected.size == actual.size && expected.mtime == actual.mtime &&
+        expected.ctime == actual.ctime
     end
 
     def build_complete_mission(slug:, title:, outcome:, mode:, success_criteria:, non_goals:,

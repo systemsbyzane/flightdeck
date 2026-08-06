@@ -421,8 +421,36 @@ module Flightdeck
         rescue ConfigurationError, Errno::ENOENT, Errno::ELOOP
           blockers << "existing local registration cannot be resolved safely"
         end
+        if existing_declaration
+          declaration_identity_fields(existing_declaration).each do |field, expected|
+            actual = repository_identity_value(repository, field)
+            if Support.present?(actual) && actual != expected
+              blockers << "existing local registration #{field} differs from portable declaration"
+            end
+          end
+        end
       end
       blockers
+    end
+
+    def declaration_identity_fields(declaration)
+      {
+        "placement" => declaration["placement"],
+        "provider" => declaration["provider"],
+        "locator" => declaration["locator"],
+        "owner" => declaration["owner"],
+        "default_branch" => declaration["default_branch"],
+        "default_branch_verified" => declaration["default_branch_verified"],
+        "workload" => declaration["workload"],
+        "bridge_profile" => declaration.dig("bridge", "profile"),
+        "bridge_mode" => declaration.dig("bridge", "mode"),
+        "codex_project_key" => declaration.dig("codex_project", "logical_key"),
+        "codex_project_expectation" => declaration.dig("codex_project", "expectation")
+      }
+    end
+
+    def repository_identity_value(repository, field)
+      field == "workload" ? repository["workload"] : repository[field]
     end
 
     def reference_bridge_blockers(identifier, path)

@@ -20,7 +20,7 @@ module Flightdeck
     module_function
 
     SLUG = /\A[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?\z/
-    IDENTIFIER = /\A[a-z0-9]+(?:[a-z0-9._-]*[a-z0-9])?\z/
+    IDENTIFIER = /\A[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\z/
     DIRECTORY = /\A[A-Za-z0-9][A-Za-z0-9._-]*\z/
 
     def stringify(value, ancestors = {})

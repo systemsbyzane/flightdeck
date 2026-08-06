@@ -89,6 +89,7 @@ module Flightdeck
     end
 
     def catalog(request)
+      verify_capability!
       expect_object!(request, %w[schema_version], "catalog request")
       expect_version!(request, CATALOG_REQUEST)
       target_data = current_targets
@@ -110,6 +111,7 @@ module Flightdeck
     end
 
     def plan(request)
+      verify_capability!
       expect_object!(request, %w[schema_version draft], "plan request")
       expect_version!(request, PLAN_REQUEST)
       draft = normalize_draft!(request.fetch("draft"))
@@ -176,6 +178,7 @@ module Flightdeck
     end
 
     def create(request)
+      verify_capability!
       expect_object!(request, %w[schema_version operation_id confirmation draft], "create request")
       expect_version!(request, CREATE_REQUEST)
       operation_id = validate_operation_id!(request.fetch("operation_id"))
@@ -268,10 +271,14 @@ module Flightdeck
             }
           )
         rescue StandardError => e
-          operation["state"] = "not_created"
-          operation["updated_at"] = timestamp
-          write_operation!(operation)
-          raise ContractError.new("persistence_failed", "Mission persistence failed closed: #{e.class}")
+          if mission_write_absent?(mission_id)
+            operation["state"] = "not_created"
+            operation["updated_at"] = timestamp
+            write_operation!(operation)
+            raise ContractError.new("persistence_failed", "Mission persistence failed closed: #{e.class}")
+          end
+
+          raise ContractError.new("unknown_outcome", "create result is unknown; query the original operation ID")
         end
 
         unless mission_fingerprint_from_record(mission) == expected_fingerprint
@@ -301,6 +308,7 @@ module Flightdeck
     end
 
     def operation(request)
+      verify_capability!
       expect_object!(request, %w[schema_version operation_id], "operation request")
       expect_version!(request, OPERATION_REQUEST)
       operation_id = validate_operation_id!(request.fetch("operation_id"))
@@ -323,6 +331,55 @@ module Flightdeck
     end
 
     private
+
+    def verify_capability!
+      compatibility_path = File.join(config.root, "hub", "compatibility.json")
+      required_schemas = %w[
+        mission-authoring-catalog-request.schema.json
+        mission-authoring-catalog-result.schema.json
+        mission-authoring-create-request.schema.json
+        mission-authoring-create-result.schema.json
+        mission-authoring-error-result.schema.json
+        mission-authoring-operation-request.schema.json
+        mission-authoring-operation-result.schema.json
+        mission-authoring-plan-request.schema.json
+        mission-authoring-plan-result.schema.json
+        mission-authoring-types.schema.json
+      ]
+      paths = [compatibility_path, authoring_lock_path] + required_schemas.map do |name|
+        File.join(config.root, "hub", "schemas", name)
+      end
+      unless paths.all? { |path| File.file?(path) && !File.symlink?(path) }
+        raise ContractError.new("unsupported_hub_contract", "Selected Hub does not declare the Mission authoring v1 contract.")
+      end
+      compatibility = Support.load_data(compatibility_path)
+      capability = compatibility.dig("capabilities", CAPABILITY)
+      required_managed_paths = ["hub/.mission-authoring.lock"] + required_schemas.map do |name|
+        "hub/schemas/#{name}"
+      end
+      unless compatibility["schema_version"] == "flightdeck.hub-compatibility/v1" &&
+             compatibility["product"] == "flightdeck" && capability.is_a?(Hash) &&
+             capability["kind"] == "command" &&
+             capability.dig("probe", "help_contains") == "bin/flightdeck mission authoring-catalog " &&
+             required_managed_paths.all? { |path| Array(capability["managed_paths"]).include?(path) }
+        raise ContractError.new("unsupported_hub_contract", "Selected Hub does not declare the Mission authoring v1 contract.")
+      end
+      required_schemas.each do |name|
+        schema = Support.load_data(File.join(config.root, "hub", "schemas", name))
+        unless schema.is_a?(Hash) && schema["$id"] == "https://flightdeck.dev/schemas/#{name}"
+          raise ContractError.new("unsupported_hub_contract", "Selected Hub does not declare the Mission authoring v1 contract.")
+        end
+      end
+    rescue SystemCallError, ValidationError
+      raise ContractError.new("unsupported_hub_contract", "Selected Hub does not declare the Mission authoring v1 contract.")
+    end
+
+    def mission_write_absent?(mission_id)
+      path = File.join(config.mission_dir, mission_id.to_s, "mission.yaml")
+      !File.exist?(path) && !File.symlink?(path)
+    rescue SystemCallError
+      false
+    end
 
     def current_targets
       candidates = []
