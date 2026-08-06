@@ -218,7 +218,9 @@ module Flightdeck
                     end
           raise ContractError.new(code, message)
         end
-        if records.any? { |record| record["plan_id"] == planned.fetch("plan_id") }
+        if records.any? do |record|
+             record["plan_id"] == planned.fetch("plan_id") && record["state"] != "not_created"
+           end
           raise ContractError.new("consumed_plan", "the confirmed one-time plan was already consumed")
         end
 
@@ -617,8 +619,7 @@ module Flightdeck
         value
       end
       operation_ids = records.map { |record| record.fetch("operation_id") }
-      plan_ids = records.map { |record| record.fetch("plan_id") }
-      unless operation_ids.uniq.length == operation_ids.length && plan_ids.uniq.length == plan_ids.length
+      unless operation_ids.uniq.length == operation_ids.length
         raise ContractError.new("operation_store_invalid", "operation store contains conflicting identities")
       end
       records

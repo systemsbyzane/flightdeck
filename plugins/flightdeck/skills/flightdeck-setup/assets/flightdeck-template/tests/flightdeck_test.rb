@@ -3052,6 +3052,12 @@ class FlightdeckTest < Minitest::Test
         "operation_id" => "client-operation-atomic-failure"
       )
       assert_equal "not_created", status["outcome"]
+
+      Flightdeck::Support.singleton_class.define_method(:atomic_yaml, original)
+      retry_plan = authoring_plan(authoring, draft)
+      assert_equal plan["plan_id"], retry_plan["plan_id"]
+      retried = authoring.create(authoring_create_request(retry_plan, draft, "client-operation-after-not-created"))
+      assert_equal "created", retried["outcome"]
     ensure
       Flightdeck::Support.singleton_class.define_method(:atomic_yaml, original) if original
     end
@@ -3152,6 +3158,7 @@ class FlightdeckTest < Minitest::Test
       assert_equal Flightdeck::MissionAuthoring::ERROR_RESULT, result["schema_version"]
       assert_equal "internal_error", result.dig("error", "code")
       refute_includes output.string, "sensitive local path"
+      refute_includes result.dig("error", "message"), "operation ID"
     ensure
       Flightdeck::MissionAuthoring.define_method(:catalog, original) if original
     end

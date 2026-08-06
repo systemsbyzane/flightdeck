@@ -501,9 +501,14 @@ module Flightdeck
       json(MissionAuthoring.error_result(subcommand.to_s.delete_prefix("authoring-"), e))
       1
     rescue StandardError
+      message = if subcommand == "authoring-create"
+                  "Mission authoring create failed closed; recover only with its original operation ID"
+                else
+                  "Mission authoring #{subcommand.to_s.delete_prefix('authoring-')} failed closed"
+                end
       error = MissionAuthoring::ContractError.new(
         "internal_error",
-        "Mission authoring failed closed; recover a create only with its original operation ID"
+        message
       )
       json(MissionAuthoring.error_result(subcommand.to_s.delete_prefix("authoring-"), error))
       1
