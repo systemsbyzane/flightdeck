@@ -21,6 +21,7 @@ module Flightdeck
     def run(argv)
       arguments = argv.dup
       return mission_list(arguments.drop(2)) if arguments.first(2) == %w[mission list]
+      return mission_client_snapshot(arguments.drop(2)) if arguments.first(2) == %w[mission client-snapshot]
 
       command = arguments.shift || "help"
       return help if %w[help -h --help].include?(command)
@@ -107,6 +108,65 @@ module Flightdeck
         raise MissionStore::ListError.new(
           "unsupported_hub_contract",
           "Selected Hub does not declare the Mission list v1 contract."
+        )
+      end
+    end
+
+    def mission_client_snapshot(argv)
+      options = {}
+      OptionParser.new do |parser|
+        parser.on("--hub-root PATH") { |value| options[:hub_root] = value }
+        parser.on("--mission SLUG") { |value| options[:slug] = value }
+        parser.on("--parent-chat-id ID") { |value| options[:parent_chat_id] = value }
+        parser.on("--json") { options[:json] = true }
+      end.parse!(argv)
+      empty!(argv)
+      raise UsageError, "--hub-root, --mission, and --parent-chat-id are required" unless options[:hub_root] && options[:slug] && options[:parent_chat_id]
+
+      selected_root = options[:hub_root].to_s
+      unless Pathname.new(selected_root).absolute?
+        raise MissionStore::ClientSnapshotError.new("invalid_hub_root", "Hub root must be an absolute path.")
+      end
+      unless File.directory?(selected_root)
+        raise MissionStore::ClientSnapshotError.new("hub_root_not_found", "Selected Hub root does not exist.")
+      end
+      config = Config.new(root: selected_root)
+      unless config.data["api_version"] == "flightdeck.dev/v1alpha1" &&
+             config.data["kind"] == "FlightdeckRegistry" &&
+             config.data["schema"] == "hub/schemas/flightdeck.schema.json"
+        raise MissionStore::ClientSnapshotError.new("invalid_hub_root", "Selected Hub root is not a Flightdeck Hub.")
+      end
+      verify_mission_client_snapshot_capability!(config)
+      json(MissionStore.new(config).client_snapshot(slug: options[:slug], parent_chat_id: options[:parent_chat_id]))
+      0
+    rescue MissionStore::ClientSnapshotError => e
+      emit_mission_client_snapshot_error(e.code, e.message)
+      e.exit_status
+    rescue UsageError, OptionParser::ParseError
+      emit_mission_client_snapshot_error("invalid_request", "Mission client snapshot request is invalid.")
+      2
+    rescue ConfigurationError, ValidationError, SystemCallError
+      emit_mission_client_snapshot_error("invalid_hub_root", "Selected Hub root is not a valid Flightdeck Hub.")
+      1
+    end
+
+    def verify_mission_client_snapshot_capability!(config)
+      compatibility_path = File.join(config.root, "hub", "compatibility.json")
+      schema_path = File.join(config.root, MissionStore::CLIENT_SNAPSHOT_SCHEMA)
+      unless File.file?(compatibility_path) && !File.symlink?(compatibility_path) &&
+             File.file?(schema_path) && !File.symlink?(schema_path)
+        raise MissionStore::ClientSnapshotError.new(
+          "unsupported_hub_contract",
+          "Selected Hub does not declare the Mission client snapshot v1 contract."
+        )
+      end
+      compatibility = Support.load_data(compatibility_path)
+      capability = compatibility.dig("capabilities", "flightdeck.command.mission-client-snapshot.v1")
+      unless compatibility["schema_version"] == "flightdeck.hub-compatibility/v1" &&
+             compatibility["product"] == "flightdeck" && capability.is_a?(Hash)
+        raise MissionStore::ClientSnapshotError.new(
+          "unsupported_hub_contract",
+          "Selected Hub does not declare the Mission client snapshot v1 contract."
         )
       end
     end
@@ -403,6 +463,7 @@ module Flightdeck
           parser.on("--success-criterion TEXT") { |value| options[:success_criteria] << value }
           parser.on("--non-goal TEXT") { |value| options[:non_goals] << value }
           parser.on("--mode MODE") { |value| options[:mode] = value }
+          parser.on("--parent-chat-id ID") { |value| options[:parent_chat_id] = value }
           parser.on("--authorized-target-json JSON") do |value|
             options[:authorized_targets] << parse_json_option!(value, "--authorized-target-json")
           end
@@ -597,8 +658,9 @@ module Flightdeck
           bin/flightdeck task show SLUG
           bin/flightdeck task validate SLUG
           bin/flightdeck task transition SLUG STATE [--note NOTE]
-          bin/flightdeck mission new SLUG --title TITLE --outcome OUTCOME [--success-criterion TEXT] [--non-goal TEXT] [--authorized-target-json JSON] [--mode dispatch_only|watch_only|supervised] [--json]
+          bin/flightdeck mission new SLUG --title TITLE --outcome OUTCOME [--success-criterion TEXT] [--non-goal TEXT] [--authorized-target-json JSON] [--mode dispatch_only|watch_only|supervised] [--parent-chat-id OPAQUE_ID] [--json]
           bin/flightdeck mission list --hub-root ABSOLUTE_PATH [--limit 1..100] [--cursor CURSOR] [--json]
+          bin/flightdeck mission client-snapshot --hub-root ABSOLUTE_PATH --mission SLUG --parent-chat-id OPAQUE_ID [--json]
           bin/flightdeck mission show SLUG [--json]
           bin/flightdeck mission validate SLUG [--json]
           bin/flightdeck mission status SLUG [--json]
@@ -618,7 +680,7 @@ module Flightdeck
           bin/flightdeck mission fail SLUG ACTION_ID --code CODE [--json]
           bin/flightdeck mission close SLUG [--json]
 
-        doctor, status, setup plan, route plan, repo plan, bridge plan, mission list, mission show,
+        doctor, status, setup plan, route plan, repo plan, bridge plan, mission list, mission client-snapshot, mission show,
         mission validate, mission status, mission authoring-catalog, mission
         authoring-plan, mission authoring-operation, mission sync-plan, mission
         outbox, and mission next-actions are read-only.
@@ -636,6 +698,8 @@ module Flightdeck
         Repeat --success-criterion and --non-goal to persist multiple bounded intent entries.
         Authorized target JSON is a closed exact scope for logical/runtime project, path digest,
         host, execution mode, and access mode; core derives the authorization boundary token.
+        --parent-chat-id is an operator-only creation-time binding for the read-only Mission
+        client snapshot. It is stored only as a SHA-256 digest and cannot be added or changed later.
         Artifact resolver kind and ID are optional as a pair and bind reference resolution only.
         Mission graph nodes may be added only while fully planned. After any dispatch,
         observation, or outbox action, create a new mission for newly discovered owners.
@@ -714,6 +778,17 @@ module Flightdeck
         "schema" => MissionStore::LIST_SCHEMA,
         "ok" => false,
         "error" => error
+      )
+    end
+
+    def emit_mission_client_snapshot_error(code, message)
+      json(
+        "api_version" => MissionStore::CLIENT_SNAPSHOT_API_VERSION,
+        "kind" => "MissionClientSnapshotError",
+        "schema" => MissionStore::CLIENT_SNAPSHOT_SCHEMA,
+        "ok" => false,
+        "error" => { "code" => code, "message" => message },
+        "recovery" => { "mode" => "manual_recovery_required" }
       )
     end
 

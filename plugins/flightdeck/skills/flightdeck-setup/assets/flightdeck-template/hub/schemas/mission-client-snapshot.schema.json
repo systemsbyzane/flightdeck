@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/mission-client-snapshot.schema.json",
+  "title": "Flightdeck Mission client snapshot contract",
+  "description": "Read-only, bounded provenance, lifecycle, and sanitized node summaries for a desktop client.",
+  "oneOf": [
+    {"$ref": "#/$defs/success"},
+    {"$ref": "#/$defs/error"}
+  ],
+  "$defs": {
+    "opaque": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$",
+      "maxLength": 128
+    },
+    "state": {
+      "enum": ["planned", "dispatch_pending", "dispatch_unknown", "awaiting_handoff", "running", "needs_approval", "blocked", "failed_validation", "runtime_failure", "review_ready", "stale", "cancelled", "complete"]
+    },
+    "success": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "kind", "schema", "ok", "provenance", "nodes", "task_events", "recovery"],
+      "properties": {
+        "api_version": {"const": "flightdeck.mission-client-snapshot/v1"},
+        "kind": {"const": "MissionClientSnapshot"},
+        "schema": {"const": "hub/schemas/mission-client-snapshot.schema.json"},
+        "ok": {"const": true},
+        "provenance": {"$ref": "#/$defs/provenance"},
+        "nodes": {"type": "array", "maxItems": 50, "items": {"$ref": "#/$defs/node"}},
+        "task_events": {"type": "array", "maxItems": 50, "items": {"$ref": "#/$defs/taskEvent"}},
+        "recovery": {"const": {"mode": "none"}}
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "kind", "schema", "ok", "error", "recovery"],
+      "properties": {
+        "api_version": {"const": "flightdeck.mission-client-snapshot/v1"},
+        "kind": {"const": "MissionClientSnapshotError"},
+        "schema": {"const": "hub/schemas/mission-client-snapshot.schema.json"},
+        "ok": {"const": false},
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": {"enum": ["invalid_request", "hub_root_not_found", "invalid_hub_root", "unsupported_hub_contract", "mission_not_found", "malformed_mission_record", "identity_unresolved"]},
+            "message": {"type": "string", "minLength": 1, "maxLength": 256}
+          }
+        },
+        "recovery": {"const": {"mode": "manual_recovery_required"}}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mission_id", "parent_chat_id", "owner_routes"],
+      "properties": {
+        "mission_id": {"$ref": "#/$defs/id"},
+        "parent_chat_id": {"$ref": "#/$defs/opaque"},
+        "owner_routes": {"type": "array", "maxItems": 50, "items": {"$ref": "#/$defs/ownerRoute"}}
+      }
+    },
+    "ownerRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_id", "project_label", "runtime_project_id", "host_id", "execution_mode", "access_mode", "authorization_boundary"],
+      "properties": {
+        "node_id": {"$ref": "#/$defs/id"},
+        "project_label": {"$ref": "#/$defs/id"},
+        "runtime_project_id": {"$ref": "#/$defs/opaque"},
+        "host_id": {"$ref": "#/$defs/opaque"},
+        "execution_mode": {"enum": ["local", "worktree"]},
+        "access_mode": {"enum": ["read_only", "write"]},
+        "authorization_boundary": {"$ref": "#/$defs/id"}
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_id", "project_label", "status", "task_binding"],
+      "properties": {
+        "node_id": {"$ref": "#/$defs/id"},
+        "project_label": {"$ref": "#/$defs/id"},
+        "status": {"$ref": "#/$defs/state"},
+        "task_binding": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9_-]+$"}
+      }
+    },
+    "taskEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id", "node_id", "status", "revision", "event_id"],
+      "properties": {
+        "task_id": {"$ref": "#/$defs/opaque"},
+        "node_id": {"$ref": "#/$defs/id"},
+        "status": {"$ref": "#/$defs/state"},
+        "revision": {"type": ["integer", "null"], "minimum": 0},
+        "event_id": {"type": ["string", "null"], "maxLength": 128, "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"}
+      }
+    }
+  }
+}

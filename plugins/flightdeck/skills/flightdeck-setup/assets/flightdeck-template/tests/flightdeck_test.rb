@@ -243,7 +243,7 @@ class FlightdeckTest < Minitest::Test
     }
   end
 
-  def create_mission(config, slug: "sample-mission", mode: "supervised", authorized_targets: nil)
+  def create_mission(config, slug: "sample-mission", mode: "supervised", authorized_targets: nil, parent_chat_id: nil)
     authorized_targets ||= [mission_authorized_target(config)]
     Flightdeck::MissionStore.new(config).create(
       slug: slug,
@@ -252,7 +252,8 @@ class FlightdeckTest < Minitest::Test
       mode: mode,
       success_criteria: ["All required nodes provide validated typed outputs."],
       non_goals: ["Do not expand the declared mission graph after execution."],
-      authorized_targets: authorized_targets
+      authorized_targets: authorized_targets,
+      parent_chat_id: parent_chat_id
     )
   end
 
@@ -2143,6 +2144,210 @@ class FlightdeckTest < Minitest::Test
       assert_equal before_validation, store.validate("alpha-mission")
       assert_equal before_tree, Dir.glob(File.join(config.mission_dir, "**", "*"), File::FNM_DOTMATCH).sort
     end
+  end
+
+  def test_mission_client_snapshot_is_versioned_sanitized_and_keyed_by_exact_task_identity
+    with_hub do |root, config|
+      create_mission(config, slug: "client-snapshot", parent_chat_id: "opaque-parent-chat")
+      add_mission_node(config, slug: "client-snapshot")
+      dispatch_mission_node(config, slug: "client-snapshot")
+      store = Flightdeck::MissionStore.new(config)
+      before = File.binread(File.join(config.mission_dir, "client-snapshot", "mission.yaml"))
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
+
+      assert_equal 0, cli.run([
+        "mission", "client-snapshot", "--hub-root", root, "--mission", "client-snapshot",
+        "--parent-chat-id", "opaque-parent-chat", "--json"
+      ])
+      snapshot = JSON.parse(output.string)
+      assert_equal "flightdeck.mission-client-snapshot/v1", snapshot["api_version"]
+      assert_equal "MissionClientSnapshot", snapshot["kind"]
+      assert_equal true, snapshot["ok"]
+      assert_equal "opaque-parent-chat", snapshot.dig("provenance", "parent_chat_id")
+      assert_equal ["unit-a"], snapshot.dig("provenance", "owner_routes").map { |route| route["node_id"] }
+      assert_equal %w[node_id project_label status task_binding], snapshot.fetch("nodes").first.keys.sort
+      assert_equal Base64.urlsafe_encode64("task-unit-a", padding: false), snapshot.dig("nodes", 0, "task_binding")
+      assert_equal "task-unit-a", snapshot.dig("task_events", 0, "task_id")
+      assert_equal "unit-a", snapshot.dig("task_events", 0, "node_id")
+      assert_equal({ "mode" => "none" }, snapshot["recovery"])
+      refute_includes output.string, root
+      refute_includes output.string, "project_path"
+      refute_includes output.string, "Produce validated typed outputs."
+      refute_includes output.string, "outbox"
+      assert_equal before, File.binread(File.join(config.mission_dir, "client-snapshot", "mission.yaml"))
+      assert_equal [], store.validate("client-snapshot")
+    end
+  end
+
+  def test_mission_client_snapshot_denies_invalid_capability_and_unresolved_receipts
+    with_hub do |root, config|
+      create_mission(config, slug: "client-pending", parent_chat_id: "opaque-parent-chat")
+      add_mission_node(config, slug: "client-pending")
+      Flightdeck::MissionStore.new(config).record_dispatch(
+        slug: "client-pending", node_id: "unit-a", runtime_project_id: "runtime-unit-a",
+        host_id: "host-local", pending_client_id: "pending-client-node"
+      )
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
+
+      assert_equal 1, cli.run([
+        "mission", "client-snapshot", "--hub-root", root, "--mission", "client-pending",
+        "--parent-chat-id", "opaque-parent-chat"
+      ])
+      unresolved = JSON.parse(output.string)
+      assert_equal "MissionClientSnapshotError", unresolved["kind"]
+      assert_equal "identity_unresolved", unresolved.dig("error", "code")
+      assert_equal({ "mode" => "manual_recovery_required" }, unresolved["recovery"])
+      refute unresolved.key?("nodes")
+      refute_includes output.string, "pending-client-node"
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 2, cli.run([
+        "mission", "client-snapshot", "--hub-root", root, "--mission", "client-pending",
+        "--parent-chat-id", "bad\u0000chat"
+      ])
+      assert_equal "invalid_request", JSON.parse(output.string).dig("error", "code")
+
+      compatibility_path = File.join(root, "hub", "compatibility.json")
+      compatibility = JSON.parse(File.read(compatibility_path))
+      compatibility.fetch("capabilities").delete("flightdeck.command.mission-client-snapshot.v1")
+      Flightdeck::Support.atomic_write(compatibility_path, JSON.pretty_generate(compatibility))
+      output.truncate(0)
+      output.rewind
+      assert_equal 1, cli.run([
+        "mission", "client-snapshot", "--hub-root", root, "--mission", "client-pending",
+        "--parent-chat-id", "opaque-parent-chat"
+      ])
+      assert_equal "unsupported_hub_contract", JSON.parse(output.string).dig("error", "code")
+    end
+  end
+
+  def test_mission_client_snapshot_requires_immutable_persisted_parent_chat_binding
+    with_hub do |root, config|
+      create_mission(config, slug: "bound-mission", parent_chat_id: "operator-parent-a")
+      add_mission_node(config, slug: "bound-mission")
+      dispatch_mission_node(config, slug: "bound-mission")
+      create_mission(config, slug: "unbound-mission")
+      add_mission_node(config, slug: "unbound-mission")
+      dispatch_mission_node(config, slug: "unbound-mission")
+      bound_path = File.join(config.mission_dir, "bound-mission", "mission.yaml")
+      before = File.binread(bound_path)
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
+
+      assert_equal 0, cli.run([
+        "mission", "client-snapshot", "--hub-root", root, "--mission", "bound-mission",
+        "--parent-chat-id", "operator-parent-a"
+      ])
+      assert_equal "MissionClientSnapshot", JSON.parse(output.string)["kind"]
+      assert_equal before, File.binread(bound_path)
+
+      ["operator-parent-b", "unknown-parent"].each do |parent_chat_id|
+        output.truncate(0)
+        output.rewind
+        assert_equal 1, cli.run([
+          "mission", "client-snapshot", "--hub-root", root, "--mission", "bound-mission",
+          "--parent-chat-id", parent_chat_id
+        ])
+        denied = JSON.parse(output.string)
+        assert_equal "identity_unresolved", denied.dig("error", "code")
+        refute denied.key?("provenance")
+        refute denied.key?("nodes")
+        refute denied.key?("task_events")
+      end
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 1, cli.run([
+        "mission", "client-snapshot", "--hub-root", root, "--mission", "unbound-mission",
+        "--parent-chat-id", "operator-parent-a"
+      ])
+      assert_equal "identity_unresolved", JSON.parse(output.string).dig("error", "code")
+    end
+  end
+
+  def test_mission_new_persists_only_the_operator_parent_chat_digest
+    with_hub do |root, config|
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
+
+      assert_equal 0, cli.run([
+        "mission", "new", "operator-bound", "--title", "Operator-bound Mission",
+        "--outcome", "Exercise a parent binding.", "--parent-chat-id", "operator-parent-id", "--json"
+      ])
+      record = JSON.parse(output.string)
+      binding = record.dig("metadata", "client_snapshot_binding")
+      assert_equal "flightdeck.mission-client-binding/v1", binding["binding_version"]
+      assert_equal Digest::SHA256.hexdigest("operator-parent-id"), binding["parent_chat_digest"]
+      refute_includes JSON.generate(record), "operator-parent-id"
+      assert_equal [], Flightdeck::MissionStore.new(config).validate("operator-bound")
+    end
+  end
+
+  def test_mission_client_snapshot_denies_cross_hub_and_cross_mission_selection
+    with_hub do |first_root, first_config|
+      create_mission(first_config, slug: "mission-one", parent_chat_id: "parent-one")
+      add_mission_node(first_config, slug: "mission-one")
+      dispatch_mission_node(first_config, slug: "mission-one")
+      create_mission(first_config, slug: "mission-other", parent_chat_id: "parent-other")
+      add_mission_node(first_config, slug: "mission-other")
+      dispatch_mission_node(first_config, slug: "mission-other")
+      with_hub do |second_root, second_config|
+        create_mission(second_config, slug: "mission-two", parent_chat_id: "parent-two")
+        add_mission_node(second_config, slug: "mission-two")
+        dispatch_mission_node(second_config, slug: "mission-two")
+        output = StringIO.new
+        cli = Flightdeck::CLI.new(root: first_root, out: output, err: StringIO.new)
+
+        assert_equal 1, cli.run([
+          "mission", "client-snapshot", "--hub-root", first_root, "--mission", "mission-two",
+          "--parent-chat-id", "parent-two"
+        ])
+        assert_equal "mission_not_found", JSON.parse(output.string).dig("error", "code")
+        refute_includes output.string, "parent-two"
+
+        output.truncate(0)
+        output.rewind
+        assert_equal 1, cli.run([
+          "mission", "client-snapshot", "--hub-root", first_root, "--mission", "mission-other",
+          "--parent-chat-id", "parent-one"
+        ])
+        denied = JSON.parse(output.string)
+        assert_equal "identity_unresolved", denied.dig("error", "code")
+        refute denied.key?("provenance")
+
+        output.truncate(0)
+        output.rewind
+        assert_equal 1, cli.run([
+          "mission", "client-snapshot", "--hub-root", second_root, "--mission", "mission-two",
+          "--parent-chat-id", "parent-one"
+        ])
+        denied = JSON.parse(output.string)
+        assert_equal "identity_unresolved", denied.dig("error", "code")
+        refute denied.key?("provenance")
+      end
+    end
+  end
+
+  def test_mission_client_snapshot_schema_and_capability_are_closed
+    schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "mission-client-snapshot.schema.json")))
+    assert_equal "https://flightdeck.dev/schemas/mission-client-snapshot.schema.json", schema["$id"]
+    assert_equal false, schema.dig("$defs", "success", "additionalProperties")
+    assert_equal false, schema.dig("$defs", "node", "additionalProperties")
+    assert_equal false, schema.dig("$defs", "taskEvent", "additionalProperties")
+    assert_includes schema.dig("$defs", "error", "properties", "error", "properties", "code", "enum"), "identity_unresolved"
+
+    compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
+    capability = compatibility.dig("capabilities", "flightdeck.command.mission-client-snapshot.v1")
+    assert_equal "command", capability["kind"]
+    assert_includes capability["managed_paths"], "hub/schemas/mission-client-snapshot.schema.json"
+
+    mission_schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "mission.schema.json")))
+    binding = mission_schema.dig("properties", "metadata", "properties", "client_snapshot_binding")
+    assert_equal false, binding["additionalProperties"]
+    assert_equal "flightdeck.mission-client-binding/v1", binding.dig("properties", "binding_version", "const")
   end
 
   def test_mission_list_contract_returns_safe_structured_root_and_record_errors

@@ -212,6 +212,24 @@
         "mode": "stop_and_plan_migration"
       }
     },
+    "flightdeck.command.mission-client-snapshot.v1": {
+      "kind": "command",
+      "description": "Read-only, bounded Mission provenance and lifecycle snapshot for desktop clients.",
+      "probe": {
+        "help_contains": "bin/flightdeck mission client-snapshot "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/mission-client-snapshot.md",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/mission_store.rb",
+        "hub/schemas/mission.schema.json",
+        "hub/schemas/mission-client-snapshot.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
     "flightdeck.command.mission-sync.v1": {
       "kind": "command",
       "description": "Bounded Mission observation apply, checkpoint, typed fan-in, and two-phase outbox reconciliation.",
