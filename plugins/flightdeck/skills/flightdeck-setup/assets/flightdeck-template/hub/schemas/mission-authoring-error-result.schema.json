@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/mission-authoring-error-result.schema.json",
+  "title": "Flightdeck Mission authoring error result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "schema", "ok", "operation", "error"],
+  "properties": {
+    "schema_version": {"const": "flightdeck.mission-authoring.error-result/v1"},
+    "schema": {"const": "hub/schemas/mission-authoring-error-result.schema.json"},
+    "ok": {"const": false},
+    "operation": {"enum": ["catalog", "plan", "create", "operation"]},
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"$ref": "mission-authoring-types.schema.json#/$defs/id"},
+        "message": {"type": "string", "minLength": 1, "maxLength": 1024}
+      }
+    }
+  }
+}

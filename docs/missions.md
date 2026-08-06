@@ -58,6 +58,15 @@ selects `supervised` unless the user sets a different boundary.
 
 ## Run a mission
 
+Generated-Hub template `1.2.0` adds two independent neutral desktop-client
+capabilities: `flightdeck.command.mission-list.v1` for bounded read-only
+discovery and `flightdeck.command.mission-authoring.v1` for closed JSON catalog,
+complete preview, explicitly confirmed atomic create, and read-only operation
+recovery without exposing Mission YAML or generic command execution. Older Hubs
+remain selectable but unsupported for either missing capability; they are never
+regenerated or migrated automatically. The exact client contract lives in the generated template's
+[Mission authoring API](../plugins/flightdeck/skills/flightdeck-setup/assets/flightdeck-template/docs/workflows/mission-authoring-api.md).
+
 In a fresh Codex task with a Mission-capable Hub, ask naturally:
 
 ```text
@@ -173,6 +182,7 @@ the pass so control returns immediately to the operator.
 Useful read-only commands include:
 
 ```text
+bin/flightdeck mission list --hub-root /absolute/path/to/selected-hub --limit 50
 bin/flightdeck mission show example-release --json
 bin/flightdeck mission validate example-release --json
 bin/flightdeck mission status example-release --json
@@ -181,6 +191,26 @@ bin/flightdeck mission sync-apply example-release --observations observations.js
   --plan-token <exact-plan-token> --json
 bin/flightdeck mission outbox example-release --json
 ```
+
+### Desktop discovery contract
+
+`mission list` is the plugin-owned read boundary for a desktop list view. It
+requires an explicit absolute Hub root, emits only
+`flightdeck.mission-list/v1` JSON, sorts summaries by stable Mission ID, and
+uses an opaque cursor with a default limit of 50 and a maximum of 100. Success
+records contain Mission ID, bounded title, mode, derived state, timestamps,
+generation, fan-in readiness, and unit progress counts. They do not contain
+Mission bodies or outcomes, raw prompts, task or project IDs, project paths,
+output declarations or references, outbox records, credentials, or evidence.
+The title remains untrusted display-only text and must never drive client
+actions.
+
+Missing or invalid roots, invalid requests, bounds or cursors, and malformed
+Mission records return `MissionListError` with a stable code and no partial
+results or private path. Clients must require
+`flightdeck.command.mission-list.v1`; they must not scrape ignored Mission
+YAML or assume support from the Hub template version. Exact-ID `mission status`
+and `mission validate` behavior is unchanged.
 
 ## Graph and identity contract
 

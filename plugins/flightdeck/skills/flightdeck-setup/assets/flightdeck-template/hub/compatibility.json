@@ -2,7 +2,7 @@
   "schema_version": "flightdeck.hub-compatibility/v1",
   "schema": "hub/schemas/hub-compatibility.schema.json",
   "product": "flightdeck",
-  "template_version": "1.1.0",
+  "template_version": "1.2.0",
   "capabilities": {
     "flightdeck.command.doctor.v1": {
       "kind": "command",
@@ -193,6 +193,25 @@
         "mode": "stop_and_plan_migration"
       }
     },
+    "flightdeck.command.mission-list.v1": {
+      "kind": "command",
+      "description": "Versioned bounded read-only Mission discovery for an explicitly selected Hub.",
+      "probe": {
+        "help_contains": "bin/flightdeck mission list "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/mission-authoring-api.md",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/mission_graph.rb",
+        "lib/flightdeck/mission_store.rb",
+        "hub/schemas/mission.schema.json",
+        "hub/schemas/mission-list.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
     "flightdeck.command.mission-sync.v1": {
       "kind": "command",
       "description": "Bounded Mission observation apply, checkpoint, typed fan-in, and two-phase outbox reconciliation.",
@@ -207,6 +226,35 @@
         "lib/flightdeck/mission_sync.rb",
         "hub/schemas/mission.schema.json",
         "hub/schemas/mission-observation.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.command.mission-authoring.v1": {
+      "kind": "command",
+      "description": "Typed catalog, complete preview, explicitly confirmed atomic Mission creation, and exact operation recovery for unprivileged clients.",
+      "probe": {
+        "help_contains": "bin/flightdeck mission authoring-catalog "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/mission-authoring-api.md",
+        "hub/.mission-authoring.lock",
+        "hub/schemas/mission-authoring-catalog-request.schema.json",
+        "hub/schemas/mission-authoring-catalog-result.schema.json",
+        "hub/schemas/mission-authoring-create-request.schema.json",
+        "hub/schemas/mission-authoring-create-result.schema.json",
+        "hub/schemas/mission-authoring-error-result.schema.json",
+        "hub/schemas/mission-authoring-operation-request.schema.json",
+        "hub/schemas/mission-authoring-operation-result.schema.json",
+        "hub/schemas/mission-authoring-plan-request.schema.json",
+        "hub/schemas/mission-authoring-plan-result.schema.json",
+        "hub/schemas/mission-authoring-types.schema.json",
+        "hub/schemas/mission.schema.json",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/mission_authoring.rb",
+        "lib/flightdeck/mission_store.rb"
       ],
       "fallback": {
         "mode": "stop_and_plan_migration"

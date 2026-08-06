@@ -56,13 +56,40 @@ class HubCompatibilityTest(unittest.TestCase):
             "flightdeck.command.setup-plan.v1",
             "flightdeck.command.setup-connect.v1",
             "flightdeck.document.change-review.v1",
+            "flightdeck.command.mission-authoring.v1",
         )
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("compatible", report["status"])
         self.assertTrue(report["compatible"])
-        self.assertEqual("1.1.0", report["hub"]["identity"]["template_version"])
+        self.assertEqual("1.2.0", report["hub"]["identity"]["template_version"])
         self.assertEqual([], report["requirements"]["missing"])
+
+    def test_preserved_hub_without_mission_authoring_is_selectable_but_unsupported(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="flightdeck-compatibility-") as directory:
+            hub = Path(directory) / "preserved-hub"
+            shutil.copytree(TEMPLATE, hub)
+            contract_path = hub / "hub" / "compatibility.json"
+            contract = json.loads(contract_path.read_text(encoding="utf-8"))
+            contract["template_version"] = "1.1.0"
+            del contract["capabilities"]["flightdeck.command.mission-authoring.v1"]
+            contract_path.write_text(json.dumps(contract, indent=2) + "\n", encoding="utf-8")
+            before = tree_digest(hub)
+
+            result, report = self.run_checker(
+                hub,
+                "flightdeck.command.mission-authoring.v1",
+            )
+
+            self.assertEqual(1, result.returncode, result.stderr)
+            self.assertEqual("incompatible", report["status"])
+            self.assertEqual("1.1.0", report["hub"]["identity"]["template_version"])
+            missing = report["requirements"]["missing"]
+            self.assertEqual(["flightdeck.command.mission-authoring.v1"], [item["id"] for item in missing])
+            self.assertEqual("stop_and_plan_migration", missing[0]["fallback"]["mode"])
+            self.assertIn("lib/flightdeck/mission_authoring.rb", report["migration"]["managed_paths_to_compare"])
+            self.assertFalse(report["migration"]["automatic_changes"])
+            self.assertEqual(before, tree_digest(hub))
 
     def test_legacy_hub_missing_setup_command_returns_migration_plan(self) -> None:
         with tempfile.TemporaryDirectory(prefix="flightdeck-compatibility-") as directory:

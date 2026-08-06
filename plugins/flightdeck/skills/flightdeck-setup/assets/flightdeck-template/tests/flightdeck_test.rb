@@ -16,6 +16,7 @@ require "flightdeck/cli"
 require "flightdeck/config"
 require "flightdeck/doctor"
 require "flightdeck/mission_graph"
+require "flightdeck/mission_authoring"
 require "flightdeck/mission_store"
 require "flightdeck/mission_sync"
 require "flightdeck/repo_planner"
@@ -30,7 +31,7 @@ class FlightdeckTest < Minitest::Test
     .gitignore AGENTS.md Makefile README.md bin docs flightdeck.yaml lib scripts tests
   ].freeze
   HUB_CONTROL_PLANE_ENTRIES = %w[
-    automations bridges compatibility.json repositories.yaml schemas templates workflows
+    .mission-authoring.lock automations bridges compatibility.json repositories.yaml schemas templates workflows
   ].freeze
   WORKLOAD_ROOTS = %w[charts development environments operations patching research].freeze
 
@@ -160,6 +161,85 @@ class FlightdeckTest < Minitest::Test
       "host_id" => host_id,
       "execution_mode" => execution_mode,
       "access_mode" => access_mode
+    }
+  end
+
+  def with_authoring_fixture
+    with_hub do |root, config|
+      project_path = initialize_repository(root, "authoring-project")
+      config = register_repository(config, "authoring-project", project_path)
+      config = write_declarations(config, [declaration("authoring-project", project_path)])
+      FileUtils.mkdir_p(File.dirname(config.project_registry_path))
+      Flightdeck::Support.atomic_yaml(
+        config.project_registry_path,
+        {
+          "api_version" => "flightdeck.dev/v1alpha1",
+          "kind" => "CodexProjectVerifications",
+          "projects" => {
+            "authoring-project" => {
+              "logical_key" => "authoring-project",
+              "runtime_project_id" => "runtime-project-authoring",
+              "path" => File.realpath(project_path),
+              "verified" => true,
+              "verification_source" => "live_project_list_exact_path",
+              "verified_at" => "2026-08-06T12:00:00Z"
+            }
+          }
+        }
+      )
+      config = Flightdeck::Config.new(root: root)
+      authoring = Flightdeck::MissionAuthoring.new(
+        config,
+        clock: -> { Time.iso8601("2026-08-06T12:00:00Z") }
+      )
+      catalog = authoring.catalog(
+        "schema_version" => Flightdeck::MissionAuthoring::CATALOG_REQUEST
+      )
+      target = catalog.fetch("targets").find do |candidate|
+        candidate["logical_project_key"] == "authoring-project" &&
+          candidate["execution_mode"] == "worktree" && candidate["access_mode"] == "write"
+      end
+      yield root, config, authoring, catalog, target
+    end
+  end
+
+  def authoring_draft(target, title: "Typed client mission", nodes: nil)
+    selected = target.reject { |key, _| key == "display_label" }
+    {
+      "title" => title,
+      "outcome" => "Produce the declared validated outputs.",
+      "success_criteria" => ["Every required node returns its declared validated output."],
+      "non_goals" => ["Do not dispatch, commit, publish, deploy, or close."],
+      "mode" => "supervised",
+      "selected_targets" => [selected],
+      "nodes" => nodes || [
+        {
+          "id" => "implementation",
+          "target_id" => target.fetch("target_id"),
+          "required" => true,
+          "dependencies" => [],
+          "accepted_input_types" => [],
+          "allowed_output_types" => ["validation_ref"]
+        }
+      ]
+    }
+  end
+
+  def authoring_plan(authoring, draft)
+    authoring.plan(
+      "schema_version" => Flightdeck::MissionAuthoring::PLAN_REQUEST,
+      "draft" => draft
+    )
+  end
+
+  def authoring_create_request(plan, draft, operation_id)
+    {
+      "schema_version" => Flightdeck::MissionAuthoring::CREATE_REQUEST,
+      "operation_id" => operation_id,
+      "confirmation" => %w[plan_id plan_generation plan_digest plan_token].to_h do |field|
+        [field, plan.fetch(field)]
+      end,
+      "draft" => draft
     }
   end
 
@@ -796,6 +876,50 @@ class FlightdeckTest < Minitest::Test
       )
       assert_equal "stopped_before_changes", stopped["status"]
       assert_equal 0, stopped.dig("summary", "project_verified")
+    end
+  end
+
+  def test_setup_connect_blocks_portable_and_local_identity_conflict_before_mutation
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      repository = initialize_repository(repositories_root, "flightdeck-client")
+      commit_repository(repository)
+      initial = Flightdeck::SetupStore.new(config).connect(repositories_root: repositories_root)
+      assert_equal true, initial["ok"], initial.inspect
+      config = Flightdeck::Config.new(root: root)
+      git("remote", "add", "origin", "https://github.com/example/flightdeck-client.git", chdir: repository)
+      git("update-ref", "refs/remotes/origin/main", "HEAD", chdir: repository)
+      git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main", chdir: repository)
+      config = write_declarations(
+        config,
+        [
+          {
+            "id" => "flightdeck-client", "placement" => "attached", "workload" => "development",
+            "provider" => "github", "locator" => "example/flightdeck-client", "owner" => "example",
+            "default_branch" => "main", "default_branch_verified" => false,
+            "bridge" => { "profile" => "application", "mode" => "reference" },
+            "codex_project" => { "expectation" => "saved_exact_path", "logical_key" => "flightdeck-client" }
+          }
+        ]
+      )
+      declarations_before = File.binread(config.repository_declarations_path)
+      registry_before = File.binread(config.local_registry_path)
+      bridge_before = File.binread(File.join(repository, "AGENTS.override.md"))
+      doctor_before = Flightdeck::Doctor.new(config).run.dig("summary", "errors")
+
+      plan = Flightdeck::SetupStore.new(config).plan(repositories_root: repositories_root)
+      item = plan.fetch("repositories").first
+      assert_equal "blocked", item["status"]
+      assert_includes item.fetch("blockers").join(" "), "existing local registration provider differs"
+      assert_includes item.fetch("blockers").join(" "), "existing local registration default_branch_verified differs"
+
+      result = Flightdeck::SetupStore.new(config).connect(repositories_root: repositories_root)
+      assert_equal false, result["changed"]
+      assert_equal "connected_with_blockers", result["status"]
+      assert_equal declarations_before, File.binread(config.repository_declarations_path)
+      assert_equal registry_before, File.binread(config.local_registry_path)
+      assert_equal bridge_before, File.binread(File.join(repository, "AGENTS.override.md"))
+      assert_equal doctor_before, Flightdeck::Doctor.new(Flightdeck::Config.new(root: root)).run.dig("summary", "errors")
     end
   end
 
@@ -1932,6 +2056,203 @@ class FlightdeckTest < Minitest::Test
     end
   end
 
+  def test_mission_list_contract_is_deterministic_bounded_paginated_and_read_only
+    with_hub do |root, config|
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
+
+      assert_equal 0, cli.run(["mission", "list", "--hub-root", root, "--limit", "1"])
+      empty = JSON.parse(output.string)
+      assert_equal "flightdeck.mission-list/v1", empty["api_version"]
+      assert_equal "MissionList", empty["kind"]
+      assert_equal [], empty["missions"]
+      assert_equal({ "limit" => 1, "returned" => 0, "next_cursor" => nil }, empty["page"])
+
+      create_mission(config, slug: "zulu-mission")
+      create_mission(config, slug: "alpha-mission")
+      add_mission_node(config, slug: "alpha-mission")
+      store = Flightdeck::MissionStore.new(config)
+      store.record_dispatch(
+        slug: "alpha-mission",
+        node_id: "unit-a",
+        runtime_project_id: "runtime-unit-a",
+        host_id: "host-local",
+        dispatch_unknown: true
+      )
+      alpha_path = File.join(config.mission_dir, "alpha-mission", "mission.yaml")
+      before_bytes = File.binread(alpha_path)
+      before_status = store.status("alpha-mission")
+      before_validation = store.validate("alpha-mission")
+      before_tree = Dir.glob(File.join(config.mission_dir, "**", "*"), File::FNM_DOTMATCH).sort
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 0, cli.run(["mission", "list", "--hub-root", root, "--limit", "1", "--json"])
+      first_page = JSON.parse(output.string)
+      assert_equal ["alpha-mission"], first_page["missions"].map { |item| item["mission_id"] }
+      assert_match(/\Av1\.[A-Za-z0-9_-]+\z/, first_page.dig("page", "next_cursor"))
+      summary = first_page.fetch("missions").first
+      assert_equal %w[
+        created_at fan_in_ready generation mission_id mode progress state title updated_at
+      ], summary.keys.sort
+      assert_equal 1, summary.dig("progress", "total_units")
+      assert_equal 1, summary.dig("progress", "required_units")
+      assert_equal 1, summary.dig("progress", "attention_units")
+      assert_equal "dispatch_unknown", summary["state"]
+      refute_includes output.string, root
+      refute_includes output.string, "Produce validated typed outputs."
+      refute_includes output.string, "project_path"
+      refute_includes output.string, "task_id"
+      refute_includes output.string, "outbox"
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 0, cli.run(
+        ["mission", "list", "--hub-root", root, "--limit", "1", "--cursor", first_page.dig("page", "next_cursor")]
+      )
+      second_page = JSON.parse(output.string)
+      assert_equal ["zulu-mission"], second_page["missions"].map { |item| item["mission_id"] }
+      assert_nil second_page.dig("page", "next_cursor")
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 0, cli.run(["mission", "list", "--hub-root", root, "--limit", "100"])
+      all = JSON.parse(output.string)
+      assert_equal %w[alpha-mission zulu-mission], all["missions"].map { |item| item["mission_id"] }
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 2, cli.run(["mission", "list", "--hub-root", root, "--limit", "101"])
+      assert_equal "invalid_limit", JSON.parse(output.string).dig("error", "code")
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 2, cli.run(["mission", "list", "--hub-root", root, "--cursor", "not-a-v1-cursor"])
+      assert_equal "invalid_cursor", JSON.parse(output.string).dig("error", "code")
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 2, cli.run(["mission", "list", "--hub-root", root, "--unknown-#{'x' * 512}"])
+      invalid_request = JSON.parse(output.string)
+      assert_equal "invalid_request", invalid_request.dig("error", "code")
+      assert_equal "Mission list request is invalid.", invalid_request.dig("error", "message")
+      assert_operator invalid_request.dig("error", "message").bytesize, :<=, 256
+
+      assert_equal before_bytes, File.binread(alpha_path)
+      assert_equal before_status, store.status("alpha-mission")
+      assert_equal before_validation, store.validate("alpha-mission")
+      assert_equal before_tree, Dir.glob(File.join(config.mission_dir, "**", "*"), File::FNM_DOTMATCH).sort
+    end
+  end
+
+  def test_mission_list_contract_returns_safe_structured_root_and_record_errors
+    Dir.mktmpdir("flightdeck-list-errors-") do |directory|
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: directory, out: output, err: StringIO.new)
+      missing = File.join(directory, "absent-hub")
+      assert_equal 1, cli.run(["mission", "list", "--hub-root", missing])
+      missing_error = JSON.parse(output.string)
+      assert_equal "MissionListError", missing_error["kind"]
+      assert_equal false, missing_error["ok"]
+      assert_equal "hub_root_not_found", missing_error.dig("error", "code")
+      refute_includes output.string, missing
+
+      invalid = File.join(directory, "invalid-hub")
+      FileUtils.mkdir_p(invalid)
+      File.write(File.join(invalid, "flightdeck.yaml"), YAML.dump({ "kind" => "NotAFlightdeck" }))
+      output.truncate(0)
+      output.rewind
+      assert_equal 1, cli.run(["mission", "list", "--hub-root", invalid])
+      invalid_error = JSON.parse(output.string)
+      assert_equal "invalid_hub_root", invalid_error.dig("error", "code")
+      refute_includes output.string, invalid
+    end
+
+    with_hub do |root, config|
+      create_mission(config, slug: "valid-mission")
+      create_mission(config, slug: "broken-mission")
+      broken_path = File.join(config.mission_dir, "broken-mission", "mission.yaml")
+      broken = Flightdeck::Support.load_data(broken_path)
+      broken["kind"] = "UnexpectedRecord"
+      Flightdeck::Support.atomic_yaml(broken_path, broken)
+
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
+      assert_equal 1, cli.run(["mission", "list", "--hub-root", root])
+      error = JSON.parse(output.string)
+      assert_equal "flightdeck.mission-list/v1", error["api_version"]
+      assert_equal "MissionListError", error["kind"]
+      assert_equal "hub/schemas/mission-list.schema.json", error["schema"]
+      assert_equal "malformed_mission_record", error.dig("error", "code")
+      assert_equal "broken-mission", error.dig("error", "mission_id")
+      refute_includes output.string, root
+      refute_includes output.string, "UnexpectedRecord"
+      refute error.key?("missions")
+    end
+
+    with_hub do |root, config|
+      create_mission(config, slug: "oversized-mission")
+      path = File.join(config.mission_dir, "oversized-mission", "mission.yaml")
+      File.binwrite(path, "x" * (config.mission_budgets.fetch("max_record_bytes") + 1))
+
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
+      assert_equal 1, cli.run(["mission", "list", "--hub-root", root])
+      error = JSON.parse(output.string)
+      assert_equal "malformed_mission_record", error.dig("error", "code")
+      assert_equal "oversized-mission", error.dig("error", "mission_id")
+      refute_includes output.string, root
+    end
+
+    with_hub do |root, _config|
+      compatibility_path = File.join(root, "hub", "compatibility.json")
+      compatibility = JSON.parse(File.read(compatibility_path))
+      compatibility.fetch("capabilities").delete("flightdeck.command.mission-list.v1")
+      Flightdeck::Support.atomic_write(compatibility_path, JSON.pretty_generate(compatibility))
+
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
+      assert_equal 1, cli.run(["mission", "list", "--hub-root", root])
+      error = JSON.parse(output.string)
+      assert_equal "unsupported_hub_contract", error.dig("error", "code")
+      refute_includes output.string, root
+    end
+  end
+
+  def test_mission_list_fails_closed_when_same_record_changes_during_read
+    with_hub do |_root, config|
+      create_mission(config, slug: "changing-mission")
+      path = File.join(config.mission_dir, "changing-mission", "mission.yaml")
+      store = Flightdeck::MissionStore.new(
+        config,
+        after_list_record_read: lambda do |changed_path|
+          File.binwrite(changed_path, "#{File.binread(changed_path)}\n")
+        end
+      )
+
+      error = assert_raises(Flightdeck::MissionStore::ListError) { store.list_page }
+      assert_equal "malformed_mission_record", error.code
+      assert_equal "changing-mission", error.mission_id
+      assert File.file?(path)
+    end
+  end
+
+  def test_mission_list_schema_and_capability_are_declared
+    schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "mission-list.schema.json")))
+    assert_equal "https://flightdeck.dev/schemas/mission-list.schema.json", schema["$id"]
+    assert_equal 100, schema.dig("$defs", "success", "properties", "missions", "maxItems")
+    assert_includes schema.dig("$defs", "error", "properties", "error", "properties", "code", "enum"),
+                    "unsupported_hub_contract"
+    assert_includes schema.dig("$defs", "error", "properties", "error", "properties", "code", "enum"),
+                    "mission_limit_exceeded"
+
+    compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
+    capability = compatibility.dig("capabilities", "flightdeck.command.mission-list.v1")
+    assert_equal "command", capability["kind"]
+    assert_equal "bin/flightdeck mission list ", capability.dig("probe", "help_contains")
+    assert_includes capability["managed_paths"], "hub/schemas/mission-list.schema.json"
+  end
+
   def test_mission_cli_rejects_cross_boundary_nodes_and_handoff_actions
     with_hub do |root, config|
       create_mission(
@@ -2792,6 +3113,511 @@ class FlightdeckTest < Minitest::Test
       action_id = store.outbox_for("action-mission").first["id"]
       store.prepare_action(slug: "action-mission", action_id: action_id)
       assert_frozen.call("action-mission", "late-prepared-owner")
+    end
+  end
+
+  def test_mission_authoring_catalog_exposes_only_exact_safe_eligible_choices
+    with_authoring_fixture do |root, _config, _authoring, catalog, target|
+      refute_nil target
+      assert_equal "flightdeck.command.mission-authoring.v1", catalog["capability"]
+      assert_match(/\Acatalog-[0-9a-f]{48}\z/, catalog["catalog_generation"])
+      assert_equal %w[local worktree], catalog["targets"].map { |item| item["execution_mode"] }.uniq.sort
+      assert_equal %w[read_only write], catalog["targets"].map { |item| item["access_mode"] }.uniq.sort
+      assert catalog["targets"].all? { |item| item.keys.sort == %w[access_mode display_label execution_mode host_id logical_project_key project_path_digest runtime_project_id target_id].sort }
+      refute_includes JSON.generate(catalog), root
+      refute_includes JSON.generate(catalog), "project_path\""
+    end
+  end
+
+  def test_mission_authoring_plan_is_read_only_complete_acyclic_and_canonical
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      nodes = [
+        {
+          "id" => "producer", "target_id" => target.fetch("target_id"), "required" => true,
+          "dependencies" => [], "accepted_input_types" => [], "allowed_output_types" => ["contract_ref"]
+        },
+        {
+          "id" => "consumer", "target_id" => target.fetch("target_id"), "required" => true,
+          "dependencies" => ["producer"], "accepted_input_types" => ["contract_ref"],
+          "allowed_output_types" => ["validation_ref"]
+        }
+      ]
+      draft = authoring_draft(target, nodes: nodes)
+      plan = authoring_plan(authoring, draft)
+      reordered = draft.to_a.reverse.to_h
+      reordered["selected_targets"] = draft.fetch("selected_targets").map { |item| item.to_a.reverse.to_h }
+      same_plan = authoring_plan(authoring, reordered)
+
+      assert_equal plan.values_at("plan_id", "plan_generation", "plan_digest", "plan_token"),
+                   same_plan.values_at("plan_id", "plan_generation", "plan_digest", "plan_token")
+      canonical = lambda do |value|
+        case value
+        when Hash then value.keys.sort.to_h { |key| [key, canonical.call(value[key])] }
+        when Array then value.map { |item| canonical.call(item) }
+        else value
+        end
+      end
+      digest_input = {
+        "capability" => "flightdeck.command.mission-authoring.v1",
+        "catalog_generation" => plan.fetch("catalog_generation"),
+        "mission" => plan.fetch("mission")
+      }
+      assert_equal Digest::SHA256.hexdigest(JSON.generate(canonical.call(digest_input))), plan["plan_digest"]
+      assert_match(/\Amission-[0-9a-f]{24}\z/, plan.dig("mission", "id"))
+      assert_equal %w[producer consumer], plan.dig("mission", "graph", "nodes").map { |node| node["id"] }
+      assert_equal ["criterion-001"], plan.dig("mission", "graph", "nodes", 0, "criterion_ids")
+      assert_equal ["criterion-001"], plan.dig("mission", "graph", "nodes", 1, "criterion_ids")
+      assert_equal target["project_path_digest"], plan.dig("mission", "authorized_targets", 0, "project_path_digest")
+      refute Dir.exist?(config.mission_dir)
+      assert_equal "all_required_nodes_own_all_criteria", plan.fetch("warnings").last.fetch("code")
+    end
+  end
+
+  def test_mission_authoring_rejects_forbidden_secret_future_cycle_and_target_drift
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+
+      forbidden = Marshal.load(Marshal.dump(draft)).merge("raw_yaml" => "kind: MissionRecord")
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring_plan(authoring, forbidden) }
+      assert_equal "malformed_request", error.code
+
+      secret = Marshal.load(Marshal.dump(draft))
+      secret["outcome"] = "Bearer abcdefghijklmnopqrstuvwxyz"
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring_plan(authoring, secret) }
+      assert_equal "forbidden_content", error.code
+
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.plan("schema_version" => "flightdeck.mission-authoring.plan-request/v2", "draft" => draft)
+      end
+      assert_equal "future_version", error.code
+
+      drift = Marshal.load(Marshal.dump(draft))
+      drift.dig("selected_targets", 0)["runtime_project_id"] = "fabricated-runtime"
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring_plan(authoring, drift) }
+      assert_equal "ineligible_target", error.code
+
+      cycle = authoring_draft(
+        target,
+        nodes: [
+          {"id" => "a", "target_id" => target["target_id"], "required" => true, "dependencies" => ["b"], "accepted_input_types" => ["ref"], "allowed_output_types" => ["ref"]},
+          {"id" => "b", "target_id" => target["target_id"], "required" => true, "dependencies" => ["a"], "accepted_input_types" => ["ref"], "allowed_output_types" => ["ref"]}
+        ]
+      )
+      assert_raises(Flightdeck::MissionAuthoring::ContractError, Flightdeck::ValidationError) do
+        authoring_plan(authoring, cycle)
+      end
+
+      bounded = authoring_draft(target)
+      bounded.fetch("nodes").first["id"] = "a#{'b' * 127}"
+      assert_equal 128, bounded.fetch("nodes").first.fetch("id").bytesize
+      authoring_plan(authoring, bounded)
+      oversized = Marshal.load(Marshal.dump(bounded))
+      oversized.fetch("nodes").first["id"] = "a#{'b' * 128}"
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring_plan(authoring, oversized) }
+      assert_equal "malformed_request", error.code
+      assert_equal "node ID exceeds 128 bytes", error.message
+    end
+  end
+
+  def test_mission_authoring_create_is_exact_atomic_and_recoverable
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      plan = authoring_plan(authoring, draft)
+      created = authoring.create(authoring_create_request(plan, draft, "client-operation-001"))
+      assert_equal "created", created["outcome"]
+      mission = Flightdeck::MissionStore.new(config).snapshot(created.fetch("mission_id"))
+      assert_equal 1, mission.dig("spec", "graph", "nodes").length
+      assert_equal plan["plan_id"], mission.dig("metadata", "authoring", "plan_id")
+      assert_equal plan["plan_digest"], mission.dig("metadata", "authoring", "plan_digest")
+      assert_empty Flightdeck::MissionStore.new(config).validate(created.fetch("mission_id"))
+
+      recovered = authoring.operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-001"
+      )
+      assert_equal "created", recovered["outcome"]
+      assert_equal created["mission_id"], recovered["mission_id"]
+    end
+  end
+
+  def test_mission_authoring_stale_duplicate_conflicting_and_consumed_operations_fail_closed
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      plan = authoring_plan(authoring, draft)
+      stale = authoring_create_request(plan, draft, "client-operation-stale")
+      stale["confirmation"]["plan_token"] = "0" * 64
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring.create(stale) }
+      assert_equal "stale_or_mismatched_plan", error.code
+      not_created = authoring.operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-stale"
+      )
+      assert_equal "not_created", not_created["outcome"]
+
+      drift_draft = authoring_draft(target, title: "Exact path catalog drift")
+      drift_plan = authoring_plan(authoring, drift_draft)
+      registry = Flightdeck::Support.load_data(config.project_registry_path)
+      registry.dig("projects", "authoring-project")["runtime_project_id"] = "runtime-project-replaced"
+      Flightdeck::Support.atomic_yaml(config.project_registry_path, registry)
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.create(authoring_create_request(drift_plan, drift_draft, "client-operation-drift"))
+      end
+      assert_equal "stale_or_mismatched_plan", error.code
+      registry.dig("projects", "authoring-project")["runtime_project_id"] = "runtime-project-authoring"
+      Flightdeck::Support.atomic_yaml(config.project_registry_path, registry)
+
+      request = authoring_create_request(plan, draft, "client-operation-once")
+      authoring.create(request)
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring.create(request) }
+      assert_equal "duplicate_operation", error.code
+
+      changed_draft = authoring_draft(target, title: "Different exact plan")
+      changed_plan = authoring_plan(authoring, changed_draft)
+      conflict = authoring_create_request(changed_plan, changed_draft, "client-operation-once")
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring.create(conflict) }
+      assert_equal "conflicting_operation", error.code
+
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.create(authoring_create_request(plan, draft, "client-operation-second"))
+      end
+      assert_equal "consumed_plan", error.code
+    end
+  end
+
+  def test_mission_authoring_failed_atomic_write_leaves_no_partial_mission
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      plan = authoring_plan(authoring, draft)
+      request = authoring_create_request(plan, draft, "client-operation-atomic-failure")
+      original = Flightdeck::Support.method(:atomic_yaml)
+      Flightdeck::Support.singleton_class.define_method(:atomic_yaml) do |path, value|
+        raise IOError, "synthetic Mission write failure" if path.end_with?("/mission.yaml")
+
+        original.call(path, value)
+      end
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring.create(request) }
+      assert_equal "persistence_failed", error.code
+      refute File.exist?(File.join(config.mission_dir, plan.dig("mission", "id"), "mission.yaml"))
+      status = authoring.operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-atomic-failure"
+      )
+      assert_equal "not_created", status["outcome"]
+
+      Flightdeck::Support.singleton_class.define_method(:atomic_yaml, original)
+      retry_plan = authoring_plan(authoring, draft)
+      assert_equal plan["plan_id"], retry_plan["plan_id"]
+      retried = authoring.create(authoring_create_request(retry_plan, draft, "client-operation-after-not-created"))
+      assert_equal "created", retried["outcome"]
+    ensure
+      Flightdeck::Support.singleton_class.define_method(:atomic_yaml, original) if original
+    end
+  end
+
+  def test_mission_authoring_unknown_result_recovers_exact_created_without_retry
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      plan = authoring_plan(authoring, draft)
+      request = authoring_create_request(plan, draft, "client-operation-unknown")
+      original = authoring.method(:write_operation!)
+      authoring.define_singleton_method(:write_operation!) do |record|
+        raise IOError, "synthetic lost result" if record["state"] == "created"
+
+        original.call(record)
+      end
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring.create(request) }
+      assert_equal "unknown_outcome", error.code
+      assert File.file?(File.join(config.mission_dir, plan.dig("mission", "id"), "mission.yaml"))
+
+      recovered = Flightdeck::MissionAuthoring.new(config).operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-unknown"
+      )
+      assert_equal "created", recovered["outcome"]
+      assert_equal plan.dig("mission", "id"), recovered["mission_id"]
+    end
+  end
+
+  def test_mission_authoring_post_commit_fault_remains_unknown_and_consumed
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      plan = authoring_plan(authoring, draft)
+      request = authoring_create_request(plan, draft, "client-operation-post-commit")
+      original = Flightdeck::MissionStore.instance_method(:persist_complete_mission!)
+      Flightdeck::MissionStore.define_method(:persist_complete_mission!) do |mission|
+        original.bind(self).call(mission)
+        raise IOError, "synthetic post-commit failure"
+      end
+
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring.create(request) }
+      assert_equal "unknown_outcome", error.code
+      operation_path = Dir.glob(File.join(config.mission_dir, ".authoring-operations", "*.json")).first
+      assert_equal "unresolved", JSON.parse(File.read(operation_path)).fetch("state")
+      assert File.file?(File.join(config.mission_dir, plan.dig("mission", "id"), "mission.yaml"))
+      recovered = Flightdeck::MissionAuthoring.new(config).operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-post-commit"
+      )
+      assert_equal "created", recovered["outcome"]
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.create(authoring_create_request(plan, draft, "client-operation-after-post-commit"))
+      end
+      assert_equal "consumed_plan", error.code
+    ensure
+      Flightdeck::MissionStore.define_method(:persist_complete_mission!, original) if original
+    end
+  end
+
+  def test_mission_authoring_recovery_returns_unresolved_on_binding_or_store_conflict
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      plan = authoring_plan(authoring, draft)
+      created = authoring.create(authoring_create_request(plan, draft, "client-operation-conflict"))
+      mission_path = File.join(config.mission_dir, created.fetch("mission_id"), "mission.yaml")
+      mission = Flightdeck::Support.load_data(mission_path)
+      mission.dig("metadata", "authoring")["operation_digest"] = "f" * 64
+      Flightdeck::Support.atomic_yaml(mission_path, mission)
+      status = authoring.operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-conflict"
+      )
+      assert_equal "unresolved", status["outcome"]
+      assert_equal "mission_identity_conflict", status["reason"]
+
+      operation_path = Dir.glob(File.join(config.mission_dir, ".authoring-operations", "*.json")).first
+      File.write(operation_path, "{\"schema_version\":\"future\"}\n")
+      status = authoring.operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-conflict"
+      )
+      assert_equal "unresolved", status["outcome"]
+      assert_equal "operation_store_invalid", status["reason"]
+    end
+  end
+
+  def test_mission_authoring_recovery_rejects_unbound_and_unsafe_operation_records
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      plan = authoring_plan(authoring, draft)
+      authoring.create(authoring_create_request(plan, draft, "client-operation-boundary"))
+      operation_path = Dir.glob(File.join(config.mission_dir, ".authoring-operations", "*.json")).first
+      operation = JSON.parse(File.read(operation_path))
+      operation["mission_id"] = "../../outside"
+      Flightdeck::Support.atomic_write(operation_path, "#{JSON.pretty_generate(operation)}\n")
+
+      status = authoring.operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-boundary"
+      )
+      assert_equal "unresolved", status["outcome"]
+      assert_equal "operation_store_invalid", status["reason"]
+
+      File.delete(operation_path)
+      File.symlink(__FILE__, operation_path)
+      status = authoring.operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-boundary"
+      )
+      assert_equal "unresolved", status["outcome"]
+      assert_equal "operation_store_invalid", status["reason"]
+    end
+  end
+
+  def test_mission_authoring_cli_converts_unexpected_failures_to_closed_json
+    with_authoring_fixture do |root, _config, _authoring, _catalog, _target|
+      request_path = File.join(root, "catalog-internal-error.json")
+      File.write(request_path, JSON.generate("schema_version" => Flightdeck::MissionAuthoring::CATALOG_REQUEST))
+      original = Flightdeck::MissionAuthoring.instance_method(:catalog)
+      Flightdeck::MissionAuthoring.define_method(:catalog) { |_request| raise IOError, "sensitive local path" }
+
+      output = StringIO.new
+      status = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new).run(
+        ["mission", "authoring-catalog", "--request", request_path]
+      )
+      result = JSON.parse(output.string)
+      assert_equal 1, status
+      assert_equal Flightdeck::MissionAuthoring::ERROR_RESULT, result["schema_version"]
+      assert_equal "internal_error", result.dig("error", "code")
+      refute_includes output.string, "sensitive local path"
+      refute_includes result.dig("error", "message"), "operation ID"
+    ensure
+      Flightdeck::MissionAuthoring.define_method(:catalog, original) if original
+    end
+  end
+
+  def test_mission_authoring_capability_schema_and_cli_are_closed_machine_readable_surfaces
+    compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
+    family = compatibility.fetch("capabilities").keys.grep(/mission-authoring/)
+    assert_equal ["flightdeck.command.mission-authoring.v1"], family
+    assert_equal "1.2.0", compatibility["template_version"]
+    assert_equal({"mode" => "stop_and_plan_migration"}, compatibility.dig("capabilities", family.first, "fallback"))
+
+    types = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "mission-authoring-types.schema.json")))
+    assert_equal false, types.dig("$defs", "draft", "additionalProperties")
+    assert_equal false, types.dig("$defs", "draftNode", "additionalProperties")
+    assert_equal false, types.dig("$defs", "selectedTarget", "additionalProperties")
+
+    with_authoring_fixture do |root, _config, _authoring, _catalog, target|
+      request_path = File.join(root, "catalog-request.json")
+      File.write(request_path, JSON.generate("schema_version" => Flightdeck::MissionAuthoring::CATALOG_REQUEST))
+      output = StringIO.new
+      status = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new).run(
+        ["mission", "authoring-catalog", "--request", request_path, "--json"]
+      )
+      assert_equal 0, status
+      assert_equal Flightdeck::MissionAuthoring::CATALOG_RESULT, JSON.parse(output.string)["schema_version"]
+
+      draft = authoring_draft(target)
+      File.write(
+        request_path,
+        JSON.generate("schema_version" => Flightdeck::MissionAuthoring::PLAN_REQUEST, "draft" => draft)
+      )
+      output = StringIO.new
+      status = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new).run(
+        ["mission", "authoring-plan", "--request", request_path]
+      )
+      assert_equal 0, status
+      plan = JSON.parse(output.string)
+      assert_equal Flightdeck::MissionAuthoring::PLAN_RESULT, plan["schema_version"]
+
+      File.write(request_path, JSON.generate(authoring_create_request(plan, draft, "client-cli-operation")))
+      output = StringIO.new
+      status = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new).run(
+        ["mission", "authoring-create", "--request", request_path]
+      )
+      assert_equal 0, status
+      assert_equal "created", JSON.parse(output.string)["outcome"]
+
+      File.write(
+        request_path,
+        JSON.generate(
+          "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+          "operation_id" => "client-cli-operation"
+        )
+      )
+      output = StringIO.new
+      status = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new).run(
+        ["mission", "authoring-operation", "--request", request_path]
+      )
+      assert_equal 0, status
+      assert_equal "created", JSON.parse(output.string)["outcome"]
+
+      File.write(request_path, JSON.generate("schema_version" => "future", "shell" => "echo denied"))
+      output = StringIO.new
+      status = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new).run(
+        ["mission", "authoring-catalog", "--request", request_path]
+      )
+      result = JSON.parse(output.string)
+      assert_equal 1, status
+      assert_equal false, result["ok"]
+      assert_equal "malformed_request", result.dig("error", "code")
+    end
+  end
+
+  def test_mission_authoring_requires_declared_capability_before_any_operation_state
+    with_authoring_fixture do |root, config, authoring, _catalog, target|
+      compatibility_path = File.join(root, "hub", "compatibility.json")
+      compatibility = JSON.parse(File.read(compatibility_path))
+      compatibility.fetch("capabilities").delete(Flightdeck::MissionAuthoring::CAPABILITY)
+      Flightdeck::Support.atomic_write(compatibility_path, JSON.pretty_generate(compatibility))
+      draft = authoring_draft(target)
+      plan_request = { "schema_version" => Flightdeck::MissionAuthoring::PLAN_REQUEST, "draft" => draft }
+      create_request = {
+        "schema_version" => Flightdeck::MissionAuthoring::CREATE_REQUEST,
+        "operation_id" => "unsupported-operation",
+        "confirmation" => { "plan_id" => "plan-#{'a' * 48}", "plan_generation" => "generation-#{'a' * 48}", "plan_digest" => "a" * 64, "plan_token" => "a" * 64 },
+        "draft" => draft
+      }
+      [
+        -> { authoring.catalog("schema_version" => Flightdeck::MissionAuthoring::CATALOG_REQUEST) },
+        -> { authoring.plan(plan_request) },
+        -> { authoring.create(create_request) },
+        -> { authoring.operation("schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST, "operation_id" => "unsupported-operation") }
+      ].each do |callable|
+        error = assert_raises(Flightdeck::MissionAuthoring::ContractError, &callable)
+        assert_equal "unsupported_hub_contract", error.code
+      end
+      refute Dir.exist?(File.join(config.mission_dir, ".authoring-operations"))
+    end
+  end
+
+  def test_mission_authoring_requires_core_mission_schema_before_mutation
+    with_authoring_fixture do |root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      assert_equal Flightdeck::MissionAuthoring::CATALOG_RESULT,
+                   authoring.catalog("schema_version" => Flightdeck::MissionAuthoring::CATALOG_REQUEST)["schema_version"]
+      mission_schema = File.join(root, "hub", "schemas", "mission.schema.json")
+      original = File.binread(mission_schema)
+      FileUtils.rm_f(mission_schema)
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.create(
+          {
+            "schema_version" => Flightdeck::MissionAuthoring::CREATE_REQUEST,
+            "operation_id" => "missing-core-schema",
+            "confirmation" => { "plan_id" => "plan-#{'a' * 48}", "plan_generation" => "generation-#{'a' * 48}", "plan_digest" => "a" * 64, "plan_token" => "a" * 64 },
+            "draft" => draft
+          }
+        )
+      end
+      assert_equal "unsupported_hub_contract", error.code
+      refute Dir.exist?(File.join(config.mission_dir, ".authoring-operations"))
+
+      Flightdeck::Support.atomic_write(mission_schema, original)
+      schema = JSON.parse(original)
+      schema["$id"] = "https://flightdeck.dev/schemas/incorrect-mission.schema.json"
+      Flightdeck::Support.atomic_write(mission_schema, JSON.pretty_generate(schema))
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.operation(
+          "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+          "operation_id" => "mismatched-core-schema"
+        )
+      end
+      assert_equal "unsupported_hub_contract", error.code
+      refute Dir.exist?(File.join(config.mission_dir, ".authoring-operations"))
+    end
+  end
+
+  def test_mission_list_excludes_internal_authoring_operations
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      created_draft = authoring_draft(target, title: "Created authoring operation")
+      created_plan = authoring_plan(authoring, created_draft)
+      authoring.create(authoring_create_request(created_plan, created_draft, "list-created-operation"))
+
+      unresolved_draft = authoring_draft(target, title: "Unresolved authoring operation")
+      unresolved_plan = authoring_plan(authoring, unresolved_draft)
+      original_write = authoring.method(:write_operation!)
+      authoring.define_singleton_method(:write_operation!) do |record|
+        raise IOError, "synthetic lost result" if record["state"] == "created"
+
+        original_write.call(record)
+      end
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.create(authoring_create_request(unresolved_plan, unresolved_draft, "list-unresolved-operation"))
+      end
+      assert_equal "unknown_outcome", error.code
+      authoring.define_singleton_method(:write_operation!, original_write)
+
+      not_created_draft = authoring_draft(target, title: "Not-created authoring operation")
+      not_created_plan = authoring_plan(authoring, not_created_draft)
+      original_atomic = Flightdeck::Support.method(:atomic_yaml)
+      Flightdeck::Support.singleton_class.define_method(:atomic_yaml) do |path, value|
+        raise IOError, "synthetic Mission write failure" if path.end_with?("/mission.yaml")
+
+        original_atomic.call(path, value)
+      end
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.create(authoring_create_request(not_created_plan, not_created_draft, "list-not-created-operation"))
+      end
+      assert_equal "persistence_failed", error.code
+      Flightdeck::Support.singleton_class.define_method(:atomic_yaml, original_atomic)
+
+      page = Flightdeck::MissionStore.new(config).list_page
+      assert_equal 2, page.dig("page", "returned")
+      assert_equal [created_plan, unresolved_plan].map { |plan| plan.dig("mission", "id") }.sort,
+                   page.fetch("missions").map { |mission| mission.fetch("mission_id") }.sort
+    ensure
+      authoring.define_singleton_method(:write_operation!, original_write) if authoring && original_write
+      Flightdeck::Support.singleton_class.define_method(:atomic_yaml, original_atomic) if original_atomic
     end
   end
 end

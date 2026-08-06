@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/mission-authoring-plan-result.schema.json",
+  "title": "Flightdeck Mission authoring plan result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "schema",
+    "ok",
+    "capability",
+    "plan_id",
+    "plan_generation",
+    "plan_digest",
+    "plan_token",
+    "catalog_generation",
+    "mission",
+    "warnings"
+  ],
+  "properties": {
+    "schema_version": {"const": "flightdeck.mission-authoring.plan-result/v1"},
+    "schema": {"const": "hub/schemas/mission-authoring-plan-result.schema.json"},
+    "ok": {"const": true},
+    "capability": {"const": "flightdeck.command.mission-authoring.v1"},
+    "plan_id": {"type": "string", "pattern": "^plan-[0-9a-f]{48}$"},
+    "plan_generation": {"type": "string", "pattern": "^generation-[0-9a-f]{48}$"},
+    "plan_digest": {"$ref": "mission-authoring-types.schema.json#/$defs/sha256"},
+    "plan_token": {"$ref": "mission-authoring-types.schema.json#/$defs/sha256"},
+    "catalog_generation": {"type": "string", "pattern": "^catalog-[0-9a-f]{48}$"},
+    "mission": {"$ref": "mission-authoring-types.schema.json#/$defs/plannedMission"},
+    "warnings": {"type": "array", "maxItems": 1000, "items": {"$ref": "mission-authoring-types.schema.json#/$defs/warning"}}
+  }
+}

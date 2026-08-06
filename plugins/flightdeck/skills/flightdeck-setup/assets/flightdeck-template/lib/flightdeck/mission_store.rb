@@ -6,6 +6,18 @@ require_relative "mission_graph"
 
 module Flightdeck
   class MissionStore
+    LIST_API_VERSION = "flightdeck.mission-list/v1"
+    LIST_SCHEMA = "hub/schemas/mission-list.schema.json"
+    LIST_DEFAULT_LIMIT = 50
+    LIST_MAX_LIMIT = 100
+    LIST_MAX_MISSIONS = 1_000
+    LIST_MAX_RECORD_BYTES = 262_144
+    LIST_CURSOR_PREFIX = "v1."
+    RESERVED_MISSION_ENTRIES = %w[.lock .authoring-operations].freeze
+    LIST_TERMINAL_STATES = %w[review_ready failed_validation runtime_failure cancelled complete].freeze
+    LIST_ATTENTION_STATES = %w[
+      dispatch_unknown needs_approval blocked failed_validation runtime_failure stale
+    ].freeze
     MODES = %w[dispatch_only watch_only supervised].freeze
     EXECUTION_MODES = %w[local worktree].freeze
     ACTION_TYPES = %w[observe dependency_handoff offer_fan_in].freeze
@@ -34,11 +46,23 @@ module Flightdeck
       updated_at prepared_at acknowledged_at failure_code
     ].freeze
 
+    class ListError < Error
+      attr_reader :code, :mission_id, :exit_status
+
+      def initialize(code, message, mission_id: nil, exit_status: 1)
+        super(message)
+        @code = code
+        @mission_id = mission_id
+        @exit_status = exit_status
+      end
+    end
+
     attr_reader :config
 
-    def initialize(config, clock: -> { Time.now.utc })
+    def initialize(config, clock: -> { Time.now.utc }, after_list_record_read: nil)
       @config = config
       @clock = clock
+      @after_list_record_read = after_list_record_read
     end
 
     def create(slug:, title:, outcome:, mode: nil, success_criteria: nil, non_goals: [],
@@ -115,6 +139,53 @@ module Flightdeck
         end
       end
       mission
+    end
+
+    # Builds and validates a complete Mission without persisting it. This is the
+    # service-side preview boundary used by typed authoring clients.
+    def preview_complete(slug:, title:, outcome:, mode: nil, success_criteria: nil, non_goals: [],
+                         authorized_targets: [], nodes: [])
+      mission = build_complete_mission(
+        slug: slug,
+        title: title,
+        outcome: outcome,
+        mode: mode,
+        success_criteria: success_criteria,
+        non_goals: non_goals,
+        authorized_targets: authorized_targets,
+        nodes: nodes
+      )
+      validate_or_raise!(mission, expected_slug: slug)
+      mission
+    end
+
+    # Persists the already-complete graph as one Mission record. No partial
+    # Mission is visible if graph construction or the final atomic write fails.
+    def create_complete(slug:, title:, outcome:, mode: nil, success_criteria: nil, non_goals: [],
+                        authorized_targets: [], nodes: [], authoring_binding: nil)
+      mission = preview_complete(
+        slug: slug,
+        title: title,
+        outcome: outcome,
+        mode: mode,
+        success_criteria: success_criteria,
+        non_goals: non_goals,
+        authorized_targets: authorized_targets,
+        nodes: nodes
+      )
+      if authoring_binding
+        value = Support.stringify(authoring_binding)
+        required = %w[operation_digest plan_id plan_digest]
+        unless value.keys.sort == required.sort &&
+               MissionStore::SHA256.match?(value["operation_digest"].to_s) &&
+               MissionStore::SHA256.match?(value["plan_digest"].to_s) &&
+               value["plan_id"].to_s.match?(/\Aplan-[0-9a-f]{48}\z/)
+          raise UsageError, "Mission authoring binding is invalid"
+        end
+        mission["metadata"]["authoring"] = required.to_h { |field| [field, value.fetch(field)] }
+      end
+      validate_or_raise!(mission, expected_slug: slug)
+      persist_complete_mission!(mission)
     end
 
     def fetch(slug)
@@ -687,6 +758,16 @@ module Flightdeck
       %w[title created_at updated_at].each do |field|
         errors << "metadata.#{field} is required" unless Support.present?(mission.dig("metadata", field))
       end
+      authoring = mission.dig("metadata", "authoring")
+      if authoring
+        unless authoring.is_a?(Hash) && authoring.keys.sort == %w[operation_digest plan_digest plan_id]
+          errors << "metadata.authoring must be a closed operation and plan binding"
+        else
+          errors << "metadata.authoring operation_digest must be sha256" unless SHA256.match?(authoring["operation_digest"].to_s)
+          errors << "metadata.authoring plan_digest must be sha256" unless SHA256.match?(authoring["plan_digest"].to_s)
+          errors << "metadata.authoring plan_id is invalid" unless authoring["plan_id"].to_s.match?(/\Aplan-[0-9a-f]{48}\z/)
+        end
+      end
       %w[metadata.created_at metadata.updated_at].each do |field|
         Time.iso8601(Support.dig_path(mission, field).to_s)
       rescue ArgumentError
@@ -770,7 +851,379 @@ module Flightdeck
       errors.uniq
     end
 
+    def list_page(limit: LIST_DEFAULT_LIMIT, cursor: nil)
+      unless limit.is_a?(Integer) && limit.positive? && limit <= LIST_MAX_LIMIT
+        raise ListError.new(
+          "invalid_limit",
+          "Limit must be an integer from 1 through #{LIST_MAX_LIMIT}.",
+          exit_status: 2
+        )
+      end
+
+      after_id = decode_list_cursor(cursor)
+      ids = discover_mission_ids.select { |mission_id| after_id.nil? || mission_id > after_id }
+      page_ids = ids.first(limit + 1)
+      has_more = page_ids.length > limit
+      page_ids = page_ids.first(limit)
+      summaries = page_ids.map { |mission_id| mission_list_summary(mission_id) }
+
+      {
+        "api_version" => LIST_API_VERSION,
+        "kind" => "MissionList",
+        "schema" => LIST_SCHEMA,
+        "ok" => true,
+        "missions" => summaries,
+        "page" => {
+          "limit" => limit,
+          "returned" => summaries.length,
+          "next_cursor" => has_more ? encode_list_cursor(page_ids.last) : nil
+        }
+      }
+    end
+
     private
+
+    def discover_mission_ids
+      root = config.mission_dir
+      return [] unless Dir.exist?(root)
+      unless File.directory?(root) && !File.symlink?(root)
+        raise ListError.new("invalid_hub_root", "Selected Hub Mission root is not a regular directory.")
+      end
+
+      entries = []
+      Dir.each_child(root) do |entry|
+        next if RESERVED_MISSION_ENTRIES.include?(entry)
+
+        entries << entry
+        if entries.length > LIST_MAX_MISSIONS
+          raise ListError.new("mission_limit_exceeded", "Selected Hub exceeds the Mission list safety limit.")
+        end
+      end
+      entries.sort.filter_map do |entry|
+        begin
+          Support.validate_slug!(entry, label: "mission slug")
+        rescue UsageError
+          raise ListError.new("malformed_mission_record", "Mission record is malformed.")
+        end
+        directory = File.join(root, entry)
+        record = File.join(directory, "mission.yaml")
+        unless File.directory?(directory) && !File.symlink?(directory) &&
+               File.file?(record) && !File.symlink?(record)
+          raise ListError.new(
+            "malformed_mission_record",
+            "Mission record is malformed.",
+            mission_id: entry
+          )
+        end
+        entry
+      end
+    rescue SystemCallError
+      raise ListError.new("invalid_hub_root", "Selected Hub Mission root cannot be read safely.")
+    end
+
+    def mission_list_summary(mission_id)
+      mission = fetch_list_record(mission_id)
+      validate_or_raise!(mission, expected_slug: mission_id)
+      mission = read_only_status_view(mission)
+      node_values = Array(mission.dig("spec", "graph", "nodes"))
+      states = node_values.map { |node| node["observed_state"] }
+      {
+        "mission_id" => mission.dig("metadata", "id"),
+        "title" => mission.dig("metadata", "title"),
+        "mode" => mission.dig("spec", "mode"),
+        "state" => mission.dig("status", "state"),
+        "created_at" => mission.dig("metadata", "created_at"),
+        "updated_at" => mission.dig("metadata", "updated_at"),
+        "generation" => mission.dig("status", "generation"),
+        "fan_in_ready" => mission.dig("status", "fan_in_ready") == true,
+        "progress" => {
+          "total_units" => node_values.length,
+          "required_units" => node_values.count { |node| node["required"] == true },
+          "terminal_units" => states.count { |state| LIST_TERMINAL_STATES.include?(state) },
+          "review_ready_units" => states.count("review_ready"),
+          "attention_units" => states.count { |state| LIST_ATTENTION_STATES.include?(state) }
+        }
+      }
+    rescue UsageError, ValidationError, SystemCallError
+      raise ListError.new(
+        "malformed_mission_record",
+        "Mission record is malformed.",
+        mission_id: mission_id
+      )
+    end
+
+    def encode_list_cursor(mission_id)
+      "#{LIST_CURSOR_PREFIX}#{Base64.urlsafe_encode64(mission_id, padding: false)}"
+    end
+
+    def decode_list_cursor(cursor)
+      return nil if cursor.nil?
+
+      value = cursor.to_s
+      encoded = value.delete_prefix(LIST_CURSOR_PREFIX)
+      unless value.start_with?(LIST_CURSOR_PREFIX) && encoded.match?(/\A[A-Za-z0-9_-]{1,128}\z/)
+        raise ListError.new("invalid_cursor", "Cursor is invalid.", exit_status: 2)
+      end
+      padding = "=" * ((4 - (encoded.length % 4)) % 4)
+      mission_id = Base64.urlsafe_decode64("#{encoded}#{padding}")
+      Support.validate_slug!(mission_id, label: "mission cursor")
+      unless Base64.urlsafe_encode64(mission_id, padding: false) == encoded
+        raise ListError.new("invalid_cursor", "Cursor is invalid.", exit_status: 2)
+      end
+      mission_id
+    rescue ArgumentError, UsageError
+      raise ListError.new("invalid_cursor", "Cursor is invalid.", exit_status: 2)
+    end
+
+    def read_only_status_view(mission)
+      view = Support.stringify(mission)
+      apply_stale_states!(view)
+      prepared_handoff_nodes = outbox(view).filter_map do |action|
+        action.dig("payload", "node_id") if action["type"] == "dependency_handoff" && action["status"] == "prepared"
+      end
+      nodes(view).each do |node|
+        next unless node["observed_state"] == "awaiting_handoff" && prepared_handoff_nodes.include?(node["id"])
+
+        node["observed_state"] = "running"
+        node["status_code"] = "handing_off"
+      end
+      derive_state!(view, touch: false)
+      view["status"]["fan_in_ready"] = fan_in_ready?(view)
+      view["status"]["prepared_actions"] = outbox(view).count { |action| action["status"] == "prepared" }
+      view
+    end
+
+    def fetch_list_record(mission_id)
+      path = mission_path(mission_id)
+      expected = File.lstat(path)
+      unless expected.file? && !expected.symlink?
+        raise ValidationError, "Mission record is not a regular file"
+      end
+      max_bytes = [config.mission_budgets.fetch("max_record_bytes"), LIST_MAX_RECORD_BYTES].min
+      content = File.open(path, "rb") do |file|
+        opened = file.stat
+        unless opened.file? && opened.dev == expected.dev && opened.ino == expected.ino
+          raise ValidationError, "Mission record changed while being read"
+        end
+        value = file.read(max_bytes + 1)
+        raise ValidationError, "Mission record exceeds maximum size" if value.bytesize > max_bytes
+
+        value
+      end
+      @after_list_record_read&.call(path)
+      actual = File.lstat(path)
+      unless same_file_snapshot?(expected, actual)
+        raise ValidationError, "Mission record changed while being read"
+      end
+      value = Support.safe_yaml(content, source: "Mission record")
+      raise ValidationError, "Mission record must contain a mapping" unless value.is_a?(Hash)
+
+      value
+    rescue SystemCallError
+      raise ValidationError, "Mission record is unavailable"
+    end
+
+    def same_file_snapshot?(expected, actual)
+      actual.file? && !actual.symlink? &&
+        expected.dev == actual.dev && expected.ino == actual.ino &&
+        expected.size == actual.size && expected.mtime == actual.mtime &&
+        expected.ctime == actual.ctime
+    end
+
+    def build_complete_mission(slug:, title:, outcome:, mode:, success_criteria:, non_goals:,
+                               authorized_targets:, nodes:)
+      Support.validate_slug!(slug, label: "mission slug")
+      validate_text!(title, "--title", max: 256)
+      validate_text!(outcome, "--outcome", max: 2048)
+      selected_mode = (mode || config.mission_defaults.fetch("default_mode", "dispatch_only")).to_s
+      raise UsageError, "unknown mission mode: #{selected_mode}" unless MODES.include?(selected_mode)
+
+      criterion_texts = Array(success_criteria).map do |value|
+        normalize_bounded_text!(value, "success criterion")
+      end
+      if criterion_texts.empty? && selected_mode == "dispatch_only"
+        criterion_texts = [outcome.to_s.strip]
+      elsif criterion_texts.empty?
+        raise UsageError, "at least one --success-criterion is required for #{selected_mode} missions"
+      end
+      goals_excluded = Array(non_goals).map { |value| normalize_bounded_text!(value, "non-goal") }
+      raise UsageError, "success criteria must be unique" unless criterion_texts.uniq.length == criterion_texts.length
+      raise UsageError, "non-goals must be unique" unless goals_excluded.uniq.length == goals_excluded.length
+      criteria = criterion_texts.each_with_index.map do |text, index|
+        { "id" => format("criterion-%03d", index + 1), "text" => text }
+      end
+      targets = normalize_authorized_targets!(authorized_targets)
+      raise UsageError, "at least one authorized target is required" if targets.empty?
+      authorization_boundary = derive_authorization_boundary(slug, targets, criteria, goals_excluded)
+      now = timestamp
+      mission = {
+        "api_version" => "flightdeck.dev/v1alpha1",
+        "kind" => "MissionRecord",
+        "schema" => "hub/schemas/mission.schema.json",
+        "metadata" => {
+          "id" => slug,
+          "title" => title.to_s.strip,
+          "created_at" => now,
+          "updated_at" => now
+        },
+        "spec" => {
+          "mode" => selected_mode,
+          "outcome" => outcome.to_s.strip,
+          "success_criteria" => criteria,
+          "non_goals" => goals_excluded,
+          "authorized_targets" => targets,
+          "authorization_boundary" => authorization_boundary,
+          "budgets" => config.mission_budgets,
+          "graph" => { "nodes" => [] }
+        },
+        "status" => {
+          "state" => "planned",
+          "generation" => 0,
+          "closed_at" => nil,
+          "checkpoint" => { "number" => 0, "at" => nil, "generation" => 0 },
+          "outbox" => [],
+          "history" => [
+            { "at" => now, "event" => "created", "state" => "planned" }
+          ]
+        }
+      }
+
+      Array(nodes).each do |node|
+        append_complete_node!(mission, node)
+      end
+      enforce_criterion_coverage!(mission)
+      mission
+    end
+
+    def append_complete_node!(mission, attributes)
+      unless attributes.is_a?(Hash) && attributes.keys.all? { |key| key.is_a?(Symbol) }
+        raise UsageError, "complete Mission node input must use typed fields"
+      end
+      node_id = attributes.fetch(:node_id)
+      logical_project_key = attributes.fetch(:logical_project_key)
+      runtime_project_id = attributes.fetch(:runtime_project_id)
+      project_path_digest = attributes.fetch(:project_path_digest)
+      host_id = attributes.fetch(:host_id)
+      execution_mode = attributes.fetch(:execution_mode).to_s
+      access_mode = attributes.fetch(:access_mode).to_s
+      work_type = attributes.fetch(:work_type)
+      required = attributes.fetch(:required)
+      dependencies = Array(attributes.fetch(:dependencies, [])).map(&:to_s)
+      accepted_input_types = Array(attributes.fetch(:accepted_input_types, [])).map(&:to_s)
+      allowed_output_types = Array(attributes.fetch(:allowed_output_types)).map(&:to_s)
+      criterion_ids = Array(attributes.fetch(:criterion_ids, [])).map(&:to_s)
+
+      Support.validate_identifier!(node_id, label: "node ID")
+      Support.validate_identifier!(logical_project_key, label: "logical project key")
+      validate_opaque!(runtime_project_id, "runtime project ID")
+      validate_opaque!(host_id, "host ID")
+      Support.validate_identifier!(work_type, label: "work type")
+      raise UsageError, "required must be boolean" unless [true, false].include?(required)
+      raise UsageError, "execution mode must be local or worktree" unless EXECUTION_MODES.include?(execution_mode)
+      raise UsageError, "access mode must be read_only or write" unless %w[read_only write].include?(access_mode)
+      unless SHA256.match?(project_path_digest.to_s)
+        raise UsageError, "project path digest must be a lowercase sha256"
+      end
+      target = {
+        "logical_project_key" => logical_project_key.to_s,
+        "runtime_project_id" => runtime_project_id.to_s,
+        "project_path_digest" => project_path_digest.to_s,
+        "host_id" => host_id.to_s,
+        "execution_mode" => execution_mode,
+        "access_mode" => access_mode
+      }
+      unless mission.dig("spec", "authorized_targets").include?(target)
+        raise ValidationError, "node #{node_id} is outside the mission authorized target scope"
+      end
+
+      known_criteria = mission.dig("spec", "success_criteria").map { |criterion| criterion["id"] }
+      raise UsageError, "criterion IDs must be unique" unless criterion_ids.uniq.length == criterion_ids.length
+      criterion_ids.each { |id| Support.validate_identifier!(id, label: "criterion ID") }
+      unknown_criteria = criterion_ids - known_criteria
+      raise UsageError, "unknown criterion IDs: #{unknown_criteria.join(', ')}" unless unknown_criteria.empty?
+      raise UsageError, "required nodes must declare at least one criterion ID" if required && criterion_ids.empty?
+
+      raise UsageError, "dependencies must be unique" unless dependencies.uniq.length == dependencies.length
+      raise UsageError, "accepted input types must be unique" unless accepted_input_types.uniq.length == accepted_input_types.length
+      raise UsageError, "allowed output types must be unique" unless allowed_output_types.uniq.length == allowed_output_types.length
+      dependencies.each { |id| Support.validate_identifier!(id, label: "dependency node ID") }
+      accepted_input_types.each { |value| Support.validate_identifier!(value, label: "accepted input type") }
+      allowed_output_types.each { |value| Support.validate_identifier!(value, label: "allowed output type") }
+      raise UsageError, "at least one allowed output type is required" if allowed_output_types.empty?
+      if dependencies.any? && accepted_input_types.empty?
+        raise UsageError, "a node with dependencies requires at least one accepted input type"
+      end
+
+      node_values = mission.dig("spec", "graph", "nodes")
+      raise ValidationError, "mission node already exists: #{node_id}" if node_values.any? { |node| node["id"] == node_id }
+      max_units = mission.dig("spec", "budgets", "max_units").to_i
+      raise ValidationError, "mission unit budget exhausted (max #{max_units})" if node_values.length >= max_units
+      now = timestamp
+      node_values << {
+        "id" => node_id.to_s,
+        "logical_project_key" => logical_project_key.to_s,
+        "runtime_project_id" => runtime_project_id.to_s,
+        "project_path" => nil,
+        "project_path_digest" => project_path_digest.to_s,
+        "host_id" => host_id.to_s,
+        "task_id" => nil,
+        "pending_client_id" => nil,
+        "execution_mode" => execution_mode,
+        "access_mode" => access_mode,
+        "work_type" => work_type.to_s,
+        "required" => required,
+        "dependencies" => dependencies,
+        "accepted_input_types" => accepted_input_types,
+        "allowed_output_types" => allowed_output_types,
+        "authorization_boundary" => mission.dig("spec", "authorization_boundary"),
+        "artifact_resolver" => nil,
+        "criterion_ids" => criterion_ids,
+        "cursor" => nil,
+        "revision" => nil,
+        "event_id" => nil,
+        "event_digest" => nil,
+        "seen_event_ids" => [],
+        "observed_state" => "planned",
+        "retries" => 0,
+        "created_at" => now,
+        "updated_at" => now,
+        "dispatched_at" => nil,
+        "observed_at" => nil,
+        "status_code" => nil,
+        "outcome_code" => nil,
+        "validation_status" => nil,
+        "output_declarations" => [],
+        "output_refs" => [],
+        "criterion_results" => []
+      }
+      graph_errors = MissionGraph.new(node_values).validate
+      raise ValidationError, graph_errors.join("; ") unless graph_errors.empty?
+
+      record_event!(mission, "node_added", "node_id" => node_id.to_s)
+      derive_state!(mission)
+    rescue KeyError => e
+      raise UsageError, "complete Mission node missing field: #{e.key}"
+    end
+
+    def persist_complete_mission!(mission)
+      slug = mission.dig("metadata", "id")
+      validate_or_raise!(mission, expected_slug: slug)
+      FileUtils.mkdir_p(config.mission_dir)
+      root_lock = File.join(config.mission_dir, ".lock")
+      with_file_lock(root_lock, File::LOCK_EX) do
+        directory = mission_dir(slug)
+        raise ValidationError, "mission already exists: #{slug}" if File.exist?(directory)
+
+        Dir.mkdir(directory, 0o700)
+        begin
+          Support.atomic_yaml(mission_path(slug), mission)
+        rescue StandardError
+          Dir.rmdir(directory) if Dir.exist?(directory) && Dir.empty?(directory)
+          raise
+        end
+      end
+      mission
+    end
 
     def validate_nodes(node_values, mission)
       errors = []

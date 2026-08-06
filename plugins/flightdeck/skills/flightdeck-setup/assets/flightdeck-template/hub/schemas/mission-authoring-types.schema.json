@@ -1,0 +1,302 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/mission-authoring-types.schema.json",
+  "title": "Flightdeck Mission authoring shared types",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$",
+      "maxLength": 128
+    },
+    "operationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$"
+    },
+    "opaque": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\u0000-\u001f\u007f]+$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "boundedText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]+$"
+    },
+    "targetIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "logical_project_key",
+        "runtime_project_id",
+        "project_path_digest",
+        "host_id",
+        "execution_mode",
+        "access_mode"
+      ],
+      "properties": {
+        "logical_project_key": {"$ref": "#/$defs/id"},
+        "runtime_project_id": {"$ref": "#/$defs/opaque"},
+        "project_path_digest": {"$ref": "#/$defs/sha256"},
+        "host_id": {"$ref": "#/$defs/opaque"},
+        "execution_mode": {"enum": ["local", "worktree"]},
+        "access_mode": {"enum": ["read_only", "write"]}
+      }
+    },
+    "catalogTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_id",
+        "logical_project_key",
+        "runtime_project_id",
+        "project_path_digest",
+        "host_id",
+        "execution_mode",
+        "access_mode",
+        "display_label"
+      ],
+      "properties": {
+        "target_id": {"$ref": "#/$defs/id"},
+        "logical_project_key": {"$ref": "#/$defs/id"},
+        "runtime_project_id": {"$ref": "#/$defs/opaque"},
+        "project_path_digest": {"$ref": "#/$defs/sha256"},
+        "host_id": {"$ref": "#/$defs/opaque"},
+        "execution_mode": {"enum": ["local", "worktree"]},
+        "access_mode": {"enum": ["read_only", "write"]},
+        "display_label": {"type": "string", "minLength": 1, "maxLength": 256}
+      }
+    },
+    "selectedTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_id",
+        "logical_project_key",
+        "runtime_project_id",
+        "project_path_digest",
+        "host_id",
+        "execution_mode",
+        "access_mode"
+      ],
+      "properties": {
+        "target_id": {"$ref": "#/$defs/id"},
+        "logical_project_key": {"$ref": "#/$defs/id"},
+        "runtime_project_id": {"$ref": "#/$defs/opaque"},
+        "project_path_digest": {"$ref": "#/$defs/sha256"},
+        "host_id": {"$ref": "#/$defs/opaque"},
+        "execution_mode": {"enum": ["local", "worktree"]},
+        "access_mode": {"enum": ["read_only", "write"]}
+      }
+    },
+    "draftNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "target_id",
+        "required",
+        "dependencies",
+        "accepted_input_types",
+        "allowed_output_types"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "target_id": {"$ref": "#/$defs/id"},
+        "required": {"type": "boolean"},
+        "dependencies": {
+          "type": "array",
+          "maxItems": 50,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/id"}
+        },
+        "accepted_input_types": {
+          "type": "array",
+          "maxItems": 50,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/id"}
+        },
+        "allowed_output_types": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/id"}
+        }
+      }
+    },
+    "draft": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "outcome",
+        "success_criteria",
+        "non_goals",
+        "mode",
+        "selected_targets",
+        "nodes"
+      ],
+      "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 256},
+        "outcome": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "success_criteria": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/boundedText"}
+        },
+        "non_goals": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/boundedText"}
+        },
+        "mode": {"enum": ["dispatch_only", "watch_only", "supervised"]},
+        "selected_targets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/selectedTarget"}
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {"$ref": "#/$defs/draftNode"}
+        }
+      }
+    },
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "text"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "text": {"$ref": "#/$defs/boundedText"}
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_units",
+        "max_retries",
+        "max_actions",
+        "max_forwarded_bytes",
+        "max_duration_seconds",
+        "stale_after_seconds",
+        "max_record_bytes"
+      ],
+      "properties": {
+        "max_units": {"type": "integer", "minimum": 1},
+        "max_retries": {"type": "integer", "minimum": 1},
+        "max_actions": {"type": "integer", "minimum": 1},
+        "max_forwarded_bytes": {"type": "integer", "minimum": 1},
+        "max_duration_seconds": {"type": "integer", "minimum": 1},
+        "stale_after_seconds": {"type": "integer", "minimum": 1},
+        "max_record_bytes": {"type": "integer", "minimum": 1}
+      }
+    },
+    "planNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_id",
+        "id",
+        "logical_project_key",
+        "runtime_project_id",
+        "project_path_digest",
+        "host_id",
+        "execution_mode",
+        "access_mode",
+        "work_type",
+        "required",
+        "dependencies",
+        "accepted_input_types",
+        "allowed_output_types",
+        "authorization_boundary",
+        "criterion_ids"
+      ],
+      "properties": {
+        "target_id": {"$ref": "#/$defs/id"},
+        "id": {"$ref": "#/$defs/id"},
+        "logical_project_key": {"$ref": "#/$defs/id"},
+        "runtime_project_id": {"$ref": "#/$defs/opaque"},
+        "project_path_digest": {"$ref": "#/$defs/sha256"},
+        "host_id": {"$ref": "#/$defs/opaque"},
+        "execution_mode": {"enum": ["local", "worktree"]},
+        "access_mode": {"enum": ["read_only", "write"]},
+        "work_type": {"enum": ["implementation", "read_only"]},
+        "required": {"type": "boolean"},
+        "dependencies": {"type": "array", "maxItems": 50, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "accepted_input_types": {"type": "array", "maxItems": 50, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "allowed_output_types": {"type": "array", "minItems": 1, "maxItems": 50, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "authorization_boundary": {"$ref": "#/$defs/id"},
+        "criterion_ids": {"type": "array", "maxItems": 50, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}
+      }
+    },
+    "plannedMission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "outcome",
+        "mode",
+        "success_criteria",
+        "non_goals",
+        "authorized_targets",
+        "authorization_boundary",
+        "budgets",
+        "graph"
+      ],
+      "properties": {
+        "id": {"type": "string", "pattern": "^mission-[0-9a-f]{24}$"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 256},
+        "outcome": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "mode": {"enum": ["dispatch_only", "watch_only", "supervised"]},
+        "success_criteria": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"$ref": "#/$defs/criterion"}},
+        "non_goals": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"$ref": "#/$defs/boundedText"}},
+        "authorized_targets": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"$ref": "#/$defs/targetIdentity"}},
+        "authorization_boundary": {"$ref": "#/$defs/id"},
+        "budgets": {"$ref": "#/$defs/budgets"},
+        "graph": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["nodes"],
+          "properties": {
+            "nodes": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"$ref": "#/$defs/planNode"}}
+          }
+        }
+      }
+    },
+    "warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"$ref": "#/$defs/id"},
+        "message": {"type": "string", "minLength": 1, "maxLength": 1024}
+      }
+    },
+    "confirmation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["plan_id", "plan_generation", "plan_digest", "plan_token"],
+      "properties": {
+        "plan_id": {"type": "string", "pattern": "^plan-[0-9a-f]{48}$"},
+        "plan_generation": {"type": "string", "pattern": "^generation-[0-9a-f]{48}$"},
+        "plan_digest": {"$ref": "#/$defs/sha256"},
+        "plan_token": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

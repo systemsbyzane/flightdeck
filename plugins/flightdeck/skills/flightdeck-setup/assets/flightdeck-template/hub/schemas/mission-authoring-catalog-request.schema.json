@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/mission-authoring-catalog-request.schema.json",
+  "title": "Flightdeck Mission authoring catalog request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version"],
+  "properties": {
+    "schema_version": {"const": "flightdeck.mission-authoring.catalog-request/v1"}
+  }
+}

@@ -18,7 +18,17 @@
         "id": {"$ref": "#/$defs/id"},
         "title": {"type": "string", "minLength": 1, "maxLength": 256},
         "created_at": {"type": "string", "format": "date-time"},
-        "updated_at": {"type": "string", "format": "date-time"}
+        "updated_at": {"type": "string", "format": "date-time"},
+        "authoring": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation_digest", "plan_id", "plan_digest"],
+          "properties": {
+            "operation_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "plan_id": {"type": "string", "pattern": "^plan-[0-9a-f]{48}$"},
+            "plan_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }
+        }
       }
     },
     "spec": {

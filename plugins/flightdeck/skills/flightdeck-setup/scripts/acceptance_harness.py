@@ -395,7 +395,11 @@ def main() -> int:
                     "--require",
                     "flightdeck.command.mission-status.v1",
                     "--require",
+                    "flightdeck.command.mission-list.v1",
+                    "--require",
                     "flightdeck.command.mission-sync.v1",
+                    "--require",
+                    "flightdeck.command.mission-authoring.v1",
                     "--require",
                     "flightdeck.document.mission-control.v1",
                 ],
@@ -410,7 +414,7 @@ def main() -> int:
                 and compatibility.get("hub", {})
                 .get("identity", {})
                 .get("template_version")
-                == "1.1.0"
+                == "1.2.0"
                 and not compatibility.get("requirements", {}).get("missing")
                 and tree_state(hub) == compatibility_before,
                 compatibility,

@@ -54,6 +54,7 @@ bin/flightdeck task transition SLUG STATE [--note NOTE]
 bin/flightdeck task validate SLUG
 bin/flightdeck repo plan --workload NAME --repo OWNER/NAME [--name NAME]
 bin/flightdeck mission new SLUG --title TITLE --outcome OUTCOME [--success-criterion TEXT] [--non-goal TEXT] [--authorized-target-json JSON] [--mode dispatch_only|watch_only|supervised] [--json]
+bin/flightdeck mission list --hub-root ABSOLUTE_PATH [--limit 1..100] [--cursor CURSOR] [--json]
 bin/flightdeck mission show SLUG [--json]
 bin/flightdeck mission validate SLUG [--json]
 bin/flightdeck mission status SLUG [--json]
@@ -87,6 +88,15 @@ the selected adapter. The canonical field shapes are defined in
 `hub/schemas/task.schema.json`; adapter gates list the fields that must be
 present before a transition. Do not put secrets or raw sensitive evidence in a
 task record. Run `task validate` before `task transition`.
+
+`mission list` is a JSON-only, read-only discovery contract for clients. The
+required absolute `--hub-root` selects one Hub explicitly. Results use
+`flightdeck.mission-list/v1`, sort by stable Mission ID, return at most 100
+bounded summaries, and continue with an opaque cursor. The response omits
+Mission bodies, outcomes, prompts, task IDs, project identities and paths,
+output declarations and references, outbox data, credentials, and evidence.
+Clients must require `flightdeck.command.mission-list.v1`; they must not infer
+support from a template version or scrape ignored Mission YAML.
 
 ## Mission Operations
 
