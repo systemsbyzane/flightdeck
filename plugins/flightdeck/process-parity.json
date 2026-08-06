@@ -296,6 +296,7 @@
         "hub/schemas/flightdeck.schema.json",
         "hub/schemas/hub-compatibility.schema.json",
         "hub/schemas/local-repositories.schema.json",
+        "hub/schemas/mission-list.schema.json",
         "hub/schemas/mission-observation.schema.json",
         "hub/schemas/mission-authoring-types.schema.json",
         "hub/schemas/mission-authoring-catalog-request.schema.json",

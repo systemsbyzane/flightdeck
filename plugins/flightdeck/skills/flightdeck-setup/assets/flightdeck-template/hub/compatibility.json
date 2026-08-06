@@ -193,6 +193,24 @@
         "mode": "stop_and_plan_migration"
       }
     },
+    "flightdeck.command.mission-list.v1": {
+      "kind": "command",
+      "description": "Versioned bounded read-only Mission discovery for an explicitly selected Hub.",
+      "probe": {
+        "help_contains": "bin/flightdeck mission list "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/mission_graph.rb",
+        "lib/flightdeck/mission_store.rb",
+        "hub/schemas/mission.schema.json",
+        "hub/schemas/mission-list.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
     "flightdeck.command.mission-sync.v1": {
       "kind": "command",
       "description": "Bounded Mission observation apply, checkpoint, typed fan-in, and two-phase outbox reconciliation.",

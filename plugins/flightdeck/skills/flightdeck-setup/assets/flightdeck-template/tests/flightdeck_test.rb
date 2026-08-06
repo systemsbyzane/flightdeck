@@ -2012,6 +2012,161 @@ class FlightdeckTest < Minitest::Test
     end
   end
 
+  def test_mission_list_contract_is_deterministic_bounded_paginated_and_read_only
+    with_hub do |root, config|
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
+
+      assert_equal 0, cli.run(["mission", "list", "--hub-root", root, "--limit", "1"])
+      empty = JSON.parse(output.string)
+      assert_equal "flightdeck.mission-list/v1", empty["api_version"]
+      assert_equal "MissionList", empty["kind"]
+      assert_equal [], empty["missions"]
+      assert_equal({ "limit" => 1, "returned" => 0, "next_cursor" => nil }, empty["page"])
+
+      create_mission(config, slug: "zulu-mission")
+      create_mission(config, slug: "alpha-mission")
+      add_mission_node(config, slug: "alpha-mission")
+      store = Flightdeck::MissionStore.new(config)
+      store.record_dispatch(
+        slug: "alpha-mission",
+        node_id: "unit-a",
+        runtime_project_id: "runtime-unit-a",
+        host_id: "host-local",
+        dispatch_unknown: true
+      )
+      alpha_path = File.join(config.mission_dir, "alpha-mission", "mission.yaml")
+      before_bytes = File.binread(alpha_path)
+      before_status = store.status("alpha-mission")
+      before_validation = store.validate("alpha-mission")
+      before_tree = Dir.glob(File.join(config.mission_dir, "**", "*"), File::FNM_DOTMATCH).sort
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 0, cli.run(["mission", "list", "--hub-root", root, "--limit", "1", "--json"])
+      first_page = JSON.parse(output.string)
+      assert_equal ["alpha-mission"], first_page["missions"].map { |item| item["mission_id"] }
+      assert_match(/\Av1\.[A-Za-z0-9_-]+\z/, first_page.dig("page", "next_cursor"))
+      summary = first_page.fetch("missions").first
+      assert_equal %w[
+        created_at fan_in_ready generation mission_id mode progress state title updated_at
+      ], summary.keys.sort
+      assert_equal 1, summary.dig("progress", "total_units")
+      assert_equal 1, summary.dig("progress", "required_units")
+      assert_equal 1, summary.dig("progress", "attention_units")
+      assert_equal "dispatch_unknown", summary["state"]
+      refute_includes output.string, root
+      refute_includes output.string, "Produce validated typed outputs."
+      refute_includes output.string, "project_path"
+      refute_includes output.string, "task_id"
+      refute_includes output.string, "outbox"
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 0, cli.run(
+        ["mission", "list", "--hub-root", root, "--limit", "1", "--cursor", first_page.dig("page", "next_cursor")]
+      )
+      second_page = JSON.parse(output.string)
+      assert_equal ["zulu-mission"], second_page["missions"].map { |item| item["mission_id"] }
+      assert_nil second_page.dig("page", "next_cursor")
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 0, cli.run(["mission", "list", "--hub-root", root, "--limit", "100"])
+      all = JSON.parse(output.string)
+      assert_equal %w[alpha-mission zulu-mission], all["missions"].map { |item| item["mission_id"] }
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 2, cli.run(["mission", "list", "--hub-root", root, "--limit", "101"])
+      assert_equal "invalid_limit", JSON.parse(output.string).dig("error", "code")
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 2, cli.run(["mission", "list", "--hub-root", root, "--cursor", "not-a-v1-cursor"])
+      assert_equal "invalid_cursor", JSON.parse(output.string).dig("error", "code")
+
+      assert_equal before_bytes, File.binread(alpha_path)
+      assert_equal before_status, store.status("alpha-mission")
+      assert_equal before_validation, store.validate("alpha-mission")
+      assert_equal before_tree, Dir.glob(File.join(config.mission_dir, "**", "*"), File::FNM_DOTMATCH).sort
+    end
+  end
+
+  def test_mission_list_contract_returns_safe_structured_root_and_record_errors
+    Dir.mktmpdir("flightdeck-list-errors-") do |directory|
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: directory, out: output, err: StringIO.new)
+      missing = File.join(directory, "absent-hub")
+      assert_equal 1, cli.run(["mission", "list", "--hub-root", missing])
+      missing_error = JSON.parse(output.string)
+      assert_equal "MissionListError", missing_error["kind"]
+      assert_equal false, missing_error["ok"]
+      assert_equal "hub_root_not_found", missing_error.dig("error", "code")
+      refute_includes output.string, missing
+
+      invalid = File.join(directory, "invalid-hub")
+      FileUtils.mkdir_p(invalid)
+      File.write(File.join(invalid, "flightdeck.yaml"), YAML.dump({ "kind" => "NotAFlightdeck" }))
+      output.truncate(0)
+      output.rewind
+      assert_equal 1, cli.run(["mission", "list", "--hub-root", invalid])
+      invalid_error = JSON.parse(output.string)
+      assert_equal "invalid_hub_root", invalid_error.dig("error", "code")
+      refute_includes output.string, invalid
+    end
+
+    with_hub do |root, config|
+      create_mission(config, slug: "valid-mission")
+      create_mission(config, slug: "broken-mission")
+      broken_path = File.join(config.mission_dir, "broken-mission", "mission.yaml")
+      broken = Flightdeck::Support.load_data(broken_path)
+      broken["kind"] = "UnexpectedRecord"
+      Flightdeck::Support.atomic_yaml(broken_path, broken)
+
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
+      assert_equal 1, cli.run(["mission", "list", "--hub-root", root])
+      error = JSON.parse(output.string)
+      assert_equal "flightdeck.mission-list/v1", error["api_version"]
+      assert_equal "MissionListError", error["kind"]
+      assert_equal "hub/schemas/mission-list.schema.json", error["schema"]
+      assert_equal "malformed_mission_record", error.dig("error", "code")
+      assert_equal "broken-mission", error.dig("error", "mission_id")
+      refute_includes output.string, root
+      refute_includes output.string, "UnexpectedRecord"
+      refute error.key?("missions")
+    end
+
+    with_hub do |root, _config|
+      compatibility_path = File.join(root, "hub", "compatibility.json")
+      compatibility = JSON.parse(File.read(compatibility_path))
+      compatibility.fetch("capabilities").delete("flightdeck.command.mission-list.v1")
+      Flightdeck::Support.atomic_write(compatibility_path, JSON.pretty_generate(compatibility))
+
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
+      assert_equal 1, cli.run(["mission", "list", "--hub-root", root])
+      error = JSON.parse(output.string)
+      assert_equal "unsupported_hub_contract", error.dig("error", "code")
+      refute_includes output.string, root
+    end
+  end
+
+  def test_mission_list_schema_and_capability_are_declared
+    schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "mission-list.schema.json")))
+    assert_equal "https://flightdeck.dev/schemas/mission-list.schema.json", schema["$id"]
+    assert_equal 100, schema.dig("$defs", "success", "properties", "missions", "maxItems")
+    assert_includes schema.dig("$defs", "error", "properties", "error", "properties", "code", "enum"),
+                    "unsupported_hub_contract"
+
+    compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
+    capability = compatibility.dig("capabilities", "flightdeck.command.mission-list.v1")
+    assert_equal "command", capability["kind"]
+    assert_equal "bin/flightdeck mission list ", capability.dig("probe", "help_contains")
+    assert_includes capability["managed_paths"], "hub/schemas/mission-list.schema.json"
+  end
+
   def test_mission_cli_rejects_cross_boundary_nodes_and_handoff_actions
     with_hub do |root, config|
       create_mission(

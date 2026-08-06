@@ -20,6 +20,8 @@ module Flightdeck
 
     def run(argv)
       arguments = argv.dup
+      return mission_list(arguments.drop(2)) if arguments.first(2) == %w[mission list]
+
       command = arguments.shift || "help"
       return help if %w[help -h --help].include?(command)
 
@@ -48,6 +50,66 @@ module Flightdeck
     end
 
     private
+
+    def mission_list(argv)
+      options = { limit: MissionStore::LIST_DEFAULT_LIMIT }
+      OptionParser.new do |parser|
+        parser.on("--hub-root PATH") { |value| options[:hub_root] = value }
+        parser.on("--limit N", Integer) { |value| options[:limit] = value }
+        parser.on("--cursor CURSOR") { |value| options[:cursor] = value }
+        parser.on("--json") { options[:json] = true }
+      end.parse!(argv)
+      empty!(argv)
+      raise UsageError, "--hub-root is required" unless options[:hub_root]
+
+      selected_root = options[:hub_root].to_s
+      unless Pathname.new(selected_root).absolute?
+        raise MissionStore::ListError.new("invalid_hub_root", "Hub root must be an absolute path.")
+      end
+      unless File.directory?(selected_root)
+        raise MissionStore::ListError.new("hub_root_not_found", "Selected Hub root does not exist.")
+      end
+
+      config = Config.new(root: selected_root)
+      unless config.data["api_version"] == "flightdeck.dev/v1alpha1" &&
+             config.data["kind"] == "FlightdeckRegistry" &&
+             config.data["schema"] == "hub/schemas/flightdeck.schema.json"
+        raise MissionStore::ListError.new("invalid_hub_root", "Selected Hub root is not a Flightdeck Hub.")
+      end
+      verify_mission_list_capability!(config)
+      json(MissionStore.new(config).list_page(limit: options[:limit], cursor: options[:cursor]))
+      0
+    rescue MissionStore::ListError => e
+      emit_mission_list_error(e.code, e.message, mission_id: e.mission_id)
+      e.exit_status
+    rescue UsageError, OptionParser::ParseError => e
+      emit_mission_list_error("invalid_request", e.message)
+      2
+    rescue ConfigurationError, ValidationError, SystemCallError
+      emit_mission_list_error("invalid_hub_root", "Selected Hub root is not a valid Flightdeck Hub.")
+      1
+    end
+
+    def verify_mission_list_capability!(config)
+      compatibility_path = File.join(config.root, "hub", "compatibility.json")
+      schema_path = File.join(config.root, MissionStore::LIST_SCHEMA)
+      unless File.file?(compatibility_path) && !File.symlink?(compatibility_path) &&
+             File.file?(schema_path) && !File.symlink?(schema_path)
+        raise MissionStore::ListError.new(
+          "unsupported_hub_contract",
+          "Selected Hub does not declare the Mission list v1 contract."
+        )
+      end
+      compatibility = Support.load_data(compatibility_path)
+      capability = compatibility.dig("capabilities", "flightdeck.command.mission-list.v1")
+      unless compatibility["schema_version"] == "flightdeck.hub-compatibility/v1" &&
+             compatibility["product"] == "flightdeck" && capability.is_a?(Hash)
+        raise MissionStore::ListError.new(
+          "unsupported_hub_contract",
+          "Selected Hub does not declare the Mission list v1 contract."
+        )
+      end
+    end
 
     def doctor(config, argv)
       options = { json: false, strict: false }
@@ -536,6 +598,7 @@ module Flightdeck
           bin/flightdeck task validate SLUG
           bin/flightdeck task transition SLUG STATE [--note NOTE]
           bin/flightdeck mission new SLUG --title TITLE --outcome OUTCOME [--success-criterion TEXT] [--non-goal TEXT] [--authorized-target-json JSON] [--mode dispatch_only|watch_only|supervised] [--json]
+          bin/flightdeck mission list --hub-root ABSOLUTE_PATH [--limit 1..100] [--cursor CURSOR] [--json]
           bin/flightdeck mission show SLUG [--json]
           bin/flightdeck mission validate SLUG [--json]
           bin/flightdeck mission status SLUG [--json]
@@ -555,7 +618,7 @@ module Flightdeck
           bin/flightdeck mission fail SLUG ACTION_ID --code CODE [--json]
           bin/flightdeck mission close SLUG [--json]
 
-        doctor, status, setup plan, route plan, repo plan, bridge plan, mission show,
+        doctor, status, setup plan, route plan, repo plan, bridge plan, mission list, mission show,
         mission validate, mission status, mission authoring-catalog, mission
         authoring-plan, mission authoring-operation, mission sync-plan, mission
         outbox, and mission next-actions are read-only.
@@ -640,6 +703,18 @@ module Flightdeck
 
     def emit_mission(value, json_output, message)
       json_output ? json(value) : @out.puts(message)
+    end
+
+    def emit_mission_list_error(code, message, mission_id: nil)
+      error = { "code" => code, "message" => message }
+      error["mission_id"] = mission_id if mission_id
+      json(
+        "api_version" => MissionStore::LIST_API_VERSION,
+        "kind" => "MissionListError",
+        "schema" => MissionStore::LIST_SCHEMA,
+        "ok" => false,
+        "error" => error
+      )
     end
 
     def parse_json_option!(value, label)

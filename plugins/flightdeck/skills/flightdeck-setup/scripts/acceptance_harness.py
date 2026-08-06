@@ -395,6 +395,8 @@ def main() -> int:
                     "--require",
                     "flightdeck.command.mission-status.v1",
                     "--require",
+                    "flightdeck.command.mission-list.v1",
+                    "--require",
                     "flightdeck.command.mission-sync.v1",
                     "--require",
                     "flightdeck.command.mission-authoring.v1",

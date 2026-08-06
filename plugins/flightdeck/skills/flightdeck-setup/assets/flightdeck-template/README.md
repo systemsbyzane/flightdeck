@@ -161,6 +161,7 @@ bin/flightdeck bridge plan --repo-id example-service --mode reference
 bin/flightdeck bridge plan --all --failure-policy stop --json
 bin/flightdeck bridge install --all --failure-policy stop --json
 bin/flightdeck task new development example-feature --title "Example feature" --outcome "Deliver the scoped behavior"
+bin/flightdeck mission list --hub-root /absolute/path/to/selected-hub --limit 50
 bin/flightdeck mission new example-release --title "Example release" --outcome "Prepare the coordinated change for review" --success-criterion "Contract and implementation validate" --non-goal "Do not commit, publish, deploy, or close" --mode supervised --authorized-target-json '{"logical_project_key":"example-api","runtime_project_id":"project-api","project_path_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","host_id":"local","execution_mode":"worktree","access_mode":"write"}'
 bin/flightdeck mission add example-release api --project-key example-api --runtime-project-id project-api --project-path-digest aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --host-id local --execution-mode worktree --access-mode write --work-type implementation --required --criterion-id criterion-001 --allows-output contract_ref --artifact-resolver-kind same_host_workspace --artifact-resolver-id example-release-workspace
 bin/flightdeck mission validate example-release --json

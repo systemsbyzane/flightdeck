@@ -107,6 +107,7 @@ Flightdeck dispatch remains the default: one owner, one receipt, then stop.
 - bounded waits of at most eight tasks per call with opaque per-task cursors;
 - normalized observations, bounded output declarations, core-materialized
   references, and a two-phase outbox;
+- a bounded, versioned, read-only Mission list contract for selected Hubs;
 - deterministic status and explicit stop conditions; and
 - operator-only completion after the Mission reaches review-ready.
 

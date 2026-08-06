@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/mission-list.schema.json",
+  "title": "Flightdeck Mission List Contract",
+  "description": "Versioned, bounded, read-only Mission summaries and stable errors for desktop discovery.",
+  "oneOf": [
+    {"$ref": "#/$defs/success"},
+    {"$ref": "#/$defs/error"}
+  ],
+  "$defs": {
+    "success": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "kind", "schema", "ok", "missions", "page"],
+      "properties": {
+        "api_version": {"const": "flightdeck.mission-list/v1"},
+        "kind": {"const": "MissionList"},
+        "schema": {"const": "hub/schemas/mission-list.schema.json"},
+        "ok": {"const": true},
+        "missions": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {"$ref": "#/$defs/summary"}
+        },
+        "page": {"$ref": "#/$defs/page"}
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api_version", "kind", "schema", "ok", "error"],
+      "properties": {
+        "api_version": {"const": "flightdeck.mission-list/v1"},
+        "kind": {"const": "MissionListError"},
+        "schema": {"const": "hub/schemas/mission-list.schema.json"},
+        "ok": {"const": false},
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": {
+              "enum": [
+                "invalid_request",
+                "hub_root_not_found",
+                "invalid_hub_root",
+                "unsupported_hub_contract",
+                "invalid_limit",
+                "invalid_cursor",
+                "malformed_mission_record"
+              ]
+            },
+            "message": {"type": "string", "minLength": 1, "maxLength": 256},
+            "mission_id": {"$ref": "#/$defs/missionId"}
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mission_id",
+        "title",
+        "mode",
+        "state",
+        "created_at",
+        "updated_at",
+        "generation",
+        "fan_in_ready",
+        "progress"
+      ],
+      "properties": {
+        "mission_id": {"$ref": "#/$defs/missionId"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 256},
+        "mode": {"enum": ["dispatch_only", "watch_only", "supervised"]},
+        "state": {
+          "enum": [
+            "planned",
+            "dispatch_pending",
+            "dispatch_unknown",
+            "running",
+            "needs_approval",
+            "blocked",
+            "failed_validation",
+            "runtime_failure",
+            "review_ready",
+            "stale",
+            "cancelled",
+            "complete"
+          ]
+        },
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"},
+        "generation": {"type": "integer", "minimum": 0},
+        "fan_in_ready": {"type": "boolean"},
+        "progress": {"$ref": "#/$defs/progress"}
+      }
+    },
+    "progress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total_units",
+        "required_units",
+        "terminal_units",
+        "review_ready_units",
+        "attention_units"
+      ],
+      "properties": {
+        "total_units": {"type": "integer", "minimum": 0},
+        "required_units": {"type": "integer", "minimum": 0},
+        "terminal_units": {"type": "integer", "minimum": 0},
+        "review_ready_units": {"type": "integer", "minimum": 0},
+        "attention_units": {"type": "integer", "minimum": 0}
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["limit", "returned", "next_cursor"],
+      "properties": {
+        "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        "returned": {"type": "integer", "minimum": 0, "maximum": 100},
+        "next_cursor": {
+          "type": ["string", "null"],
+          "pattern": "^v1\\.[A-Za-z0-9_-]{1,128}$"
+        }
+      }
+    },
+    "missionId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?$"
+    }
+  }
+}

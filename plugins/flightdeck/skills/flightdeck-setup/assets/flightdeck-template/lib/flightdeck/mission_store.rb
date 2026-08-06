@@ -6,6 +6,15 @@ require_relative "mission_graph"
 
 module Flightdeck
   class MissionStore
+    LIST_API_VERSION = "flightdeck.mission-list/v1"
+    LIST_SCHEMA = "hub/schemas/mission-list.schema.json"
+    LIST_DEFAULT_LIMIT = 50
+    LIST_MAX_LIMIT = 100
+    LIST_CURSOR_PREFIX = "v1."
+    LIST_TERMINAL_STATES = %w[review_ready failed_validation runtime_failure cancelled complete].freeze
+    LIST_ATTENTION_STATES = %w[
+      dispatch_unknown needs_approval blocked failed_validation runtime_failure stale
+    ].freeze
     MODES = %w[dispatch_only watch_only supervised].freeze
     EXECUTION_MODES = %w[local worktree].freeze
     ACTION_TYPES = %w[observe dependency_handoff offer_fan_in].freeze
@@ -33,6 +42,17 @@ module Flightdeck
       id type idempotency_key trigger_digest authorization_boundary status payload attempts created_at
       updated_at prepared_at acknowledged_at failure_code
     ].freeze
+
+    class ListError < Error
+      attr_reader :code, :mission_id, :exit_status
+
+      def initialize(code, message, mission_id: nil, exit_status: 1)
+        super(message)
+        @code = code
+        @mission_id = mission_id
+        @exit_status = exit_status
+      end
+    end
 
     attr_reader :config
 
@@ -827,7 +847,122 @@ module Flightdeck
       errors.uniq
     end
 
+    def list_page(limit: LIST_DEFAULT_LIMIT, cursor: nil)
+      unless limit.is_a?(Integer) && limit.positive? && limit <= LIST_MAX_LIMIT
+        raise ListError.new(
+          "invalid_limit",
+          "Limit must be an integer from 1 through #{LIST_MAX_LIMIT}.",
+          exit_status: 2
+        )
+      end
+
+      after_id = decode_list_cursor(cursor)
+      ids = discover_mission_ids.select { |mission_id| after_id.nil? || mission_id > after_id }
+      page_ids = ids.first(limit + 1)
+      has_more = page_ids.length > limit
+      page_ids = page_ids.first(limit)
+      summaries = page_ids.map { |mission_id| mission_list_summary(mission_id) }
+
+      {
+        "api_version" => LIST_API_VERSION,
+        "kind" => "MissionList",
+        "schema" => LIST_SCHEMA,
+        "ok" => true,
+        "missions" => summaries,
+        "page" => {
+          "limit" => limit,
+          "returned" => summaries.length,
+          "next_cursor" => has_more ? encode_list_cursor(page_ids.last) : nil
+        }
+      }
+    end
+
     private
+
+    def discover_mission_ids
+      root = config.mission_dir
+      return [] unless Dir.exist?(root)
+      unless File.directory?(root) && !File.symlink?(root)
+        raise ListError.new("invalid_hub_root", "Selected Hub Mission root is not a regular directory.")
+      end
+
+      Dir.children(root).sort.filter_map do |entry|
+        next if entry == ".lock"
+
+        begin
+          Support.validate_slug!(entry, label: "mission slug")
+        rescue UsageError
+          raise ListError.new("malformed_mission_record", "Mission record is malformed.")
+        end
+        directory = File.join(root, entry)
+        record = File.join(directory, "mission.yaml")
+        unless File.directory?(directory) && !File.symlink?(directory) &&
+               File.file?(record) && !File.symlink?(record)
+          raise ListError.new(
+            "malformed_mission_record",
+            "Mission record is malformed.",
+            mission_id: entry
+          )
+        end
+        entry
+      end
+    rescue SystemCallError
+      raise ListError.new("invalid_hub_root", "Selected Hub Mission root cannot be read safely.")
+    end
+
+    def mission_list_summary(mission_id)
+      mission = fetch(mission_id)
+      validate_or_raise!(mission, expected_slug: mission_id)
+      mission = status_view(mission)
+      node_values = Array(mission.dig("spec", "graph", "nodes"))
+      states = node_values.map { |node| node["observed_state"] }
+      {
+        "mission_id" => mission.dig("metadata", "id"),
+        "title" => mission.dig("metadata", "title"),
+        "mode" => mission.dig("spec", "mode"),
+        "state" => mission.dig("status", "state"),
+        "created_at" => mission.dig("metadata", "created_at"),
+        "updated_at" => mission.dig("metadata", "updated_at"),
+        "generation" => mission.dig("status", "generation"),
+        "fan_in_ready" => mission.dig("status", "fan_in_ready") == true,
+        "progress" => {
+          "total_units" => node_values.length,
+          "required_units" => node_values.count { |node| node["required"] == true },
+          "terminal_units" => states.count { |state| LIST_TERMINAL_STATES.include?(state) },
+          "review_ready_units" => states.count("review_ready"),
+          "attention_units" => states.count { |state| LIST_ATTENTION_STATES.include?(state) }
+        }
+      }
+    rescue UsageError, ValidationError, SystemCallError
+      raise ListError.new(
+        "malformed_mission_record",
+        "Mission record is malformed.",
+        mission_id: mission_id
+      )
+    end
+
+    def encode_list_cursor(mission_id)
+      "#{LIST_CURSOR_PREFIX}#{Base64.urlsafe_encode64(mission_id, padding: false)}"
+    end
+
+    def decode_list_cursor(cursor)
+      return nil if cursor.nil?
+
+      value = cursor.to_s
+      encoded = value.delete_prefix(LIST_CURSOR_PREFIX)
+      unless value.start_with?(LIST_CURSOR_PREFIX) && encoded.match?(/\A[A-Za-z0-9_-]{1,128}\z/)
+        raise ListError.new("invalid_cursor", "Cursor is invalid.", exit_status: 2)
+      end
+      padding = "=" * ((4 - (encoded.length % 4)) % 4)
+      mission_id = Base64.urlsafe_decode64("#{encoded}#{padding}")
+      Support.validate_slug!(mission_id, label: "mission cursor")
+      unless Base64.urlsafe_encode64(mission_id, padding: false) == encoded
+        raise ListError.new("invalid_cursor", "Cursor is invalid.", exit_status: 2)
+      end
+      mission_id
+    rescue ArgumentError, UsageError
+      raise ListError.new("invalid_cursor", "Cursor is invalid.", exit_status: 2)
+    end
 
     def build_complete_mission(slug:, title:, outcome:, mode:, success_criteria:, non_goals:,
                                authorized_targets:, nodes:)
