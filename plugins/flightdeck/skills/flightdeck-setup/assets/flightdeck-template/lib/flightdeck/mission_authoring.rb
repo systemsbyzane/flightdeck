@@ -335,6 +335,7 @@ module Flightdeck
     def verify_capability!
       compatibility_path = File.join(config.root, "hub", "compatibility.json")
       required_schemas = %w[
+        mission.schema.json
         mission-authoring-catalog-request.schema.json
         mission-authoring-catalog-result.schema.json
         mission-authoring-create-request.schema.json

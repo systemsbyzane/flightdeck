@@ -3215,6 +3215,7 @@ class FlightdeckTest < Minitest::Test
       oversized.fetch("nodes").first["id"] = "a#{'b' * 128}"
       error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring_plan(authoring, oversized) }
       assert_equal "malformed_request", error.code
+      assert_equal "node ID exceeds 128 bytes", error.message
     end
   end
 
@@ -3537,6 +3538,86 @@ class FlightdeckTest < Minitest::Test
         assert_equal "unsupported_hub_contract", error.code
       end
       refute Dir.exist?(File.join(config.mission_dir, ".authoring-operations"))
+    end
+  end
+
+  def test_mission_authoring_requires_core_mission_schema_before_mutation
+    with_authoring_fixture do |root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      assert_equal Flightdeck::MissionAuthoring::CATALOG_RESULT,
+                   authoring.catalog("schema_version" => Flightdeck::MissionAuthoring::CATALOG_REQUEST)["schema_version"]
+      mission_schema = File.join(root, "hub", "schemas", "mission.schema.json")
+      original = File.binread(mission_schema)
+      FileUtils.rm_f(mission_schema)
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.create(
+          {
+            "schema_version" => Flightdeck::MissionAuthoring::CREATE_REQUEST,
+            "operation_id" => "missing-core-schema",
+            "confirmation" => { "plan_id" => "plan-#{'a' * 48}", "plan_generation" => "generation-#{'a' * 48}", "plan_digest" => "a" * 64, "plan_token" => "a" * 64 },
+            "draft" => draft
+          }
+        )
+      end
+      assert_equal "unsupported_hub_contract", error.code
+      refute Dir.exist?(File.join(config.mission_dir, ".authoring-operations"))
+
+      Flightdeck::Support.atomic_write(mission_schema, original)
+      schema = JSON.parse(original)
+      schema["$id"] = "https://flightdeck.dev/schemas/incorrect-mission.schema.json"
+      Flightdeck::Support.atomic_write(mission_schema, JSON.pretty_generate(schema))
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.operation(
+          "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+          "operation_id" => "mismatched-core-schema"
+        )
+      end
+      assert_equal "unsupported_hub_contract", error.code
+      refute Dir.exist?(File.join(config.mission_dir, ".authoring-operations"))
+    end
+  end
+
+  def test_mission_list_excludes_internal_authoring_operations
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      created_draft = authoring_draft(target, title: "Created authoring operation")
+      created_plan = authoring_plan(authoring, created_draft)
+      authoring.create(authoring_create_request(created_plan, created_draft, "list-created-operation"))
+
+      unresolved_draft = authoring_draft(target, title: "Unresolved authoring operation")
+      unresolved_plan = authoring_plan(authoring, unresolved_draft)
+      original_write = authoring.method(:write_operation!)
+      authoring.define_singleton_method(:write_operation!) do |record|
+        raise IOError, "synthetic lost result" if record["state"] == "created"
+
+        original_write.call(record)
+      end
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.create(authoring_create_request(unresolved_plan, unresolved_draft, "list-unresolved-operation"))
+      end
+      assert_equal "unknown_outcome", error.code
+      authoring.define_singleton_method(:write_operation!, original_write)
+
+      not_created_draft = authoring_draft(target, title: "Not-created authoring operation")
+      not_created_plan = authoring_plan(authoring, not_created_draft)
+      original_atomic = Flightdeck::Support.method(:atomic_yaml)
+      Flightdeck::Support.singleton_class.define_method(:atomic_yaml) do |path, value|
+        raise IOError, "synthetic Mission write failure" if path.end_with?("/mission.yaml")
+
+        original_atomic.call(path, value)
+      end
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.create(authoring_create_request(not_created_plan, not_created_draft, "list-not-created-operation"))
+      end
+      assert_equal "persistence_failed", error.code
+      Flightdeck::Support.singleton_class.define_method(:atomic_yaml, original_atomic)
+
+      page = Flightdeck::MissionStore.new(config).list_page
+      assert_equal 2, page.dig("page", "returned")
+      assert_equal [created_plan, unresolved_plan].map { |plan| plan.dig("mission", "id") }.sort,
+                   page.fetch("missions").map { |mission| mission.fetch("mission_id") }.sort
+    ensure
+      authoring.define_singleton_method(:write_operation!, original_write) if authoring && original_write
+      Flightdeck::Support.singleton_class.define_method(:atomic_yaml, original_atomic) if original_atomic
     end
   end
 end

@@ -13,6 +13,7 @@ module Flightdeck
     LIST_MAX_MISSIONS = 1_000
     LIST_MAX_RECORD_BYTES = 262_144
     LIST_CURSOR_PREFIX = "v1."
+    RESERVED_MISSION_ENTRIES = %w[.lock .authoring-operations].freeze
     LIST_TERMINAL_STATES = %w[review_ready failed_validation runtime_failure cancelled complete].freeze
     LIST_ATTENTION_STATES = %w[
       dispatch_unknown needs_approval blocked failed_validation runtime_failure stale
@@ -891,7 +892,7 @@ module Flightdeck
 
       entries = []
       Dir.each_child(root) do |entry|
-        next if entry == ".lock"
+        next if RESERVED_MISSION_ENTRIES.include?(entry)
 
         entries << entry
         if entries.length > LIST_MAX_MISSIONS
