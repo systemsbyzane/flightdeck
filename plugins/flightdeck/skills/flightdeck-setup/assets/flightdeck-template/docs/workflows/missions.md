@@ -564,6 +564,54 @@ preview, confirmed create, and recovery contract is documented in
 but diagnosably unsupported for that capability; existing Mission commands do
 not imply authoring support.
 
+Template `1.3.0` adds
+`flightdeck.command.skill-telemetry.v1`. During an authorized sync, the adapter
+may attach `skill_events` only when Codex exposes an explicit structured task
+skill-event record. Each input event is closed and bounded to skill ID,
+optional version, lifecycle status, observed time, stable evidence ID, and the
+exact source `codex_task_skill_event`. Prompts, task titles, display labels,
+commands, tool payloads, evidence bodies, paths, credentials, and customer data
+are forbidden. The Mission core, not the child or renderer, binds accepted
+events to the already persisted operation, node, logical project, runtime
+project, host, and task receipt. Missing or unresolved identity fails closed.
+If structured events are unavailable, omit them; never guess.
+
+Read the client projection with:
+
+```text
+bin/flightdeck mission skill-telemetry SLUG [--limit 1..100] [--cursor OPAQUE] --json
+```
+
+The success envelope is `flightdeck.skill-telemetry/v1` / capability
+`flightdeck.command.skill-telemetry.v1` / schema
+`hub/schemas/skill-telemetry.schema.json`. It includes `operation_id`,
+`snapshot_generation`, operation `status`, `partial_failure`, bounded counts,
+deduplicated `skills`, and `next_cursor`. Each skill contains its ID, nullable
+version, derived lifecycle status, first/last observed times, event count, and
+deterministically ordered child provenance. Child provenance contains opaque
+node/task/host/runtime-project IDs, logical project identity, a display-safe
+`project_label` equal to that logical key, lifecycle status, timestamps, event
+count, latest stable evidence ID, core-derived event digest, and evidence
+source. Skills sort by
+`[skill_id, skill_version]`; children sort by logical project, node, then task.
+Stable evidence IDs deduplicate exact replays within the bound child task;
+conflicting reuse for that child fails closed. Identical provider-local IDs in
+different exact child tasks do not collide.
+Events persist atomically in the Mission record in
+`[observed_at, node_id, task_id, evidence_id]` order and are bounded to 100 per observation and
+1,000 per Mission.
+
+Pagination cursors bind the Mission generation. If it changes between pages,
+the producer returns `snapshot_changed` and the client restarts at page one.
+Current failed, blocked, or unknown-outcome skill summaries produce
+`partial_failure` without discarding successful siblings. A supported Hub with
+no verified events returns `absent`; this is distinct from
+`unsupported_hub_contract`. Stable error codes also cover invalid requests,
+limits, cursors, missing operations, malformed operation records, and
+incompatible capability declarations. Older Hubs must report missing support
+and require a separately authorized migration; neither the plugin nor client
+may scrape Mission YAML as fallback.
+
 If a command capability is missing, stop and return the checker's exact managed
 plan-and-diff scope. Do not run setup, overwrite the Hub, touch ignored state,
 or silently turn the request into direct dispatch. The bundled Mission

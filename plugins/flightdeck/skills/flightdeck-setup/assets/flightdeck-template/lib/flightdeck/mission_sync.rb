@@ -9,6 +9,14 @@ module Flightdeck
       node_id logical_project_key runtime_project_id project_path_digest host_id
       task_id cursor revision event_id observed_state status_code observed_at worktree_ready
     ].freeze
+    OPTIONAL_OBSERVATION_FIELDS = %w[skill_events].freeze
+    SKILL_EVENT_FIELDS = %w[
+      schema_version skill_id skill_version lifecycle_status observed_at evidence_id evidence_source
+    ].freeze
+    SKILL_LIFECYCLE_STATUSES = %w[started completed succeeded failed blocked unknown_outcome].freeze
+    SKILL_EVIDENCE_SOURCE = "codex_task_skill_event"
+    MAX_SKILL_EVENTS_PER_OBSERVATION = 100
+    MAX_SKILL_EVENTS_PER_MISSION = 1_000
     FINAL_RESULT_STATES = %w[review_ready failed_validation].freeze
     OUTCOME_FIELDS = %w[schema_version code validation output_declarations criterion_results].freeze
     CRITERION_RESULT_FIELDS = %w[criterion_id disposition status_code].freeze
@@ -54,6 +62,7 @@ module Flightdeck
           node["output_declarations"] = change["output_declarations"]
           node["output_refs"] = change["output_refs"]
           node["criterion_results"] = change["criterion_results"]
+          merge_skill_events!(mission, change["skill_events"])
           if change["state"] == "runtime_failure"
             node["retries"] = node["retries"].to_i + 1
             maximum = mission.dig("spec", "budgets", "max_retries").to_i
@@ -160,6 +169,7 @@ module Flightdeck
 
         state = observation["observed_state"]
         declarations = observation.dig("outcome", "output_declarations") || []
+        skill_events = materialize_skill_events(node, observation["skill_events"] || [])
         output_refs = declarations.empty? ? [] : @store.materialize_output_refs(node, declarations)
         change = {
           "node_id" => observation["node_id"],
@@ -173,7 +183,8 @@ module Flightdeck
           "validation_status" => observation.dig("outcome", "validation"),
           "output_declarations" => declarations,
           "output_refs" => output_refs,
-          "criterion_results" => observation.dig("outcome", "criterion_results") || []
+          "criterion_results" => observation.dig("outcome", "criterion_results") || [],
+          "skill_events" => skill_events
         }
         change["event_digest"] = @store.observation_event_digest(change)
         if state == "runtime_failure" && node["retries"].to_i + 1 > mission.dig("spec", "budgets", "max_retries").to_i
@@ -193,6 +204,7 @@ module Flightdeck
         node["output_declarations"] = change["output_declarations"]
         node["output_refs"] = change["output_refs"]
         node["criterion_results"] = change["criterion_results"]
+        simulated["status"]["skill_events"] = merged_skill_events(simulated, change["skill_events"])
       end
       actions = coordination_actions(simulated, accepted)
       existing_keys = mission.dig("status", "outbox").to_h { |action| [action["idempotency_key"], true] }
@@ -235,15 +247,101 @@ module Flightdeck
       observations.each_with_index do |observation, index|
         raise ValidationError, "observation #{index} must be a mapping" unless observation.is_a?(Hash)
         final_result = FINAL_RESULT_STATES.include?(observation["observed_state"].to_s)
-        expected_fields = final_result ? BASE_OBSERVATION_FIELDS + ["outcome"] : BASE_OBSERVATION_FIELDS
-        exact_keys!(observation, expected_fields, "observation #{index}")
+        required_fields = final_result ? BASE_OBSERVATION_FIELDS + ["outcome"] : BASE_OBSERVATION_FIELDS
+        allowed_fields = required_fields + OPTIONAL_OBSERVATION_FIELDS
+        exact_required_keys!(observation, required_fields, allowed_fields, "observation #{index}")
         node = mission.dig("spec", "graph", "nodes").find { |item| item["id"] == observation["node_id"] }
         raise ValidationError, "observation references unknown node #{observation['node_id']}" unless node
         raise ValidationError, "duplicate observation for node #{observation['node_id']}" if seen_nodes[observation["node_id"]]
         seen_nodes[observation["node_id"]] = true
         validate_identity!(node, observation)
         validate_sequence!(observation)
+        validate_skill_events!(observation["skill_events"] || [], index)
         validate_outcome!(node, observation) if final_result
+      end
+    end
+
+    def validate_skill_events!(events, observation_index)
+      raise ValidationError, "observation #{observation_index} skill_events must be a list" unless events.is_a?(Array)
+      if events.length > MAX_SKILL_EVENTS_PER_OBSERVATION
+        raise ValidationError, "observation #{observation_index} skill_events exceeds #{MAX_SKILL_EVENTS_PER_OBSERVATION}"
+      end
+      evidence_ids = {}
+      events.each_with_index do |event, event_index|
+        raise ValidationError, "skill event #{event_index} must be a mapping" unless event.is_a?(Hash)
+        exact_keys!(event, SKILL_EVENT_FIELDS, "skill event #{event_index}")
+        unless event["schema_version"] == "flightdeck.skill-invocation-event/v1"
+          raise ValidationError, "skill event #{event_index} schema_version is invalid"
+        end
+        validate_bounded_identifier!(event["skill_id"], "skill event #{event_index} skill_id")
+        if event["skill_version"]
+          unless event["skill_version"].is_a?(String) && event["skill_version"].match?(/\A[A-Za-z0-9][A-Za-z0-9._+-]{0,127}\z/)
+            raise ValidationError, "skill event #{event_index} skill_version is invalid"
+          end
+        end
+        unless SKILL_LIFECYCLE_STATUSES.include?(event["lifecycle_status"])
+          raise ValidationError, "skill event #{event_index} lifecycle_status is invalid"
+        end
+        parse_time!(event["observed_at"], "skill event #{event_index} observed_at")
+        validate_opaque_event_id!(event["evidence_id"], "skill event #{event_index} evidence_id")
+        unless event["evidence_source"] == SKILL_EVIDENCE_SOURCE
+          raise ValidationError, "skill event #{event_index} evidence_source is invalid"
+        end
+        if evidence_ids[event["evidence_id"]]
+          raise ValidationError, "duplicate skill evidence_id #{event['evidence_id']} in observation"
+        end
+        evidence_ids[event["evidence_id"]] = true
+      end
+    end
+
+    def materialize_skill_events(node, events)
+      events.map do |event|
+        materialized = {
+          "schema_version" => event["schema_version"],
+          "skill_id" => event["skill_id"],
+          "skill_version" => event["skill_version"],
+          "lifecycle_status" => event["lifecycle_status"],
+          "observed_at" => Time.iso8601(event["observed_at"]).utc.iso8601,
+          "evidence_id" => event["evidence_id"],
+          "evidence_source" => event["evidence_source"],
+          "node_id" => node["id"],
+          "logical_project_key" => node["logical_project_key"],
+          "runtime_project_id" => node["runtime_project_id"],
+          "host_id" => node["host_id"],
+          "task_id" => node["task_id"]
+        }
+        materialized["event_digest"] = Digest::SHA256.hexdigest(JSON.generate(materialized.sort.to_h))
+        materialized
+      end
+    end
+
+    def merged_skill_events(mission, incoming)
+      existing = Array(mission.dig("status", "skill_events"))
+      by_id = existing.to_h { |event| [[event["node_id"], event["task_id"], event["evidence_id"]], event] }
+      incoming.each do |event|
+        key = [event["node_id"], event["task_id"], event["evidence_id"]]
+        prior = by_id[key]
+        if prior && prior != event
+          raise ValidationError, "conflicting skill evidence_id #{event['evidence_id']}"
+        end
+        by_id[key] = event
+      end
+      merged = by_id.values.sort_by do |event|
+        [event["observed_at"], event["node_id"], event["task_id"], event["evidence_id"]]
+      end
+      if merged.length > MAX_SKILL_EVENTS_PER_MISSION
+        raise ValidationError, "mission skill event budget exhausted (max #{MAX_SKILL_EVENTS_PER_MISSION})"
+      end
+      merged
+    end
+
+    def merge_skill_events!(mission, incoming)
+      mission["status"]["skill_events"] = merged_skill_events(mission, incoming)
+    end
+
+    def validate_opaque_event_id!(value, label)
+      unless value.is_a?(String) && !value.empty? && value.bytesize <= 512 && !value.match?(/[\u0000-\u001f\u007f]/)
+        raise ValidationError, "#{label} must be an opaque non-control string up to 512 bytes"
       end
     end
 
@@ -460,6 +558,14 @@ module Flightdeck
       unknown = value.keys - expected
       raise ValidationError, "#{label} missing fields: #{missing.join(', ')}" unless missing.empty?
       raise ValidationError, "#{label} contains forbidden fields: #{unknown.join(', ')}" unless unknown.empty?
+    end
+
+    def exact_required_keys!(value, required, allowed, label)
+      keys = value.keys.map(&:to_s)
+      missing = required - keys
+      extra = keys - allowed
+      raise ValidationError, "#{label} missing fields: #{missing.join(', ')}" unless missing.empty?
+      raise ValidationError, "#{label} contains forbidden fields: #{extra.join(', ')}" unless extra.empty?
     end
 
     def parse_time!(value, label)

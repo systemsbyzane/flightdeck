@@ -62,6 +62,26 @@ def load_contract(path: Path) -> dict[str, Any]:
         raise ContractError("contract product must be flightdeck")
     if not isinstance(value.get("template_version"), str) or not value["template_version"]:
         raise ContractError("contract template_version must be a non-empty string")
+    runtime = value.get("runtime_capabilities")
+    adapters = runtime.get("adapters") if isinstance(runtime, dict) else None
+    codex = adapters.get("codex") if isinstance(adapters, dict) else None
+    omp = adapters.get("omp") if isinstance(adapters, dict) else None
+    controls = codex.get("optional_controls") if isinstance(codex, dict) else None
+    if (
+        set(runtime or {}) != {"primary_runtime", "adapters"}
+        or runtime.get("primary_runtime") != "codex"
+        or set(adapters or {}) != {"codex", "omp"}
+        or not isinstance(codex, dict)
+        or set(codex) != {"available", "optional_controls"}
+        or codex.get("available") is not True
+        or not isinstance(controls, list)
+        or len(controls) != len(set(controls))
+        or any(control not in {"model", "reasoning_effort"} for control in controls)
+        or not isinstance(omp, dict)
+        or set(omp) != {"available"}
+        or omp.get("available") is not False
+    ):
+        raise ContractError("contract runtime_capabilities are invalid")
     capabilities = value.get("capabilities")
     if not isinstance(capabilities, dict) or not capabilities:
         raise ContractError("contract capabilities must be a non-empty object")

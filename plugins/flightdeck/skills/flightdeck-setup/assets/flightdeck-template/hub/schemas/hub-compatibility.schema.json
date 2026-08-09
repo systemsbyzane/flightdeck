@@ -9,6 +9,7 @@
     "schema",
     "product",
     "template_version",
+    "runtime_capabilities",
     "capabilities"
   ],
   "properties": {
@@ -25,6 +26,9 @@
       "type": "string",
       "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
     },
+    "runtime_capabilities": {
+      "$ref": "#/$defs/runtimeCapabilities"
+    },
     "capabilities": {
       "type": "object",
       "minProperties": 1,
@@ -37,6 +41,64 @@
     }
   },
   "$defs": {
+    "runtimeCapabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "primary_runtime",
+        "adapters"
+      ],
+      "properties": {
+        "primary_runtime": {
+          "const": "codex"
+        },
+        "adapters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "codex",
+            "omp"
+          ],
+          "properties": {
+            "codex": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "available",
+                "optional_controls"
+              ],
+              "properties": {
+                "available": {
+                  "const": true
+                },
+                "optional_controls": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "enum": [
+                      "model",
+                      "reasoning_effort"
+                    ]
+                  }
+                }
+              }
+            },
+            "omp": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "available"
+              ],
+              "properties": {
+                "available": {
+                  "const": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "capability": {
       "type": "object",
       "additionalProperties": false,

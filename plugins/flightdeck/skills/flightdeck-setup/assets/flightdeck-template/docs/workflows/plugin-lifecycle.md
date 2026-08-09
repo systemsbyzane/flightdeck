@@ -84,6 +84,24 @@ create, and recovery. A client must require the exact capability it needs from
 the regular `hub/compatibility.json` manifest rather than infer support from
 the four older Mission capabilities or run Doctor/status as a capability probe.
 
+Template `1.3.0` adds the independent
+`flightdeck.command.skill-telemetry.v1` producer/read contract. It does not
+retroactively make an older Hub observable. Clients must show unsupported when
+the exact capability or schema is absent and must not infer skill use by
+scraping prompts, commands, task prose, Mission YAML, or display labels.
+
+Template `1.4.0` adds `flightdeck.command.operation-authoring.v1` for typed
+planning, explicit immutable-plan launch, durable bounded guidance, and exact
+unknown-outcome recovery. Its runtime lock is local ignored state; no generated
+lock file is a capability or migration artifact.
+
+Template `1.5.0` adds `flightdeck.command.hub-snapshot.v1`,
+`flightdeck.command.operations-snapshot.v1`, and
+`flightdeck.command.operation-projection.v1`. These renderer-safe surfaces
+project only exact verified project identity, durable Task/Mission state, and
+authenticated persisted Mission skill evidence. Existing Hubs remain explicit
+unsupported until a separate approved migration installs the managed paths.
+
 For a preserved Hub that needs both desktop surfaces, the later separately
 authorized migration must compare the exact managed paths returned by the
 compatibility checker for both capabilities, plus `hub/compatibility.json`.

@@ -48,6 +48,8 @@ Run the control plane from the Hub root. The implemented v1 interface is:
 bin/flightdeck help
 bin/flightdeck doctor [--json] [--strict]
 bin/flightdeck status [--json] [--write]
+bin/flightdeck hub snapshot --hub-root ABSOLUTE_PATH [--json]
+bin/flightdeck hub operations-snapshot --hub-root ABSOLUTE_PATH [--json]
 bin/flightdeck task new TYPE SLUG --title TITLE --outcome OUTCOME [--workload NAME]
 bin/flightdeck task show SLUG [--json]
 bin/flightdeck task transition SLUG STATE [--note NOTE]
@@ -58,6 +60,13 @@ bin/flightdeck mission list --hub-root ABSOLUTE_PATH [--limit 1..100] [--cursor 
 bin/flightdeck mission show SLUG [--json]
 bin/flightdeck mission validate SLUG [--json]
 bin/flightdeck mission status SLUG [--json]
+bin/flightdeck mission operation SLUG --json
+bin/flightdeck mission skill-telemetry SLUG [--limit 1..100] [--cursor CURSOR] [--json]
+bin/flightdeck operation authoring-catalog --request FILE [--json]
+bin/flightdeck operation authoring-plan --request FILE [--json]
+bin/flightdeck operation authoring-launch --request FILE [--json]
+bin/flightdeck operation authoring-guidance --request FILE [--json]
+bin/flightdeck operation authoring-operation --request FILE [--json]
 bin/flightdeck mission add SLUG NODE --project-key KEY --runtime-project-id ID (--project-path PATH|--project-path-digest SHA256) --host-id HOST --execution-mode local|worktree --access-mode read_only|write --work-type TYPE (--required|--optional) [--criterion-id ID] [--depends-on NODE] [--accepts TYPE] --allows-output TYPE [--artifact-resolver-kind same_host_workspace|external_approved --artifact-resolver-id ID] [--json]
 bin/flightdeck mission record-dispatch SLUG NODE --runtime-project-id OPAQUE --host-id HOST (--task-id OPAQUE|--pending-client-id OPAQUE|--dispatch-unknown) [--project-path PATH|--project-path-digest SHA256]
 bin/flightdeck mission sync-plan SLUG --observations FILE [--json]
@@ -97,6 +106,25 @@ Mission bodies, outcomes, prompts, task IDs, project identities and paths,
 output declarations and references, outbox data, credentials, and evidence.
 Clients must require `flightdeck.command.mission-list.v1`; they must not infer
 support from a template version or scrape ignored Mission YAML.
+
+`mission skill-telemetry` is the JSON-only read contract for explicit
+structured Codex task skill events accepted during Mission sync. It returns a
+generation-bound, paginated, deduplicated operation summary with exact bounded
+child provenance. It never infers skill use from prompt, title, label, command,
+free text, or arbitrary tool payloads. Clients must require
+`flightdeck.command.skill-telemetry.v1`; a supported empty result is `absent`,
+while an old Hub is explicitly unsupported.
+
+`hub snapshot` and `hub operations-snapshot` are the bounded client discovery
+surfaces described in the [Hub-first application contract](../architecture/hub-first.md).
+`mission operation` is the narrow per-Mission view described in the
+[Operation projection API](operation-projection-api.md). All three require
+their exact capabilities and schemas; clients must not scrape Hub state or
+infer a fallback when a preserved Hub is unsupported.
+
+`operation authoring-*` is the closed client producer contract for a durable
+planned Operation; see [Operation authoring API](operation-authoring-api.md).
+It never dispatches child tasks or infers task, skill, file, or success state.
 
 ## Mission Operations
 

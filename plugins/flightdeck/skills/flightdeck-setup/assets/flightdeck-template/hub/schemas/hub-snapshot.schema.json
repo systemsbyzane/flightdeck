@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/hub-snapshot.schema.json",
+  "title": "Flightdeck Hub snapshot contract",
+  "description": "Read-only, renderer-safe Hub membership and capability projection. It never contains local paths, runtime IDs, or bridge handoffs.",
+  "oneOf": [{"$ref": "#/$defs/success"}, {"$ref": "#/$defs/error"}],
+  "$defs": {
+    "identifier": {"type": "string", "maxLength": 128, "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"},
+    "label": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\u0000-\\u001f\\u007f\\\\/]+$"},
+    "runtimeCapabilities": {
+      "type": "object", "additionalProperties": false, "required": ["primary_runtime", "adapters"],
+      "properties": {
+        "primary_runtime": {"const": "codex"},
+        "adapters": {
+          "type": "object", "additionalProperties": false, "required": ["codex", "omp"],
+          "properties": {
+            "codex": {"type": "object", "additionalProperties": false, "required": ["available", "optional_controls"], "properties": {"available": {"const": true}, "optional_controls": {"type": "array", "uniqueItems": true, "items": {"enum": ["model", "reasoning_effort"]}}}},
+            "omp": {"type": "object", "additionalProperties": false, "required": ["available"], "properties": {"available": {"const": false}}}
+          }
+        }
+      }
+    },
+    "project": {
+      "type": "object", "additionalProperties": false,
+      "required": ["logical_project_key", "display_label", "workload", "availability", "bridge_health", "destination", "routing_capability"],
+      "properties": {
+        "logical_project_key": {"$ref": "#/$defs/identifier"}, "display_label": {"$ref": "#/$defs/label"},
+        "workload": {"$ref": "#/$defs/identifier"}, "availability": {"const": "registered"},
+        "bridge_health": {"enum": ["healthy", "not_applicable"]}, "destination": {"enum": ["hub_coordinator", "repository_routing_hint"]},
+        "routing_capability": {"enum": ["coordinate_and_route", "route_through_hub"]}
+      },
+      "allOf": [{"if": {"properties": {"destination": {"const": "hub_coordinator"}}, "required": ["destination"]}, "then": {"properties": {"workload": {"const": "coordination"}, "bridge_health": {"const": "not_applicable"}, "routing_capability": {"const": "coordinate_and_route"}}}, "else": {"properties": {"bridge_health": {"const": "healthy"}, "routing_capability": {"const": "route_through_hub"}}}}]
+    },
+    "success": {
+      "type": "object", "additionalProperties": false,
+      "required": ["api_version", "kind", "schema", "ok", "hub", "runtime_capabilities", "projects"],
+      "properties": {
+        "api_version": {"const": "flightdeck.hub-snapshot/v1"}, "kind": {"const": "HubSnapshot"},
+        "schema": {"const": "hub/schemas/hub-snapshot.schema.json"}, "ok": {"const": true},
+        "hub": {"type": "object", "additionalProperties": false, "required": ["display_name", "template_version", "health"], "properties": {"display_name": {"$ref": "#/$defs/label"}, "template_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}, "health": {"type": "object", "additionalProperties": false, "required": ["capability"], "properties": {"capability": {"const": "flightdeck.command.doctor.v1"}}}}},
+        "runtime_capabilities": {"$ref": "#/$defs/runtimeCapabilities"},
+        "projects": {"type": "array", "maxItems": 200, "items": {"$ref": "#/$defs/project"}}
+      }
+    },
+    "error": {
+      "type": "object", "additionalProperties": false, "required": ["api_version", "kind", "schema", "ok", "error"],
+      "properties": {
+        "api_version": {"const": "flightdeck.hub-snapshot/v1"}, "kind": {"const": "HubSnapshotError"},
+        "schema": {"const": "hub/schemas/hub-snapshot.schema.json"}, "ok": {"const": false},
+        "error": {"type": "object", "additionalProperties": false, "required": ["code", "message"], "properties": {"code": {"enum": ["invalid_request", "hub_root_not_found", "invalid_hub_root", "unsupported_hub_contract", "registry_invalid", "project_limit_exceeded", "project_verification_missing", "project_verification_conflict", "project_unavailable", "bridge_unhealthy"]}, "message": {"type": "string", "minLength": 1, "maxLength": 256}}}
+      }
+    }
+  }
+}

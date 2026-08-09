@@ -2,7 +2,22 @@
   "schema_version": "flightdeck.hub-compatibility/v1",
   "schema": "hub/schemas/hub-compatibility.schema.json",
   "product": "flightdeck",
-  "template_version": "1.2.0",
+  "template_version": "1.5.0",
+  "runtime_capabilities": {
+    "primary_runtime": "codex",
+    "adapters": {
+      "codex": {
+        "available": true,
+        "optional_controls": [
+          "model",
+          "reasoning_effort"
+        ]
+      },
+      "omp": {
+        "available": false
+      }
+    }
+  },
   "capabilities": {
     "flightdeck.command.doctor.v1": {
       "kind": "command",
@@ -212,6 +227,23 @@
         "mode": "stop_and_plan_migration"
       }
     },
+    "flightdeck.command.operation-projection.v1": {
+      "kind": "command",
+      "description": "Versioned read-only managed-operation projection with authenticated persisted skill telemetry.",
+      "probe": {
+        "help_contains": "bin/flightdeck mission operation "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/operation-projection-api.md",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/mission_store.rb",
+        "hub/schemas/operation.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
     "flightdeck.command.mission-sync.v1": {
       "kind": "command",
       "description": "Bounded Mission observation apply, checkpoint, typed fan-in, and two-phase outbox reconciliation.",
@@ -226,6 +258,27 @@
         "lib/flightdeck/mission_sync.rb",
         "hub/schemas/mission.schema.json",
         "hub/schemas/mission-observation.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.command.skill-telemetry.v1": {
+      "kind": "command",
+      "description": "Bounded operation-wide projection of explicit structured Codex skill invocation events with exact child provenance.",
+      "probe": {
+        "help_contains": "bin/flightdeck mission skill-telemetry "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/missions.md",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/mission_store.rb",
+        "lib/flightdeck/mission_sync.rb",
+        "lib/flightdeck/skill_telemetry.rb",
+        "hub/schemas/mission.schema.json",
+        "hub/schemas/mission-observation.schema.json",
+        "hub/schemas/skill-telemetry.schema.json"
       ],
       "fallback": {
         "mode": "stop_and_plan_migration"
@@ -255,6 +308,70 @@
         "lib/flightdeck/cli.rb",
         "lib/flightdeck/mission_authoring.rb",
         "lib/flightdeck/mission_store.rb"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.command.operation-authoring.v1": {
+      "kind": "command",
+      "description": "Typed catalog, planned Operation proposal, explicit immutable-plan launch, durable guidance, and exact launch recovery for unprivileged clients.",
+      "probe": {
+        "help_contains": "bin/flightdeck operation authoring-catalog "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/operation-authoring-api.md",
+        "hub/schemas/mission.schema.json",
+        "hub/schemas/operation-authoring-types.schema.json",
+        "hub/schemas/operation-authoring-catalog-request.schema.json",
+        "hub/schemas/operation-authoring-catalog-result.schema.json",
+        "hub/schemas/operation-authoring-plan-request.schema.json",
+        "hub/schemas/operation-authoring-plan-result.schema.json",
+        "hub/schemas/operation-authoring-launch-request.schema.json",
+        "hub/schemas/operation-authoring-launch-result.schema.json",
+        "hub/schemas/operation-authoring-guidance-request.schema.json",
+        "hub/schemas/operation-authoring-guidance-result.schema.json",
+        "hub/schemas/operation-authoring-operation-request.schema.json",
+        "hub/schemas/operation-authoring-operation-result.schema.json",
+        "hub/schemas/operation-authoring-error-result.schema.json",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/mission_store.rb",
+        "lib/flightdeck/operation_authoring.rb"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.command.hub-snapshot.v1": {
+      "kind": "command",
+      "description": "Bounded renderer-safe projection of exact verified Hub projects and runtime capabilities.",
+      "probe": {
+        "help_contains": "bin/flightdeck hub snapshot "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/architecture/hub-first.md",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/hub_snapshot.rb",
+        "hub/schemas/hub-snapshot.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.command.operations-snapshot.v1": {
+      "kind": "command",
+      "description": "Bounded renderer-safe projection of durable Task and Mission operations with verified skill evidence.",
+      "probe": {
+        "help_contains": "bin/flightdeck hub operations-snapshot "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/architecture/hub-first.md",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/operations_snapshot.rb",
+        "hub/schemas/operations-snapshot.schema.json"
       ],
       "fallback": {
         "mode": "stop_and_plan_migration"

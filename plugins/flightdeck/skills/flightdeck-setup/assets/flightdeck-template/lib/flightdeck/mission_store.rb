@@ -13,6 +13,9 @@ module Flightdeck
     LIST_MAX_MISSIONS = 1_000
     LIST_MAX_RECORD_BYTES = 262_144
     LIST_CURSOR_PREFIX = "v1."
+    OPERATION_API_VERSION = "flightdeck.operation/v1"
+    OPERATION_SCHEMA = "hub/schemas/operation.schema.json"
+    OPERATION_CAPABILITY = "flightdeck.command.operation-projection.v1"
     RESERVED_MISSION_ENTRIES = %w[.lock .authoring-operations].freeze
     LIST_TERMINAL_STATES = %w[review_ready failed_validation runtime_failure cancelled complete].freeze
     LIST_ATTENTION_STATES = %w[
@@ -117,6 +120,7 @@ module Flightdeck
           "closed_at" => nil,
           "checkpoint" => { "number" => 0, "at" => nil, "generation" => 0 },
           "outbox" => [],
+          "skill_events" => [],
           "history" => [
             { "at" => now, "event" => "created", "state" => "planned" }
           ]
@@ -162,7 +166,8 @@ module Flightdeck
     # Persists the already-complete graph as one Mission record. No partial
     # Mission is visible if graph construction or the final atomic write fails.
     def create_complete(slug:, title:, outcome:, mode: nil, success_criteria: nil, non_goals: [],
-                        authorized_targets: [], nodes: [], authoring_binding: nil)
+                        authorized_targets: [], nodes: [], authoring_binding: nil,
+                        operation_authoring_binding: nil)
       mission = preview_complete(
         slug: slug,
         title: title,
@@ -174,15 +179,10 @@ module Flightdeck
         nodes: nodes
       )
       if authoring_binding
-        value = Support.stringify(authoring_binding)
-        required = %w[operation_digest plan_id plan_digest]
-        unless value.keys.sort == required.sort &&
-               MissionStore::SHA256.match?(value["operation_digest"].to_s) &&
-               MissionStore::SHA256.match?(value["plan_digest"].to_s) &&
-               value["plan_id"].to_s.match?(/\Aplan-[0-9a-f]{48}\z/)
-          raise UsageError, "Mission authoring binding is invalid"
-        end
-        mission["metadata"]["authoring"] = required.to_h { |field| [field, value.fetch(field)] }
+        mission["metadata"]["authoring"] = validate_authoring_binding!(authoring_binding, "Mission authoring")
+      end
+      if operation_authoring_binding
+        mission["metadata"]["operation_authoring"] = validate_authoring_binding!(operation_authoring_binding, "Operation authoring")
       end
       validate_or_raise!(mission, expected_slug: slug)
       persist_complete_mission!(mission)
@@ -402,6 +402,29 @@ module Flightdeck
       view["status"]["fan_in_ready"] = fan_in_ready?(view)
       view["status"]["prepared_actions"] = outbox(view).count { |action| action["status"] == "prepared" }
       view
+    end
+
+    # The supported renderer boundary for one durable Mission Operation. It
+    # projects only exact persisted identity, safe output references, and
+    # authenticated skill events already accepted by MissionSync.
+    def operation_projection(slug)
+      verify_operation_projection_capability!
+      mission = status(slug)
+      events = Array(mission.dig("status", "skill_events"))
+      {
+        "api_version" => OPERATION_API_VERSION,
+        "kind" => "Operation",
+        "schema" => OPERATION_SCHEMA,
+        "ok" => true,
+        "operation" => {
+          "operation_id" => mission.dig("metadata", "id"),
+          "title" => mission.dig("metadata", "title"),
+          "mode" => mission.dig("spec", "mode"),
+          "state" => mission.dig("status", "state"),
+          "updated_at" => mission.dig("metadata", "updated_at"),
+          "children" => nodes(mission).map { |node| operation_child_projection(node, events) }
+        }
+      }
     end
 
     def validate(slug)
@@ -758,14 +781,16 @@ module Flightdeck
       %w[title created_at updated_at].each do |field|
         errors << "metadata.#{field} is required" unless Support.present?(mission.dig("metadata", field))
       end
-      authoring = mission.dig("metadata", "authoring")
-      if authoring
+      %w[authoring operation_authoring].each do |field|
+        authoring = mission.dig("metadata", field)
+        next unless authoring
+
         unless authoring.is_a?(Hash) && authoring.keys.sort == %w[operation_digest plan_digest plan_id]
-          errors << "metadata.authoring must be a closed operation and plan binding"
+          errors << "metadata.#{field} must be a closed operation and plan binding"
         else
-          errors << "metadata.authoring operation_digest must be sha256" unless SHA256.match?(authoring["operation_digest"].to_s)
-          errors << "metadata.authoring plan_digest must be sha256" unless SHA256.match?(authoring["plan_digest"].to_s)
-          errors << "metadata.authoring plan_id is invalid" unless authoring["plan_id"].to_s.match?(/\Aplan-[0-9a-f]{48}\z/)
+          errors << "metadata.#{field} operation_digest must be sha256" unless SHA256.match?(authoring["operation_digest"].to_s)
+          errors << "metadata.#{field} plan_digest must be sha256" unless SHA256.match?(authoring["plan_digest"].to_s)
+          errors << "metadata.#{field} plan_id is invalid" unless authoring["plan_id"].to_s.match?(/\Aplan-[0-9a-f]{48}\z/)
         end
       end
       %w[metadata.created_at metadata.updated_at].each do |field|
@@ -826,6 +851,7 @@ module Flightdeck
       errors << "status.generation must be a non-negative integer" unless status["generation"].is_a?(Integer) && status["generation"] >= 0
       errors << "status.history must be a list" unless status["history"].is_a?(Array)
       errors << "status.outbox must be a list" unless status["outbox"].is_a?(Array)
+      errors.concat(validate_skill_events(status["skill_events"], node_values)) if status.key?("skill_events")
       if status["outbox"].is_a?(Array)
         errors.concat(validate_actions(
           status["outbox"], budgets, mission.dig("spec", "authorization_boundary"), id
@@ -882,6 +908,82 @@ module Flightdeck
     end
 
     private
+
+    def verify_operation_projection_capability!
+      compatibility_path = File.join(config.root, "hub", "compatibility.json")
+      schema_path = File.join(config.root, OPERATION_SCHEMA)
+      unless [compatibility_path, schema_path].all? { |path| File.file?(path) && !File.symlink?(path) }
+        raise ValidationError, "Hub does not declare the Operation projection v1 contract"
+      end
+      compatibility = Support.load_data(compatibility_path)
+      capability = compatibility.dig("capabilities", OPERATION_CAPABILITY)
+      managed = Array(capability&.fetch("managed_paths", []))
+      unless compatibility["schema_version"] == "flightdeck.hub-compatibility/v1" &&
+             compatibility["product"] == "flightdeck" && capability.is_a?(Hash) &&
+             capability["kind"] == "command" &&
+             capability.dig("probe", "help_contains") == "bin/flightdeck mission operation " &&
+             ["lib/flightdeck/mission_store.rb", OPERATION_SCHEMA].all? { |path| managed.include?(path) }
+        raise ValidationError, "Hub does not declare the Operation projection v1 contract"
+      end
+    rescue ValidationError
+      raise ValidationError, "Hub does not declare the Operation projection v1 contract"
+    end
+
+    def operation_child_projection(node, events)
+      task_id = node["task_id"]
+      session = if task_id
+                  { "state" => "resolved", "task_id" => task_id }
+                elsif node["pending_client_id"]
+                  { "state" => "pending_identity" }
+                else
+                  { "state" => "unavailable" }
+                end
+      child_events = events.select { |event| event["node_id"] == node["id"] }
+      {
+        "node_id" => node["id"],
+        "project" => { "logical_project_key" => node["logical_project_key"] },
+        "state" => node["observed_state"],
+        "status_code" => node["status_code"],
+        "session" => session,
+        "verified_skills" => operation_skill_summary(child_events),
+        "files_changed" => { "availability" => "not_collected" },
+        "output_refs" => Array(node["output_refs"]).select { |ref| ref.start_with?("artifact:", "codex-task:") }
+      }
+    end
+
+    def operation_skill_summary(events)
+      items = events.group_by { |event| [event["skill_id"], event["skill_version"]] }.map do |(skill_id, skill_version), skill_events|
+        latest_by_child = skill_events.group_by { |event| event["node_id"] }.values.map do |child_events|
+          child_events.max_by { |event| [event["observed_at"], event["evidence_id"]] }
+        end
+        statuses = latest_by_child.map { |event| event["lifecycle_status"] }
+        {
+          "skill_id" => skill_id,
+          "skill_version" => skill_version,
+          "lifecycle_status" => operation_skill_status(statuses)
+        }
+      end.sort_by { |item| [item["skill_id"], item["skill_version"].to_s] }
+      state = if items.empty?
+                "absent"
+              elsif items.any? { |item| %w[failed blocked unknown_outcome].include?(item["lifecycle_status"]) }
+                "partial_failure"
+              elsif items.any? { |item| item["lifecycle_status"] == "started" }
+                "in_progress"
+              else
+                "succeeded"
+              end
+      { "state" => state, "items" => items }
+    end
+
+    def operation_skill_status(statuses)
+      return "unknown_outcome" if statuses.include?("unknown_outcome")
+      return "failed" if statuses.include?("failed")
+      return "blocked" if statuses.include?("blocked")
+      return "started" if statuses.include?("started")
+      return "succeeded" if statuses.include?("succeeded")
+
+      "completed"
+    end
 
     def discover_mission_ids
       root = config.mission_dir
@@ -1030,6 +1132,19 @@ module Flightdeck
         expected.ctime == actual.ctime
     end
 
+    def validate_authoring_binding!(binding, label)
+      value = Support.stringify(binding)
+      required = %w[operation_digest plan_id plan_digest]
+      unless value.keys.sort == required.sort &&
+             MissionStore::SHA256.match?(value["operation_digest"].to_s) &&
+             MissionStore::SHA256.match?(value["plan_digest"].to_s) &&
+             value["plan_id"].to_s.match?(/\Aplan-[0-9a-f]{48}\z/)
+        raise UsageError, "#{label} binding is invalid"
+      end
+
+      required.to_h { |field| [field, value.fetch(field)] }
+    end
+
     def build_complete_mission(slug:, title:, outcome:, mode:, success_criteria:, non_goals:,
                                authorized_targets:, nodes:)
       Support.validate_slug!(slug, label: "mission slug")
@@ -1082,6 +1197,7 @@ module Flightdeck
           "closed_at" => nil,
           "checkpoint" => { "number" => 0, "at" => nil, "generation" => 0 },
           "outbox" => [],
+          "skill_events" => [],
           "history" => [
             { "at" => now, "event" => "created", "state" => "planned" }
           ]
@@ -2093,6 +2209,57 @@ module Flightdeck
         max_units max_retries max_actions max_forwarded_bytes
         max_duration_seconds stale_after_seconds max_record_bytes
       ]
+    end
+
+    def validate_skill_events(events, node_values)
+      return ["status.skill_events must be a list"] unless events.is_a?(Array)
+      return ["status.skill_events exceeds 1000 events"] if events.length > 1_000
+
+      errors = []
+      seen = {}
+      nodes_by_id = Array(node_values).select { |node| node.is_a?(Hash) }.to_h { |node| [node["id"], node] }
+      events.each_with_index do |event, index|
+        unless event.is_a?(Hash)
+          errors << "status.skill_events[#{index}] must be a mapping"
+          next
+        end
+        expected = %w[schema_version skill_id skill_version lifecycle_status observed_at evidence_id evidence_source node_id logical_project_key runtime_project_id host_id task_id event_digest]
+        errors << "status.skill_events[#{index}] fields are invalid" unless event.keys.sort == expected.sort
+        errors << "status.skill_events[#{index}] schema_version is invalid" unless event["schema_version"] == "flightdeck.skill-invocation-event/v1"
+        errors << "status.skill_events[#{index}] lifecycle_status is invalid" unless %w[started completed succeeded failed blocked unknown_outcome].include?(event["lifecycle_status"])
+        errors << "status.skill_events[#{index}] evidence_source is invalid" unless event["evidence_source"] == "codex_task_skill_event"
+        expected_digest = Digest::SHA256.hexdigest(JSON.generate(event.reject { |key, _| key == "event_digest" }.sort.to_h))
+        unless SHA256.match?(event["event_digest"].to_s) && event["event_digest"] == expected_digest
+          errors << "status.skill_events[#{index}] event_digest is invalid"
+        end
+        begin
+          validate_identifier!(event["skill_id"], "skill event skill ID")
+          if event["skill_version"] && !event["skill_version"].to_s.match?(/\A[A-Za-z0-9][A-Za-z0-9._+-]{0,127}\z/)
+            raise UsageError, "skill event skill version is invalid"
+          end
+          Time.iso8601(event["observed_at"].to_s)
+          validate_opaque!(event["evidence_id"], "skill event evidence ID")
+        rescue UsageError, ArgumentError => e
+          errors << e.message
+        end
+        evidence_key = [event["node_id"], event["task_id"], event["evidence_id"]]
+        errors << "duplicate status.skill_events child evidence_id #{event['evidence_id']}" if seen[evidence_key]
+        seen[evidence_key] = true
+        node = nodes_by_id[event["node_id"]]
+        if node.nil?
+          errors << "status.skill_events[#{index}] references unknown node"
+        else
+          bindings = %w[logical_project_key runtime_project_id host_id task_id]
+          unless bindings.all? { |field| Support.present?(node[field]) && event[field] == node[field] }
+            errors << "status.skill_events[#{index}] task identity binding is invalid"
+          end
+        end
+      end
+      ordered = events.select { |event| event.is_a?(Hash) }.sort_by do |event|
+        [event["observed_at"].to_s, event["node_id"].to_s, event["task_id"].to_s, event["evidence_id"].to_s]
+      end
+      errors << "status.skill_events must use deterministic observed_at/node/task/evidence ordering" unless events == ordered
+      errors
     end
 
     def mission_dir(slug)
