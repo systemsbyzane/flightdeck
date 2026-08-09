@@ -28,6 +28,7 @@ require "flightdeck/repository_store"
 require "flightdeck/route_planner"
 require "flightdeck/setup_store"
 require "flightdeck/task_store"
+require "flightdeck/work_store"
 
 class FlightdeckTest < Minitest::Test
   TEMPLATE_ROOT = File.expand_path("..", __dir__)
@@ -630,7 +631,7 @@ class FlightdeckTest < Minitest::Test
       assert_equal "https://flightdeck.dev/schemas/#{name}.schema.json", schema["$id"]
     end
     compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
-    assert_equal "1.5.0", compatibility["template_version"]
+    assert_equal "1.6.0", compatibility["template_version"]
     assert_equal "codex", compatibility.dig("runtime_capabilities", "primary_runtime")
     assert_equal false, compatibility.dig("runtime_capabilities", "adapters", "omp", "available")
     %w[hub-snapshot operations-snapshot operation-projection].each do |name|
@@ -4029,7 +4030,7 @@ class FlightdeckTest < Minitest::Test
     compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
     family = compatibility.fetch("capabilities").keys.grep(/mission-authoring/)
     assert_equal ["flightdeck.command.mission-authoring.v1"], family
-    assert_equal "1.5.0", compatibility["template_version"]
+    assert_equal "1.6.0", compatibility["template_version"]
     assert_equal({"mode" => "stop_and_plan_migration"}, compatibility.dig("capabilities", family.first, "fallback"))
 
     types = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "mission-authoring-types.schema.json")))
@@ -4339,7 +4340,7 @@ class FlightdeckTest < Minitest::Test
     compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
     capability = compatibility.dig("capabilities", "flightdeck.command.operation-authoring.v1")
     refute_nil capability
-    assert_equal "1.5.0", compatibility["template_version"]
+    assert_equal "1.6.0", compatibility["template_version"]
     assert_equal({"mode" => "stop_and_plan_migration"}, capability["fallback"])
     assert_includes capability["managed_paths"], "lib/flightdeck/operation_authoring.rb"
     %w[catalog-request catalog-result plan-request plan-result launch-request launch-result guidance-request guidance-result operation-request operation-result error-result].each do |name|
@@ -4357,6 +4358,622 @@ class FlightdeckTest < Minitest::Test
       )
       assert_equal 0, status
       assert_equal Flightdeck::OperationAuthoring::CATALOG_RESULT, JSON.parse(output.string)["schema_version"]
+    end
+  end
+
+  def bind_work_adapter(store, created, session_id: "codex-thread-session-0001", request_id: "adapter-binding-request-0001")
+    store.bind_adapter(
+      "schema_version" => Flightdeck::WorkStore::ADAPTER_BIND_REQUEST,
+      "work_id" => created.dig("work", "work_id"),
+      "resume_generation" => created.dig("resume", "generation"),
+      "adapter" => "codex",
+      "adapter_session_id" => session_id,
+      "binding_request_id" => request_id,
+      "structured_channel" => Flightdeck::WorkStore::STRUCTURED_CHANNEL
+    )
+  end
+
+  def signed_work_observation(store, binding_result, session_id:, observation_id:, observed_at:, recommendation: nil,
+                              observation_type: "managed_recommendation", resume_generation: nil)
+    binding = binding_result.fetch("binding")
+    observation = {
+      "schema_version" => Flightdeck::WorkStore::OBSERVATION_VERSION,
+      "hub_binding_id" => binding.fetch("hub_binding_id"),
+      "work_id" => binding.fetch("work_id"),
+      "binding_id" => binding.fetch("binding_id"),
+      "adapter" => binding.fetch("adapter"),
+      "adapter_session_id" => session_id,
+      "session_generation" => binding.fetch("session_generation"),
+      "resume_generation" => resume_generation || binding.fetch("resume_generation"),
+      "structured_channel" => binding.fetch("structured_channel"),
+      "observation_id" => observation_id,
+      "observation_type" => observation_type,
+      "observed_at" => observed_at
+    }
+    observation["recommendation"] = recommendation if recommendation
+    canonical = store.send(:canonical_json, observation)
+    observation["signature"] = OpenSSL::HMAC.hexdigest("SHA256", binding.fetch("shared_secret"), canonical)
+    observation
+  end
+
+  def test_work_create_list_open_restart_and_ordinary_runtime_boundary_are_display_safe
+    with_hub do |root, config|
+      clock = -> { Time.iso8601("2026-08-09T12:00:00Z") }
+      sequence = 0
+      random = lambda do |_bytes|
+        sequence += 1
+        format("%024x", sequence)
+      end
+      store = Flightdeck::WorkStore.new(config, clock: clock, random_hex: random)
+      first = store.create(
+        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
+        "request_key" => "request-work-create-0001",
+        "title_hint" => "Explain authentication"
+      )
+      replay = store.create(
+        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
+        "request_key" => "request-work-create-0001",
+        "title_hint" => "Explain authentication"
+      )
+      assert_equal first.dig("work", "work_id"), replay.dig("work", "work_id")
+      assert_equal true, replay["replayed"]
+
+      error = assert_raises(Flightdeck::WorkStore::ContractError) do
+        store.create(
+          "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
+          "request_key" => "request-work-create-0001",
+          "title_hint" => "Conflicting title"
+        )
+      end
+      assert_equal "duplicate_request_conflict", error.code
+
+      assert_equal true, first.dig("runtime", "available")
+      assert_equal "binding_required", first.dig("resume", "state")
+      refute Dir.exist?(config.mission_dir)
+
+      restarted = Flightdeck::WorkStore.new(Flightdeck::Config.new(root: root), clock: clock)
+      opened = restarted.open(
+        "schema_version" => Flightdeck::WorkStore::OPEN_REQUEST,
+        "work_id" => first.dig("work", "work_id")
+      )
+      assert_equal %w[work_created], opened.fetch("events").map { |event| event.fetch("type") }
+      assert_equal "binding_required", opened.dig("resume", "state")
+      list = restarted.list_page(limit: 1)
+      assert_equal [first.dig("work", "work_id")], list.fetch("works").map { |work| work.fetch("work_id") }
+
+      rendered = JSON.generate(opened)
+      refute_includes rendered, "shared_secret"
+      refute_includes rendered, "hub_binding_id"
+      refute_includes rendered, "session_generation"
+      refute_includes rendered, root
+      refute_includes rendered, "runtime_project_id"
+      refute_includes rendered, "task_id"
+      refute_includes File.read(Dir.glob(File.join(root, "hub/state/work/*.json")).first), "Explain how"
+    end
+  end
+
+  def test_work_list_is_read_only_when_state_is_absent
+    with_hub do |root, config|
+      work_dir = File.join(root, "hub", "state", "work")
+      refute File.exist?(work_dir)
+
+      result = Flightdeck::WorkStore.new(config).list_page(limit: 1)
+
+      assert_equal true, result["ok"]
+      assert_empty result["works"]
+      refute File.exist?(work_dir)
+    end
+  end
+
+  def test_work_operation_recommendation_is_catalog_validated_review_only_and_explicitly_launched
+    with_hub do |root, config|
+      client = initialize_repository(root, "flightdeck-client")
+      plugin = initialize_repository(root, "flightdeck-plugin")
+      config = register_repository(config, "flightdeck-client", client)
+      config = register_repository(config, "flightdeck-plugin", plugin)
+      config = write_declarations(config, [declaration("flightdeck-client", client), declaration("flightdeck-plugin", plugin)])
+      write_project_verifications(config, {
+        "flightdeck-client" => verified_project("flightdeck-client", client),
+        "flightdeck-plugin" => verified_project("flightdeck-plugin", plugin)
+      })
+      clock = -> { Time.iso8601("2026-08-09T12:00:00Z") }
+      store = Flightdeck::WorkStore.new(config, clock: clock, random_hex: ->(_bytes) { "b" * 24 })
+      work = store.create(
+        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
+        "request_key" => "request-work-operation-0001",
+        "title_hint" => "Hub management"
+      )
+      work_id = work.dig("work", "work_id")
+      session_id = "codex-thread-hub-management-0001"
+      binding = bind_work_adapter(store, work, session_id: session_id, request_id: "adapter-binding-hub-management-0001")
+      recommendation = {
+        "schema_version" => Flightdeck::WorkStore::RECOMMENDATION_VERSION,
+        "recommendation_id" => "runtime-operation-recommendation-0001",
+        "disposition" => "operation",
+        "observed_at" => "2026-08-09T12:00:00Z",
+        "title" => "Implement Hub management",
+        "work_intent" => "Implement and validate the declared Hub management contract.",
+        "target_project_keys" => %w[flightdeck-client flightdeck-plugin],
+        "access_mode" => "write",
+        "execution_mode" => "worktree",
+        "success_criteria" => ["The declared contract is validated in every exact owner."],
+        "non_goals" => ["Do not commit, push, publish, deploy, or communicate externally."]
+      }
+
+      observation = signed_work_observation(
+        store, binding, session_id: session_id, observation_id: "adapter-observation-hub-management-0001",
+        observed_at: recommendation.fetch("observed_at"), recommendation: recommendation
+      )
+      proposal_result = store.coordinate(
+        "schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST,
+        "work_id" => work_id,
+        "observation" => observation
+      )
+      assert_equal "operation_proposal", proposal_result["disposition"]
+      assert_equal %w[flightdeck-client flightdeck-plugin], proposal_result.dig("proposal", "targets").map { |target| target.fetch("logical_project_key") }
+      refute Dir.exist?(config.mission_dir), "a Work proposal must not launch"
+      rendered = JSON.generate(proposal_result)
+      refute_includes rendered, root
+      refute_includes rendered, "opaque-runtime"
+      refute_includes rendered, "project_path_digest"
+
+      replay = Flightdeck::WorkStore.new(config, clock: clock).coordinate(
+        "schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST,
+        "work_id" => work_id,
+        "observation" => observation
+      )
+      assert_equal true, replay["replayed"]
+      assert_equal proposal_result["proposal"], replay["proposal"]
+
+      unknown = recommendation.merge(
+        "recommendation_id" => "runtime-operation-recommendation-unknown",
+        "target_project_keys" => ["unknown-owner"]
+      )
+      unknown_observation = signed_work_observation(
+        store, binding, session_id: session_id, observation_id: "adapter-observation-unknown-owner-0001",
+        observed_at: unknown.fetch("observed_at"), recommendation: unknown,
+        resume_generation: proposal_result.dig("resume", "generation")
+      )
+      error = assert_raises(Flightdeck::WorkStore::ContractError) do
+        store.coordinate("schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST, "work_id" => work_id, "observation" => unknown_observation)
+      end
+      assert_equal "unknown_target", error.code
+
+      proposal = proposal_result.fetch("proposal")
+      confirmation = %w[operation_id plan_id plan_generation plan_digest plan_token].to_h { |field| [field, proposal.fetch(field)] }
+      stale = Marshal.load(Marshal.dump(confirmation))
+      stale["plan_digest"] = "0" * 64
+      error = assert_raises(Flightdeck::WorkStore::ContractError) do
+        store.launch(
+          "schema_version" => Flightdeck::WorkStore::LAUNCH_REQUEST,
+          "work_id" => work_id,
+          "operation_id" => proposal.fetch("operation_id"),
+          "confirmation" => stale
+        )
+      end
+      assert_equal "stale_or_mismatched_plan", error.code
+      refute Dir.exist?(config.mission_dir)
+
+      launched = store.launch(
+        "schema_version" => Flightdeck::WorkStore::LAUNCH_REQUEST,
+        "work_id" => work_id,
+        "operation_id" => proposal.fetch("operation_id"),
+        "confirmation" => confirmation
+      )
+      assert_equal "created", launched.dig("operation", "outcome")
+      assert_equal proposal.fetch("operation_id"), launched.dig("work", "active_operation_id")
+      opened = store.open("schema_version" => Flightdeck::WorkStore::OPEN_REQUEST, "work_id" => work_id)
+      assert_equal "in_progress", opened.dig("operation_links", 0, "result_state")
+      assert_equal opened.fetch("events").map { |event| event.fetch("event_id") }.uniq.length, opened.fetch("events").length
+
+      mismatch = assert_raises(Flightdeck::WorkStore::ContractError) do
+        store.guidance(
+          "schema_version" => Flightdeck::WorkStore::GUIDANCE_REQUEST,
+          "work_id" => work_id,
+          "operation_id" => "operation-#{'0' * 24}",
+          "request_key" => "request-guidance-mismatch-0001",
+          "guidance" => "Keep the contract exact."
+        )
+      end
+      assert_equal "operation_identity_conflict", mismatch.code
+
+      guidance_request = {
+        "schema_version" => Flightdeck::WorkStore::GUIDANCE_REQUEST,
+        "work_id" => work_id,
+        "operation_id" => proposal.fetch("operation_id"),
+        "request_key" => "request-guidance-exact-0001",
+        "guidance" => "Keep the contract exact."
+      }
+      guidance = store.guidance(guidance_request)
+      assert_equal proposal.fetch("operation_id"), guidance["operation_id"]
+      assert_equal true, store.guidance(guidance_request)["replayed"]
+      conflicting_guidance = guidance_request.merge("guidance" => "Different guidance.")
+      error = assert_raises(Flightdeck::WorkStore::ContractError) { store.guidance(conflicting_guidance) }
+      assert_equal "duplicate_request_conflict", error.code
+
+      mission = Flightdeck::MissionStore.new(config).snapshot(proposal.fetch("operation_id"))
+      mission.dig("spec", "graph", "nodes").each do |node|
+        Flightdeck::MissionStore.new(config).record_dispatch(
+          slug: proposal.fetch("operation_id"), node_id: node.fetch("id"),
+          runtime_project_id: node.fetch("runtime_project_id"), host_id: node.fetch("host_id"),
+          task_id: "task-#{node.fetch('id')}"
+        )
+      end
+      observations = mission.dig("spec", "graph", "nodes").each_with_index.map do |node, index|
+        mission_observation(config, slug: proposal.fetch("operation_id"), node_id: node.fetch("id"), state: "review_ready", revision: index + 1)
+      end
+      path = write_mission_observations(root, proposal.fetch("operation_id"), observations, name: "work-operation-final.json")
+      apply_mission_sync(Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)), slug: proposal.fetch("operation_id"), observations_path: path)
+
+      completed = Flightdeck::WorkStore.new(config, clock: clock).open(
+        "schema_version" => Flightdeck::WorkStore::OPEN_REQUEST,
+        "work_id" => work_id
+      )
+      assert_equal "result_ready", completed.dig("work", "status")
+      assert_equal "available", completed.dig("operation_links", 0, "result_state")
+      assert_equal 1, completed.fetch("events").count { |event| event["type"] == "operation_result" }
+      repeated = Flightdeck::WorkStore.new(config, clock: clock).open(
+        "schema_version" => Flightdeck::WorkStore::OPEN_REQUEST,
+        "work_id" => work_id
+      )
+      assert_equal completed.fetch("events"), repeated.fetch("events")
+      error = assert_raises(Flightdeck::WorkStore::ContractError) { store.guidance(guidance_request.merge("request_key" => "request-guidance-terminal-0001")) }
+      assert_equal "terminal_operation", error.code
+    end
+  end
+
+  def test_work_fails_closed_for_adapter_absence_symlink_malformed_identity_and_stale_pagination
+    with_hub do |root, config|
+      compatibility_path = File.join(root, "hub", "compatibility.json")
+      compatibility = JSON.parse(File.read(compatibility_path))
+      compatibility.dig("runtime_capabilities", "adapters", "codex")["available"] = false
+      Flightdeck::Support.atomic_write(compatibility_path, "#{JSON.pretty_generate(compatibility)}\n")
+      store = Flightdeck::WorkStore.new(config, random_hex: ->(_bytes) { "c" * 24 })
+      created = store.create(
+        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
+        "request_key" => "request-adapter-unavailable-0001",
+        "title_hint" => "Unavailable adapter"
+      )
+      error = assert_raises(Flightdeck::WorkStore::ContractError) do
+        bind_work_adapter(store, created, session_id: "codex-thread-unavailable-0001", request_id: "adapter-binding-unavailable-0001")
+      end
+      assert_equal "adapter_unavailable", error.code
+      assert_equal "unavailable", created.dig("resume", "state")
+
+      malformed = assert_raises(Flightdeck::WorkStore::ContractError) do
+        store.open("schema_version" => Flightdeck::WorkStore::OPEN_REQUEST, "work_id" => "work-not-valid")
+      end
+      assert_equal "malformed_request", malformed.code
+      unsafe = assert_raises(Flightdeck::WorkStore::ContractError) do
+        store.create(
+          "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
+          "request_key" => "request-unsafe-title-0001",
+          "title_hint" => "Open /Users/example/private"
+        )
+      end
+      assert_equal "malformed_request", unsafe.code
+
+      store = Flightdeck::WorkStore.new(config, random_hex: ->(_bytes) { "d" * 24 })
+      store.create(
+        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
+        "request_key" => "request-pagination-change-0001",
+        "title_hint" => "Second Work"
+      )
+      first_page = store.list_page(limit: 1)
+      refute_nil first_page.dig("page", "next_cursor")
+      store = Flightdeck::WorkStore.new(config, random_hex: ->(_bytes) { "e" * 24 })
+      store.create(
+        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
+        "request_key" => "request-pagination-change-0002",
+        "title_hint" => "Third Work"
+      )
+      stale = assert_raises(Flightdeck::WorkStore::ContractError) do
+        store.list_page(limit: 1, cursor: first_page.dig("page", "next_cursor"))
+      end
+      assert_equal "stale_cursor", stale.code
+
+      record = File.join(root, "hub/state/work", "#{Digest::SHA256.hexdigest(created.dig('work', 'work_id'))}.json")
+      original = File.read(record)
+      oversized = JSON.parse(original)
+      seed_event = oversized.fetch("events").first
+      oversized["events"] = 201.times.map do |index|
+        seed_event.merge(
+          "event_id" => "work-event-#{format('%024x', index)}",
+          "evidence_id" => Digest::SHA256.hexdigest("evidence-#{index}"),
+          "payload_digest" => Digest::SHA256.hexdigest("payload-#{index}")
+        )
+      end
+      Flightdeck::Support.atomic_write(record, "#{JSON.pretty_generate(oversized)}\n")
+      error = assert_raises(Flightdeck::WorkStore::ContractError) do
+        store.open("schema_version" => Flightdeck::WorkStore::OPEN_REQUEST, "work_id" => created.dig("work", "work_id"))
+      end
+      assert_equal "work_store_invalid", error.code
+      Flightdeck::Support.atomic_write(record, original)
+
+      backup = "#{record}.backup"
+      FileUtils.mv(record, backup)
+      File.symlink(backup, record)
+      error = assert_raises(Flightdeck::WorkStore::ContractError) do
+        store.open("schema_version" => Flightdeck::WorkStore::OPEN_REQUEST, "work_id" => created.dig("work", "work_id"))
+      end
+      assert_equal "work_store_invalid", error.code
+    end
+  end
+
+  def test_work_unknown_launch_is_non_retryable_and_recovers_by_exact_open
+    with_hub do |root, config|
+      project = initialize_repository(root, "work-unknown-owner")
+      config = register_repository(config, "work-unknown-owner", project)
+      config = write_declarations(config, [declaration("work-unknown-owner", project)])
+      write_project_verifications(config, "work-unknown-owner" => verified_project("work-unknown-owner", project))
+      clock = -> { Time.iso8601("2026-08-09T12:00:00Z") }
+      store = Flightdeck::WorkStore.new(config, clock: clock, random_hex: ->(_bytes) { "f" * 24 })
+      work = store.create(
+        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
+        "request_key" => "request-work-unknown-0001",
+        "title_hint" => "Unknown launch recovery"
+      )
+      session_id = "codex-thread-unknown-launch-0001"
+      binding = bind_work_adapter(store, work, session_id: session_id, request_id: "adapter-binding-unknown-launch-0001")
+      recommendation = {
+        "schema_version" => Flightdeck::WorkStore::RECOMMENDATION_VERSION,
+        "recommendation_id" => "runtime-work-unknown-0001",
+        "disposition" => "operation",
+        "observed_at" => "2026-08-09T12:00:00Z",
+        "title" => "Recover unknown launch",
+        "work_intent" => "Create one exact durable Operation and recover its launch outcome.",
+        "target_project_keys" => ["work-unknown-owner"],
+        "access_mode" => "write",
+        "execution_mode" => "worktree",
+        "success_criteria" => ["The exact launch outcome is recoverable."],
+        "non_goals" => ["Do not retry an unknown launch."]
+      }
+      coordinated = store.coordinate(
+        "schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST,
+        "work_id" => work.dig("work", "work_id"),
+        "observation" => signed_work_observation(
+          store, binding, session_id: session_id, observation_id: "adapter-observation-unknown-launch-0001",
+          observed_at: recommendation.fetch("observed_at"), recommendation: recommendation
+        )
+      )
+      proposal = coordinated.fetch("proposal")
+      request = {
+        "schema_version" => Flightdeck::WorkStore::LAUNCH_REQUEST,
+        "work_id" => work.dig("work", "work_id"),
+        "operation_id" => proposal.fetch("operation_id"),
+        "confirmation" => %w[operation_id plan_id plan_generation plan_digest plan_token].to_h { |field| [field, proposal.fetch(field)] }
+      }
+      authoring = store.instance_variable_get(:@authoring)
+      original = authoring.method(:write_operation!)
+      authoring.define_singleton_method(:write_operation!) do |record|
+        raise IOError, "synthetic response loss" if record["state"] == "created"
+
+        original.call(record)
+      end
+      error = assert_raises(Flightdeck::WorkStore::ContractError) { store.launch(request) }
+      assert_equal "unknown_outcome", error.code
+      error = assert_raises(Flightdeck::WorkStore::ContractError) { store.launch(request) }
+      assert_equal "unknown_outcome", error.code
+      assert_equal 1, Flightdeck::MissionStore.new(config).list_page.fetch("missions").length
+      authoring.define_singleton_method(:write_operation!, original)
+
+      recovered = Flightdeck::WorkStore.new(Flightdeck::Config.new(root: root), clock: clock).open(
+        "schema_version" => Flightdeck::WorkStore::OPEN_REQUEST,
+        "work_id" => work.dig("work", "work_id")
+      )
+      assert_equal "operation_active", recovered.dig("work", "status")
+      assert_equal "created", recovered.dig("operation_links", 0, "authoring_outcome")
+      assert_equal 1, recovered.fetch("events").count { |event| event["type"] == "operation_launch_unknown" }
+    ensure
+      authoring.define_singleton_method(:write_operation!, original) if authoring && original
+    end
+  end
+
+  def test_work_adapter_binding_is_signed_exact_restart_safe_and_fail_closed
+    with_hub do |root, config|
+      sequence = 0
+      random = lambda do |_bytes|
+        sequence += 1
+        format("%024x", sequence)
+      end
+      store = Flightdeck::WorkStore.new(config, clock: -> { Time.iso8601("2026-08-09T13:00:00Z") }, random_hex: random)
+      first = store.create(
+        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
+        "request_key" => "request-adapter-auth-first-0001",
+        "title_hint" => "First adapter Work"
+      )
+      second = store.create(
+        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
+        "request_key" => "request-adapter-auth-second-0001",
+        "title_hint" => "Second adapter Work"
+      )
+
+      unbound = {
+        "schema_version" => Flightdeck::WorkStore::OBSERVATION_VERSION,
+        "hub_binding_id" => "hub-binding-#{'0' * 24}",
+        "work_id" => first.dig("work", "work_id"),
+        "binding_id" => "adapter-binding-#{'0' * 24}",
+        "adapter" => "codex",
+        "adapter_session_id" => "codex-thread-unbound-0001",
+        "session_generation" => "adapter-session-#{'0' * 48}",
+        "resume_generation" => first.dig("resume", "generation"),
+        "structured_channel" => Flightdeck::WorkStore::STRUCTURED_CHANNEL,
+        "observation_id" => "adapter-observation-unbound-0001",
+        "observation_type" => "runtime_disconnected",
+        "observed_at" => "2026-08-09T13:00:00Z",
+        "signature" => "0" * 64
+      }
+      error = assert_raises(Flightdeck::WorkStore::ContractError) do
+        store.coordinate("schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST, "work_id" => first.dig("work", "work_id"), "observation" => unbound)
+      end
+      assert_equal "binding_absent", error.code
+
+      first_session = "codex-thread-first-0001"
+      first_binding = bind_work_adapter(store, first, session_id: first_session, request_id: "adapter-binding-first-0001")
+      restarted = Flightdeck::WorkStore.new(config, clock: -> { Time.iso8601("2026-08-09T13:00:00Z") })
+      replay = bind_work_adapter(restarted, first, session_id: first_session, request_id: "adapter-binding-first-0001")
+      assert_equal true, replay["replayed"]
+      assert_equal first_binding.fetch("binding"), replay.fetch("binding")
+
+      stale_request = {
+        "schema_version" => Flightdeck::WorkStore::ADAPTER_BIND_REQUEST,
+        "work_id" => first.dig("work", "work_id"),
+        "resume_generation" => first.dig("resume", "generation"),
+        "adapter" => "codex",
+        "adapter_session_id" => "codex-thread-stale-0001",
+        "binding_request_id" => "adapter-binding-stale-0001",
+        "structured_channel" => Flightdeck::WorkStore::STRUCTURED_CHANNEL
+      }
+      error = assert_raises(Flightdeck::WorkStore::ContractError) { restarted.bind_adapter(stale_request) }
+      assert_equal "stale_binding", error.code
+      error = assert_raises(Flightdeck::WorkStore::ContractError) do
+        restarted.bind_adapter(stale_request.merge(
+          "resume_generation" => first_binding.dig("binding", "resume_generation"),
+          "binding_request_id" => "adapter-binding-channel-0001",
+          "structured_channel" => "flightdeck.runtime.unsupported/v1"
+        ))
+      end
+      assert_equal "unsupported_structured_channel", error.code
+
+      second_session = "codex-thread-second-0001"
+      second_binding = bind_work_adapter(store, second, session_id: second_session, request_id: "adapter-binding-second-0001")
+      cross_work = signed_work_observation(
+        store, first_binding, session_id: first_session, observation_id: "adapter-observation-cross-work-0001",
+        observed_at: "2026-08-09T13:00:01Z", observation_type: "runtime_disconnected"
+      )
+      cross_work["work_id"] = second.dig("work", "work_id")
+      error = assert_raises(Flightdeck::WorkStore::ContractError) do
+        store.coordinate("schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST, "work_id" => second.dig("work", "work_id"), "observation" => cross_work)
+      end
+      assert_equal "binding_mismatch", error.code
+
+      invalid_signature = signed_work_observation(
+        store, first_binding, session_id: first_session, observation_id: "adapter-observation-bad-signature-0001",
+        observed_at: "2026-08-09T13:00:01Z", observation_type: "runtime_disconnected"
+      ).merge("signature" => "0" * 64)
+      error = assert_raises(Flightdeck::WorkStore::ContractError) do
+        store.coordinate("schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST, "work_id" => first.dig("work", "work_id"), "observation" => invalid_signature)
+      end
+      assert_equal "adapter_authentication_failed", error.code
+
+      stale_observation = signed_work_observation(
+        store, first_binding, session_id: first_session, observation_id: "adapter-observation-stale-0001",
+        observed_at: "2026-08-09T13:00:01Z", observation_type: "runtime_disconnected",
+        resume_generation: "resume-#{'0' * 48}"
+      )
+      error = assert_raises(Flightdeck::WorkStore::ContractError) do
+        store.coordinate("schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST, "work_id" => first.dig("work", "work_id"), "observation" => stale_observation)
+      end
+      assert_equal "stale_binding", error.code
+
+      malformed_recommendation = {
+        "schema_version" => Flightdeck::WorkStore::RECOMMENDATION_VERSION,
+        "recommendation_id" => "adapter-recommendation-ordinary-0001",
+        "disposition" => "ordinary",
+        "observed_at" => "2026-08-09T13:00:01Z"
+      }
+      malformed_observation = signed_work_observation(
+        store, first_binding, session_id: first_session, observation_id: "adapter-observation-malformed-0001",
+        observed_at: malformed_recommendation.fetch("observed_at"), recommendation: malformed_recommendation
+      )
+      error = assert_raises(Flightdeck::WorkStore::ContractError) do
+        store.coordinate("schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST, "work_id" => first.dig("work", "work_id"), "observation" => malformed_observation)
+      end
+      assert_equal "malformed_request", error.code
+
+      disconnected = signed_work_observation(
+        store, first_binding, session_id: first_session, observation_id: "adapter-observation-disconnected-0001",
+        observed_at: "2026-08-09T13:00:02Z", observation_type: "runtime_disconnected"
+      )
+      result = store.coordinate(
+        "schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST,
+        "work_id" => first.dig("work", "work_id"),
+        "observation" => disconnected
+      )
+      assert_equal "runtime_unavailable", result["disposition"]
+      assert_equal "disconnected", result.dig("resume", "state")
+      assert_equal true, store.coordinate(
+        "schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST,
+        "work_id" => first.dig("work", "work_id"),
+        "observation" => disconnected
+      )["replayed"]
+
+      after_disconnect = {
+        "schema_version" => Flightdeck::WorkStore::RECOMMENDATION_VERSION,
+        "recommendation_id" => "adapter-recommendation-after-disconnect-0001",
+        "disposition" => "operation",
+        "observed_at" => "2026-08-09T13:00:03Z",
+        "title" => "Do not accept disconnected evidence",
+        "work_intent" => "Prove that a disconnected adapter cannot recommend managed work.",
+        "target_project_keys" => ["unknown-owner"],
+        "access_mode" => "read_only",
+        "execution_mode" => "local",
+        "success_criteria" => ["The disconnected binding fails closed."],
+        "non_goals" => ["Do not create an Operation."]
+      }
+      disconnected_observation = signed_work_observation(
+        store, first_binding, session_id: first_session, observation_id: "adapter-observation-after-disconnect-0001",
+        observed_at: after_disconnect.fetch("observed_at"), recommendation: after_disconnect,
+        resume_generation: result.dig("resume", "generation")
+      )
+      error = assert_raises(Flightdeck::WorkStore::ContractError) do
+        store.coordinate("schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST, "work_id" => first.dig("work", "work_id"), "observation" => disconnected_observation)
+      end
+      assert_equal "runtime_disconnected", error.code
+
+      opened = store.open("schema_version" => Flightdeck::WorkStore::OPEN_REQUEST, "work_id" => first.dig("work", "work_id"))
+      rendered = JSON.generate(opened)
+      refute_includes rendered, first_binding.dig("binding", "shared_secret")
+      refute_includes rendered, first_session
+      assert_equal "disconnected", opened.dig("resume", "state")
+      refute_nil second_binding
+      refute_includes File.read(Dir.glob(File.join(root, "hub/state/work/*.json")).first), "codex-thread-first-0001"
+    end
+  end
+
+  def test_work_contract_schemas_cli_and_compatibility_are_closed
+    compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
+    capability = compatibility.dig("capabilities", Flightdeck::WorkStore::CAPABILITY)
+    assert_equal "1.6.0", compatibility["template_version"]
+    assert_equal({ "mode" => "stop_and_plan_migration" }, capability["fallback"])
+    assert_includes capability["managed_paths"], "lib/flightdeck/work_store.rb"
+    Flightdeck::WorkStore::SCHEMAS.each do |name|
+      schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", name)))
+      assert_equal "https://flightdeck.dev/schemas/#{name}", schema["$id"]
+    end
+
+    with_hub do |root, _config|
+      request_path = File.join(root, "work-create.json")
+      File.write(request_path, JSON.generate(
+        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
+        "request_key" => "request-cli-work-create-0001",
+        "title_hint" => "CLI Work"
+      ))
+      output = StringIO.new
+      status = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new).run(["work", "create", "--request", request_path, "--json"])
+      assert_equal 0, status
+      created = JSON.parse(output.string)
+      assert_equal Flightdeck::WorkStore::CREATE_RESULT, created["schema_version"]
+
+      bind_path = File.join(root, "work-adapter-bind.json")
+      File.write(bind_path, JSON.generate(
+        "schema_version" => Flightdeck::WorkStore::ADAPTER_BIND_REQUEST,
+        "work_id" => created.dig("work", "work_id"),
+        "resume_generation" => created.dig("resume", "generation"),
+        "adapter" => "codex",
+        "adapter_session_id" => "codex-thread-cli-work-0001",
+        "binding_request_id" => "adapter-binding-cli-work-0001",
+        "structured_channel" => Flightdeck::WorkStore::STRUCTURED_CHANNEL
+      ))
+      bind_output = StringIO.new
+      status = Flightdeck::CLI.new(root: root, out: bind_output, err: StringIO.new).run(["work", "adapter-bind", "--request", bind_path, "--json"])
+      assert_equal 0, status
+      assert_equal Flightdeck::WorkStore::ADAPTER_BIND_RESULT, JSON.parse(bind_output.string)["schema_version"]
+
+      list_output = StringIO.new
+      status = Flightdeck::CLI.new(root: root, out: list_output, err: StringIO.new).run(["work", "list", "--hub-root", root, "--json"])
+      assert_equal 0, status
+      assert_equal Flightdeck::WorkStore::LIST_RESULT, JSON.parse(list_output.string)["schema_version"]
     end
   end
 end

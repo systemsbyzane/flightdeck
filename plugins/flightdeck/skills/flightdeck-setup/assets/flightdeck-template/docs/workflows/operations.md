@@ -50,6 +50,13 @@ bin/flightdeck doctor [--json] [--strict]
 bin/flightdeck status [--json] [--write]
 bin/flightdeck hub snapshot --hub-root ABSOLUTE_PATH [--json]
 bin/flightdeck hub operations-snapshot --hub-root ABSOLUTE_PATH [--json]
+bin/flightdeck work list --hub-root ABSOLUTE_PATH [--limit 1..100] [--cursor CURSOR] [--json]
+bin/flightdeck work create --request FILE [--json]
+bin/flightdeck work adapter-bind --request FILE [--json]
+bin/flightdeck work open --request FILE [--json]
+bin/flightdeck work coordinate --request FILE [--json]
+bin/flightdeck work launch --request FILE [--json]
+bin/flightdeck work guidance --request FILE [--json]
 bin/flightdeck task new TYPE SLUG --title TITLE --outcome OUTCOME [--workload NAME]
 bin/flightdeck task show SLUG [--json]
 bin/flightdeck task transition SLUG STATE [--note NOTE]
@@ -125,6 +132,14 @@ infer a fallback when a preserved Hub is unsupported.
 `operation authoring-*` is the closed client producer contract for a durable
 planned Operation; see [Operation authoring API](operation-authoring-api.md).
 It never dispatches child tasks or infers task, skill, file, or success state.
+
+`work *` is the selected-Hub durable command/conversation metadata contract;
+see the [Work control API](work-control-api.md). It stores display-safe Work
+identity and normalized event/Operation links, not transcript or runtime
+payloads. Structured runtime recommendations are untrusted, logical-key-only
+inputs revalidated against the exact Hub catalog. Proposal review, explicit
+launch, unknown-outcome recovery, and exact nonterminal guidance remain
+separate typed actions.
 
 ## Mission Operations
 

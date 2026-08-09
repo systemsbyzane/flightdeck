@@ -62,12 +62,13 @@ class HubCompatibilityTest(unittest.TestCase):
             "flightdeck.command.operation-projection.v1",
             "flightdeck.command.hub-snapshot.v1",
             "flightdeck.command.operations-snapshot.v1",
+            "flightdeck.command.work-control.v1",
         )
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("compatible", report["status"])
         self.assertTrue(report["compatible"])
-        self.assertEqual("1.5.0", report["hub"]["identity"]["template_version"])
+        self.assertEqual("1.6.0", report["hub"]["identity"]["template_version"])
         self.assertEqual([], report["requirements"]["missing"])
 
     def test_preserved_hub_without_mission_authoring_is_selectable_but_unsupported(self) -> None:

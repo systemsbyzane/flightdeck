@@ -2,12 +2,15 @@
   "schema_version": "flightdeck.hub-compatibility/v1",
   "schema": "hub/schemas/hub-compatibility.schema.json",
   "product": "flightdeck",
-  "template_version": "1.5.0",
+  "template_version": "1.6.0",
   "runtime_capabilities": {
     "primary_runtime": "codex",
     "adapters": {
       "codex": {
         "available": true,
+        "structured_channels": [
+          "flightdeck.runtime.work-recommendation/v1"
+        ],
         "optional_controls": [
           "model",
           "reasoning_effort"
@@ -19,6 +22,37 @@
     }
   },
   "capabilities": {
+    "flightdeck.command.work-control.v1": {
+      "kind": "command",
+      "description": "Selected-Hub durable Work metadata, native-only adapter binding, signed structured runtime recommendations, explicit Operation launch and guidance, and bounded recovery links.",
+      "probe": {
+        "help_contains": "bin/flightdeck work list "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/work-control-api.md",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/work_store.rb",
+        "hub/schemas/work-types.schema.json",
+        "hub/schemas/work-create-request.schema.json",
+        "hub/schemas/work-create-result.schema.json",
+        "hub/schemas/work-adapter-bind-request.schema.json",
+        "hub/schemas/work-adapter-bind-result.schema.json",
+        "hub/schemas/work-coordinate-request.schema.json",
+        "hub/schemas/work-coordinate-result.schema.json",
+        "hub/schemas/work-open-request.schema.json",
+        "hub/schemas/work-open-result.schema.json",
+        "hub/schemas/work-launch-request.schema.json",
+        "hub/schemas/work-launch-result.schema.json",
+        "hub/schemas/work-guidance-request.schema.json",
+        "hub/schemas/work-guidance-result.schema.json",
+        "hub/schemas/work-list.schema.json",
+        "hub/schemas/work-error-result.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
     "flightdeck.command.doctor.v1": {
       "kind": "command",
       "description": "Read-only structured workspace diagnostics.",

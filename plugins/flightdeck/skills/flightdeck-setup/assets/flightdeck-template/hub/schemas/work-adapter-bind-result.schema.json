@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/work-adapter-bind-result.schema.json",
+  "title": "Flightdeck native Work adapter bind result",
+  "description": "Native-adapter-only result. The shared secret and private binding envelope must never cross renderer IPC.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "schema", "ok", "binding", "replayed"],
+  "properties": {
+    "schema_version": {"const": "flightdeck.work.adapter-bind-result/v1"},
+    "schema": {"const": "hub/schemas/work-adapter-bind-result.schema.json"},
+    "ok": {"const": true},
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hub_binding_id", "work_id", "adapter", "binding_id", "session_generation", "resume_generation", "structured_channel", "shared_secret"],
+      "properties": {
+        "hub_binding_id": {"$ref": "work-types.schema.json#/$defs/hubBindingId"},
+        "work_id": {"$ref": "work-types.schema.json#/$defs/workId"},
+        "adapter": {"enum": ["codex", "omp"]},
+        "binding_id": {"$ref": "work-types.schema.json#/$defs/bindingId"},
+        "session_generation": {"$ref": "work-types.schema.json#/$defs/sessionGeneration"},
+        "resume_generation": {"$ref": "work-types.schema.json#/$defs/resumeGeneration"},
+        "structured_channel": {"const": "flightdeck.runtime.work-recommendation/v1"},
+        "shared_secret": {"$ref": "work-types.schema.json#/$defs/sha256"}
+      }
+    },
+    "replayed": {"type": "boolean"}
+  }
+}

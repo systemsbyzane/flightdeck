@@ -67,13 +67,15 @@ def load_contract(path: Path) -> dict[str, Any]:
     codex = adapters.get("codex") if isinstance(adapters, dict) else None
     omp = adapters.get("omp") if isinstance(adapters, dict) else None
     controls = codex.get("optional_controls") if isinstance(codex, dict) else None
+    channels = codex.get("structured_channels") if isinstance(codex, dict) else None
     if (
         set(runtime or {}) != {"primary_runtime", "adapters"}
         or runtime.get("primary_runtime") != "codex"
         or set(adapters or {}) != {"codex", "omp"}
         or not isinstance(codex, dict)
-        or set(codex) != {"available", "optional_controls"}
+        or set(codex) != {"available", "optional_controls", "structured_channels"}
         or codex.get("available") is not True
+        or channels != ["flightdeck.runtime.work-recommendation/v1"]
         or not isinstance(controls, list)
         or len(controls) != len(set(controls))
         or any(control not in {"model", "reasoning_effort"} for control in controls)

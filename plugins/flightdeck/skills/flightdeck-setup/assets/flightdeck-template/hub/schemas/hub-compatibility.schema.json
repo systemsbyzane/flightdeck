@@ -65,11 +65,18 @@
               "additionalProperties": false,
               "required": [
                 "available",
+                "structured_channels",
                 "optional_controls"
               ],
               "properties": {
                 "available": {
                   "const": true
+                },
+                "structured_channels": {
+                  "type": "array",
+                  "const": [
+                    "flightdeck.runtime.work-recommendation/v1"
+                  ]
                 },
                 "optional_controls": {
                   "type": "array",

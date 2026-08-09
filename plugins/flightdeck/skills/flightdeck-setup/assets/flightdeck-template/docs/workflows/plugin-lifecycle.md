@@ -102,6 +102,11 @@ project only exact verified project identity, durable Task/Mission state, and
 authenticated persisted Mission skill evidence. Existing Hubs remain explicit
 unsupported until a separate approved migration installs the managed paths.
 
+Template `1.6.0` adds `flightdeck.command.work-control.v1` for selected-Hub
+Work create/list/open metadata, structured catalog-validated recommendations,
+explicit Operation launch and recovery links, and exact nonterminal guidance.
+It never imports global runtime history or migrates a preserved Hub implicitly.
+
 For a preserved Hub that needs both desktop surfaces, the later separately
 authorized migration must compare the exact managed paths returned by the
 compatibility checker for both capabilities, plus `hub/compatibility.json`.

@@ -47,6 +47,12 @@ The Hub uses five layers:
 5. `hub/tasks/`, `hub/missions/`, `hub/reports/`, and `hub/state/` hold local
    generated state and are excluded from control-plane versioning by default.
 
+Selected-Hub Work metadata lives under ignored `hub/state/work`. It contains
+only display-safe Work identity, private-adapter binding digests, bounded
+normalized event metadata, and exact Operation associations. Prompt/response
+transcripts, commands, tool payloads, chain-of-thought, paths, credentials, and
+runtime project/task identities are outside this store.
+
 The common task lifecycle is:
 
 ```text

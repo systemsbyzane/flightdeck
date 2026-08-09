@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/work-adapter-bind-request.schema.json",
+  "title": "Flightdeck native Work adapter bind request",
+  "description": "Native-adapter-only binding request. Private runtime identity must never cross renderer IPC.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "work_id", "resume_generation", "adapter", "adapter_session_id", "binding_request_id", "structured_channel"],
+  "properties": {
+    "schema_version": {"const": "flightdeck.work.adapter-bind-request/v1"},
+    "work_id": {"$ref": "work-types.schema.json#/$defs/workId"},
+    "resume_generation": {"$ref": "work-types.schema.json#/$defs/resumeGeneration"},
+    "adapter": {"enum": ["codex", "omp"]},
+    "adapter_session_id": {"$ref": "work-types.schema.json#/$defs/opaqueRuntimeId"},
+    "binding_request_id": {"$ref": "work-types.schema.json#/$defs/requestKey"},
+    "structured_channel": {"const": "flightdeck.runtime.work-recommendation/v1"}
+  }
+}

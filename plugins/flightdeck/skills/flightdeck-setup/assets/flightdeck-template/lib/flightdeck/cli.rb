@@ -13,6 +13,7 @@ require_relative "repo_planner"
 require_relative "repository_store"
 require_relative "route_planner"
 require_relative "setup_store"
+require_relative "work_store"
 
 module Flightdeck
   class CLI
@@ -25,6 +26,7 @@ module Flightdeck
     def run(argv)
       arguments = argv.dup
       return mission_list(arguments.drop(2)) if arguments.first(2) == %w[mission list]
+      return work_list(arguments.drop(2)) if arguments.first(2) == %w[work list]
 
       command = arguments.shift || "help"
       return help if %w[help -h --help].include?(command)
@@ -41,6 +43,7 @@ module Flightdeck
       when "task" then task(config, arguments)
       when "mission" then mission(config, arguments)
       when "operation" then operation(config, arguments)
+      when "work" then work(config, arguments)
       else raise UsageError, "unknown command: #{command}"
       end
     rescue UsageError, OptionParser::ParseError => e
@@ -663,6 +666,72 @@ module Flightdeck
       1
     end
 
+    def work_list(argv)
+      options = { limit: WorkStore::DEFAULT_LIMIT }
+      OptionParser.new do |parser|
+        parser.on("--hub-root PATH") { |value| options[:hub_root] = value }
+        parser.on("--limit N", Integer) { |value| options[:limit] = value }
+        parser.on("--cursor CURSOR") { |value| options[:cursor] = value }
+        parser.on("--json") { options[:json] = true }
+      end.parse!(argv)
+      empty!(argv)
+      selected_root = options.fetch(:hub_root).to_s
+      unless Pathname.new(selected_root).absolute? && File.directory?(selected_root)
+        raise WorkStore::ContractError.new("invalid_hub_root", "Selected Hub root is unavailable")
+      end
+      config = Config.new(root: selected_root)
+      unless config.data["api_version"] == "flightdeck.dev/v1alpha1" && config.data["kind"] == "FlightdeckRegistry" &&
+             config.data["schema"] == "hub/schemas/flightdeck.schema.json"
+        raise WorkStore::ContractError.new("invalid_hub_root", "Selected Hub root is not a Flightdeck Hub")
+      end
+      json(WorkStore.new(config).list_page(limit: options[:limit], cursor: options[:cursor]))
+      0
+    rescue KeyError, UsageError, OptionParser::ParseError
+      json(WorkStore.error_result("list", WorkStore::ContractError.new("malformed_request", "Work list request is invalid")))
+      2
+    rescue WorkStore::ContractError => e
+      json(WorkStore.error_result("list", e))
+      1
+    rescue ConfigurationError, ValidationError, SystemCallError
+      json(WorkStore.error_result("list", WorkStore::ContractError.new("invalid_hub_root", "Selected Hub root is not a valid Flightdeck Hub")))
+      1
+    end
+
+    def work(config, argv)
+      subcommand = argv.shift
+      names = %w[create adapter-bind open coordinate launch guidance]
+      raise UsageError, "work requires #{names.join(', ')}" unless names.include?(subcommand)
+
+      options = {}
+      OptionParser.new do |parser|
+        parser.on("--request FILE") { |value| options[:request_path] = value }
+        parser.on("--json") { options[:json] = true }
+      end.parse!(argv)
+      empty!(argv)
+      raise UsageError, "--request is required" unless options[:request_path]
+
+      request = WorkStore.load_request(options.fetch(:request_path))
+      store = WorkStore.new(config)
+      result = case subcommand
+               when "create" then store.create(request)
+               when "adapter-bind" then store.bind_adapter(request)
+               when "open" then store.open(request)
+               when "coordinate" then store.coordinate(request)
+               when "launch" then store.launch(request)
+               when "guidance" then store.guidance(request)
+               end
+      json(result)
+      0
+    rescue UsageError, ValidationError => e
+      operation = names&.include?(subcommand) ? subcommand : "open"
+      json(WorkStore.error_result(operation, e))
+      1
+    rescue StandardError
+      operation = names&.include?(subcommand) ? subcommand : "open"
+      json(WorkStore.error_result(operation, WorkStore::ContractError.new("internal_error", "Work operation failed closed")))
+      1
+    end
+
     def mission_skill_telemetry(config, argv)
       operation_id = required_argument!(argv, "mission skill-telemetry requires SLUG")
       options = { limit: SkillTelemetry::DEFAULT_LIMIT }
@@ -744,6 +813,13 @@ module Flightdeck
           bin/flightdeck status [--json] [--write]
           bin/flightdeck hub snapshot --hub-root ABSOLUTE_PATH [--json]
           bin/flightdeck hub operations-snapshot --hub-root ABSOLUTE_PATH [--json]
+          bin/flightdeck work list --hub-root ABSOLUTE_PATH [--limit 1..100] [--cursor CURSOR] [--json]
+          bin/flightdeck work create --request FILE [--json]
+          bin/flightdeck work adapter-bind --request FILE [--json]
+          bin/flightdeck work open --request FILE [--json]
+          bin/flightdeck work coordinate --request FILE [--json]
+          bin/flightdeck work launch --request FILE [--json]
+          bin/flightdeck work guidance --request FILE [--json]
           bin/flightdeck setup plan --repositories-root PATH [--failure-policy stop|continue] [--json]
           bin/flightdeck setup connect --repositories-root PATH [--failure-policy stop|continue] [--json]
           bin/flightdeck route plan --workload NAME --work-type TYPE [--repo-id ID] [--project-key KEY] [--json]
@@ -785,7 +861,7 @@ module Flightdeck
           bin/flightdeck mission fail SLUG ACTION_ID --code CODE [--json]
           bin/flightdeck mission close SLUG [--json]
 
-        doctor, status, hub snapshot, hub operations-snapshot, setup plan, route plan, repo plan,
+        doctor, status, hub snapshot, hub operations-snapshot, work list, work open, setup plan, route plan, repo plan,
         bridge plan, mission list, mission show, mission validate, mission status, mission operation,
         mission skill-telemetry, mission authoring-catalog, mission
         authoring-plan, mission authoring-operation, mission sync-plan, mission
@@ -803,6 +879,15 @@ module Flightdeck
         It creates a durable planned Operation only; it never dispatches a task or claims task, skill,
         or work success. Never retry an unknown authoring-launch result; query
         operation authoring-operation with the original operation ID.
+        Work stores selected-Hub display metadata and normalized event links only. It never stores
+        prompts, responses, commands, tool payloads, paths, or renderer-visible runtime project/task IDs.
+        work create is the ordinary runtime handoff and requires no classification or extra model turn.
+        work adapter-bind returns a native-only secret that must never cross renderer IPC. work coordinate
+        accepts only an HMAC-authenticated exact Hub/Work/session/resume-bound adapter observation; logical
+        project keys are re-resolved against the exact current Hub catalog and produce a review-only proposal.
+        work launch requires the exact stored Operation plan confirmation. Unknown launch outcomes are
+        recovered through work open and are never blindly resubmitted. work guidance requires the exact
+        active nonterminal Operation ID; an ordinary follow-up is never inferred to be guidance.
         Mission mode defaults to dispatch_only; only watch_only and supervised accept explicit sync.
         watch_only and supervised require explicit --success-criterion and --authorized-target-json.
         dispatch_only derives one success criterion from --outcome when none is supplied.
