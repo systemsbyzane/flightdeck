@@ -57,13 +57,27 @@ class HubCompatibilityTest(unittest.TestCase):
             "flightdeck.command.setup-connect.v1",
             "flightdeck.document.change-review.v1",
             "flightdeck.command.mission-authoring.v1",
+            "flightdeck.command.skill-telemetry.v1",
+            "flightdeck.command.operation-authoring.v1",
+            "flightdeck.command.operation-projection.v1",
+            "flightdeck.command.hub-snapshot.v1",
+            "flightdeck.command.operations-snapshot.v1",
+            "flightdeck.command.operations-snapshot-detail-identity.v1",
+            "flightdeck.command.work-control.v1",
         )
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("compatible", report["status"])
         self.assertTrue(report["compatible"])
-        self.assertEqual("1.2.0", report["hub"]["identity"]["template_version"])
+        self.assertEqual("1.6.1", report["hub"]["identity"]["template_version"])
         self.assertEqual([], report["requirements"]["missing"])
+        contract = json.loads((TEMPLATE / "hub" / "compatibility.json").read_text(encoding="utf-8"))
+        self.assertIs(
+            True,
+            contract["capabilities"][
+                "flightdeck.command.operations-snapshot-detail-identity.v1"
+            ]["declaration_required"],
+        )
 
     def test_preserved_hub_without_mission_authoring_is_selectable_but_unsupported(self) -> None:
         with tempfile.TemporaryDirectory(prefix="flightdeck-compatibility-") as directory:
@@ -89,6 +103,65 @@ class HubCompatibilityTest(unittest.TestCase):
             self.assertEqual("stop_and_plan_migration", missing[0]["fallback"]["mode"])
             self.assertIn("lib/flightdeck/mission_authoring.rb", report["migration"]["managed_paths_to_compare"])
             self.assertFalse(report["migration"]["automatic_changes"])
+            self.assertEqual(before, tree_digest(hub))
+
+    def test_preserved_hub_without_snapshot_detail_identity_gets_exact_read_only_migration_plan(self) -> None:
+        capability_id = "flightdeck.command.operations-snapshot-detail-identity.v1"
+        with tempfile.TemporaryDirectory(prefix="flightdeck-compatibility-") as directory:
+            hub = Path(directory) / "preserved-hub"
+            shutil.copytree(TEMPLATE, hub)
+            contract_path = hub / "hub" / "compatibility.json"
+            contract = json.loads(contract_path.read_text(encoding="utf-8"))
+            contract["template_version"] = "1.6.0"
+            del contract["capabilities"][capability_id]
+            contract_path.write_text(json.dumps(contract, indent=2) + "\n", encoding="utf-8")
+            before = tree_digest(hub)
+
+            result, report = self.run_checker(hub, capability_id)
+
+            self.assertEqual(1, result.returncode, result.stderr)
+            self.assertEqual("incompatible", report["status"])
+            missing = report["requirements"]["missing"]
+            self.assertEqual([capability_id], [item["id"] for item in missing])
+            self.assertEqual("stop_and_plan_migration", missing[0]["fallback"]["mode"])
+            self.assertEqual(
+                sorted(
+                    [
+                        "bin/flightdeck",
+                        "docs/architecture/hub-first.md",
+                        "docs/workflows/operation-authoring-api.md",
+                        "docs/workflows/operation-projection-api.md",
+                        "docs/workflows/operations.md",
+                        "docs/workflows/plugin-lifecycle.md",
+                        "hub/compatibility.json",
+                        "hub/schemas/hub-compatibility.schema.json",
+                        "hub/schemas/operations-snapshot.schema.json",
+                        "lib/flightdeck/cli.rb",
+                        "lib/flightdeck/operation_authoring.rb",
+                        "lib/flightdeck/operations_snapshot.rb",
+                    ]
+                ),
+                report["migration"]["managed_paths_to_compare"],
+            )
+            self.assertFalse(report["migration"]["automatic_changes"])
+            self.assertEqual(before, tree_digest(hub))
+
+    def test_legacy_hub_cannot_infer_snapshot_detail_identity_from_shared_help(self) -> None:
+        capability_id = "flightdeck.command.operations-snapshot-detail-identity.v1"
+        with tempfile.TemporaryDirectory(prefix="flightdeck-compatibility-") as directory:
+            hub = Path(directory) / "legacy-hub"
+            shutil.copytree(TEMPLATE, hub)
+            (hub / "hub" / "compatibility.json").unlink()
+            before = tree_digest(hub)
+
+            result, report = self.run_checker(hub, capability_id)
+
+            self.assertEqual(1, result.returncode, result.stderr)
+            self.assertEqual("incompatible", report["status"])
+            missing = report["requirements"]["missing"]
+            self.assertEqual([capability_id], [item["id"] for item in missing])
+            self.assertIn("explicit Hub compatibility declaration", missing[0]["reason"])
+            self.assertEqual("stop_and_plan_migration", missing[0]["fallback"]["mode"])
             self.assertEqual(before, tree_digest(hub))
 
     def test_legacy_hub_missing_setup_command_returns_migration_plan(self) -> None:

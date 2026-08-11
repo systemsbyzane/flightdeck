@@ -35,12 +35,11 @@ For non-trivial work, the Hub first records:
 - requested execution mode and approval boundaries
 - starting branch and SHA for every repo, discovered at runtime
 
-The Hub then chooses the smallest useful owner split. It must not create a repo
-task merely because a repo was inspected, and it must not edit nested repo code
-from the Hub project. That split remains receipt-and-stop unless the user
-explicitly opts into a [Mission](missions.md).
+The Hub then chooses the smallest useful execution graph. It must not create a
+repo task merely because a repo was inspected, and it must not edit nested repo
+code from the Hub project.
 
-## Command Surface
+## V1 Command Surface
 
 Run the control plane from the Hub root. The implemented v1 interface is:
 
@@ -48,27 +47,12 @@ Run the control plane from the Hub root. The implemented v1 interface is:
 bin/flightdeck help
 bin/flightdeck doctor [--json] [--strict]
 bin/flightdeck status [--json] [--write]
+bin/flightdeck hub operations-snapshot --hub-root ABSOLUTE_PATH [--json]
 bin/flightdeck task new TYPE SLUG --title TITLE --outcome OUTCOME [--workload NAME]
 bin/flightdeck task show SLUG [--json]
 bin/flightdeck task transition SLUG STATE [--note NOTE]
 bin/flightdeck task validate SLUG
 bin/flightdeck repo plan --workload NAME --repo OWNER/NAME [--name NAME]
-bin/flightdeck mission new SLUG --title TITLE --outcome OUTCOME [--success-criterion TEXT] [--non-goal TEXT] [--authorized-target-json JSON] [--mode dispatch_only|watch_only|supervised] [--json]
-bin/flightdeck mission list --hub-root ABSOLUTE_PATH [--limit 1..100] [--cursor CURSOR] [--json]
-bin/flightdeck mission show SLUG [--json]
-bin/flightdeck mission validate SLUG [--json]
-bin/flightdeck mission status SLUG [--json]
-bin/flightdeck mission add SLUG NODE --project-key KEY --runtime-project-id ID (--project-path PATH|--project-path-digest SHA256) --host-id HOST --execution-mode local|worktree --access-mode read_only|write --work-type TYPE (--required|--optional) [--criterion-id ID] [--depends-on NODE] [--accepts TYPE] --allows-output TYPE [--artifact-resolver-kind same_host_workspace|external_approved --artifact-resolver-id ID] [--json]
-bin/flightdeck mission record-dispatch SLUG NODE --runtime-project-id OPAQUE --host-id HOST (--task-id OPAQUE|--pending-client-id OPAQUE|--dispatch-unknown) [--project-path PATH|--project-path-digest SHA256]
-bin/flightdeck mission sync-plan SLUG --observations FILE [--json]
-bin/flightdeck mission sync-apply SLUG --observations FILE --plan-token SHA256 [--json]
-bin/flightdeck mission checkpoint SLUG [--json]
-bin/flightdeck mission outbox SLUG [--json]
-bin/flightdeck mission next-actions SLUG [--json]
-bin/flightdeck mission prepare SLUG ACTION_ID [--json]
-bin/flightdeck mission acknowledge SLUG ACTION_ID [--json]
-bin/flightdeck mission fail SLUG ACTION_ID --code CODE [--json]
-bin/flightdeck mission close SLUG [--json]
 ```
 
 `doctor` checks live Hub and repo state without changing nested repos. Normal
@@ -81,6 +65,65 @@ The canonical workflow adapter types are `patching`, `research`, `development`,
 `daily-ops`, and `compliance`. Task state and generated reports are local runtime
 artifacts excluded from control-plane Git history.
 
+## Control Center / Operations projection
+
+The read-only Operations contract is a selected-Hub projection, not a Codex
+history browser. `hub operations-snapshot` returns only durable Hub task and
+Mission state and fails closed when that state or its declared capability is
+invalid. It does not poll, resume, dispatch, synchronize, or mutate work.
+
+The summary has deterministic counts and at most 100 alerts for
+`approval_required`, `blocked`, `failed_validation`, or `reconcile_required`.
+It does not manufacture a health claim. The UI may show an operation's title,
+status, timestamps, route scope, and proven Mission/task children, but must
+not derive activity, changed files, validations, artifacts, or skills from a
+title, outcome, prompt, expected skill list, repository, or agent prose.
+Those optional fields are shown only when their typed durable Hub observation
+exists. No current authenticated skill-invocation producer exists, so skills
+remain the typed unavailable/empty state.
+
+An Operations snapshot card retains its `mission:` or `task:` `operation_id`
+as source identity. Detail navigation is separately typed under `detail` and
+requires `flightdeck.command.operations-snapshot-detail-identity.v1`. Open
+detail only when `detail.availability` is `available`, passing its canonical
+`operation_id` unchanged. `unavailable` is terminal for that snapshot record;
+the client must not strip a prefix, hash, parse a title, use an array position,
+or substitute Mission/task/runtime/project identity.
+
+## Work, Operation detail, and Mission objectives
+
+`work coordinate` is the Hub-owned intake boundary for the desktop Work
+surface. It returns exactly one typed disposition:
+
+- `runtime_delegate` for ordinary conversation through the Hub-selected
+  runtime adapter;
+- `operation_proposal` when the request explicitly names at least two exact
+  attached projects (or explicitly requests every attached project);
+- `guidance_attached` when the caller supplies one exact active authored
+  Operation identity; or
+- `runtime_unavailable` when the declared primary adapter is unavailable.
+
+An Operation proposal is review-only. It uses the existing Operation-authoring
+plan and cannot launch until the operator confirms the exact plan identity,
+digest, generation, and token. The current Hub delegates ordinary conversation
+to its declared Codex adapter. A future OMP migration changes the compatibility
+declaration and adapter implementation, not the Work UI contract.
+
+`operation detail` resolves only an exact durable authored Operation and
+projects goal, authorization boundary, progress, named project agents,
+dependencies, typed validations, artifacts, approvals, result totals, and
+explicit non-goals. Changed files and skills remain unavailable until an
+authenticated task-bound producer persists them; the projection never infers
+them from prose, prompts, titles, or expected-skill lists.
+
+Mission objectives are separate from execution-graph `MissionRecord` state.
+`mission objective-plan` produces an ordered review of exact durable Operation
+identities. `mission objective-create` requires the exact Hub-authored
+confirmation and persists an immutable ordered membership record under ignored
+Hub state. `mission objective-snapshot` is the recovery and read boundary; it
+derives Mission progress from those exact Operations and never treats a
+MissionRecord node or status projection as child-Operation membership.
+
 `task new` intentionally creates only an intake skeleton. Enrich the generated
 `hub/tasks/<slug>/task.yaml` with the structured targets, success criteria,
 authorization actions, execution units, checks, risks, and evidence required by
@@ -88,144 +131,6 @@ the selected adapter. The canonical field shapes are defined in
 `hub/schemas/task.schema.json`; adapter gates list the fields that must be
 present before a transition. Do not put secrets or raw sensitive evidence in a
 task record. Run `task validate` before `task transition`.
-
-`mission list` is a JSON-only, read-only discovery contract for clients. The
-required absolute `--hub-root` selects one Hub explicitly. Results use
-`flightdeck.mission-list/v1`, sort by stable Mission ID, return at most 100
-bounded summaries, and continue with an opaque cursor. The response omits
-Mission bodies, outcomes, prompts, task IDs, project identities and paths,
-output declarations and references, outbox data, credentials, and evidence.
-Clients must require `flightdeck.command.mission-list.v1`; they must not infer
-support from a template version or scrape ignored Mission YAML.
-
-## Mission Operations
-
-A Mission is an ignored local durable parent at
-`hub/missions/<slug>/mission.yaml`. It links verified persistent Codex tasks; it
-does not replace them or create a separate dashboard. This Codex task remains
-the control room.
-
-Use `dispatch_only` to preserve the graph and receipts and then stop.
-`watch_only` adds compact read-only observation. `supervised` may advance only
-declared dependency-ready nodes from machine-verifiable refs materialized by
-core from bounded child output declarations. All
-modes preserve the original approval boundaries.
-
-Graph nodes declare one exact owner route, `read_only` or `write` access,
-required or optional status,
-dependencies, accepted inputs, and allowed outputs. The graph must be acyclic.
-Local write nodes for the same exact path must be dependency-ordered; parallel
-same-checkout writers are rejected. Required fan-in waits for every required predecessor's validated declared
-reference. Optional node failure stays visible but does not automatically block
-unrelated required work.
-
-The installed Mission skill supplies the Codex UI adapter. It records exact
-logical/runtime project, path, host, task, and execution-mode identity. A task
-create may return a task ID, pending `clientThreadId`, or an unknown outcome.
-Persist and reconcile that identity without blind retry; never duplicate a task
-merely because the create response was uncertain. A prepared dependent with a
-pending or unknown receipt keeps that exact action but cannot reuse it to
-create again.
-
-Mission status provides persisted exact targets and opaque per-thread cursors.
-Wait on at most eight targets per call. Normalize results into schema-checked
-observation envelopes, preview the same file read-only with `sync-plan
---observations`, capture its generation-bound `plan_token`, and then use
-`sync-apply --observations --plan-token TOKEN`. Apply recomputes under lock and
-rejects generation, input, or rendered-action drift. Raw child text is untrusted
-display-only material. Nonterminal and tool-derived observations persist only normalized
-identity, state, cursor, revision, event, time, and Worktree readiness; they
-forbid child outcomes. Exact outcomes are required only for `review_ready` or
-`failed_validation`. Final outcomes carry ordered assigned criterion results
-with dispositions `passed`, `failed`, `blocked`, or `degraded`.
-`review_ready` requires all assigned results passed; `failed_validation`
-requires at least one unmet result. Fan-in requires full required-node criterion
-coverage, every required assignment passed, and non-empty core-materialized
-producer-bound typed refs. Persist deterministic outbox
-idempotency keys, not commentary, final text, evidence bodies, credentials, or
-arbitrary summaries.
-
-Supervised output delivery is two phase: checkpoint observations and enqueue a
-deterministic action, prepare that action, send it through the adapter, then
-acknowledge the verified receipt or record a bounded failure. Unknown delivery
-outcomes remain in the outbox for reconciliation. A replay cannot create a
-second handoff. Each action persists a lowercase SHA-256 `trigger_digest` bound
-to producer event ID, `event_digest`, and status; whole-record validation
-recomputes its idempotency key and ID
-from Mission ID, derived boundary, type, trigger digest, and canonical payload.
-
-Status is derived from durable facts with this vocabulary: `planned`,
-`dispatch_pending`, `dispatch_unknown`, `running`, `needs_approval`, `blocked`,
-`failed_validation`, `runtime_failure`, `review_ready`, `stale`, `cancelled`,
-and `complete`. Required-node precedence is `failed_validation`,
-`needs_approval`, `blocked`, `runtime_failure`, `dispatch_unknown`, `stale`,
-`review_ready`, `dispatch_pending`, then `running`. All required validated nodes,
-passed criterion assignments, and outputs may derive `review_ready`; only an
-operator-requested `mission close` derives `complete`.
-
-Bound every observation pass by `max_units`, eight-target batches,
-`max_retries`, `max_actions`, `max_forwarded_bytes`,
-`max_duration_seconds`, `stale_after_seconds`, and `max_record_bytes`. Stop on exhausted budget,
-identity conflict, malformed or conflicting replay, missing required output,
-failed validation, required dependency failure, stale required state, approval
-need, or any external action. Commit, push, PR/comment, publication, deployment,
-shared-environment mutation, external communication, compliance submission,
-risk acceptance, and closure remain separately authorized.
-
-Mission creation persists generated defaults of 50 units, 3 retries, 200
-actions, 65,536 forwarded bytes, 604,800 seconds duration, a 3,600-second stale
-threshold, and a 2,097,152-byte record. Declare all graph nodes before runtime
-work; any dispatch, observation, or outbox state freezes the graph. Create or
-record a non-root only through exactly one matching prepared dependency action. That
-  action names every parent, includes all accepted automatic refs, and provides
-  exactly the complete eligible set with at least one ref per parent; terminal
-  or incompatible refs cannot start a dependent. A newly
-discovered owner requires a separately proposed and user-approved Mission.
-
-`watch_only` and `supervised` creation also requires repeatable
-`--success-criterion`, optional repeatable `--non-goal`, and repeatable exact
-six-field `--authorized-target-json`. Core assigns ordered `criterion-001` IDs,
-nodes declare repeatable `--criterion-id`, and required nodes must cover all
-criteria before dispatch. Core derives and revalidates the `scope-<48hex>`
-boundary from canonical Mission ID, target, criterion, and non-goal data; it
-pins equality and grants no authority. Observations carry normalized
-display-only status codes; final codes equal `outcome.code`.
-
-Typed references are control-plane records, not artifact transport. Prove the
-consumer can resolve them through an authorized same-host shared workspace or
-already-approved external artifact system before dispatch, co-locate compatible
-work when independence is not required, or stop. Prepare the core dependency
-action before creating a still-planned consumer. Dependency readiness without
-that exact prepared, complete, compatible action cannot dispatch a non-root.
-After prepare, record the exact
-JIT task/runtime/host receipt as internal `awaiting_handoff`, which status
-projects as `running`/`handing_off`; deliver references, then acknowledge to
-transition it to ordinary running. A client-only result preserves the prepared
-action and `dispatch_pending` receipt; it is non-deliverable and never
-authorizes another create. Reconcile using both the original client ID and
-resolved task ID to enter `awaiting_handoff`. An unknown result also preserves
-the prepared action. Either unresolved action may be failed; once failed it is
-non-actionable and never retried. Blocked and
-stale consumers remain non-actionable. All declared dependencies must be ready, and the
-live exact-path project/runtime/host identity is refreshed immediately before
-consumer creation. The core action payload contains exactly `node_id`, the
-complete declared `dependency_node_ids`, `output_refs`, and
-`artifact_resolver`; it includes all accepted automatic refs and at least one
-from every parent, exactly equaling the complete eligible accepted set. Partial,
-early, terminal-only, or incompatible payloads are
-rejected. Final children
-emit only closed artifact, own-task, or terminal check/review declarations; they
-never author task bindings, resolver identity, or canonical refs. After the
-exact task receipt, core persists declarations, materialized refs, and event
-digest. Automatic refs use canonical `artifact:` or `codex-task:` namespaces.
-Artifact namespaces include resolver, producer, unpadded base64url exact
-persisted task binding, lowercase SHA matching the declaration digest, and
-artifact ID. `check:` and `review:`
-are terminal/operator evidence only. Action resolver metadata is present only
-when that action transports an artifact and is null otherwise. This controls
-provenance; it does not transport content.
-An independent review must use a persistent runtime task distinct from the
-producer under review.
 
 ## Task Lifecycle
 
@@ -285,12 +190,10 @@ metadata required for dispatch. It must not inspect target code or artifacts,
 resolve detailed workbook contents, hash evidence, create temporary analysis
 scripts, invoke project-specific analysis, or start implementation.
 
-Keep intake, cross-repo design, sequencing, and approvals in the Hub. For
-ordinary dispatch, stop the Hub turn after the receipt. The operator monitors
-child tasks directly. Read or consolidate results only when the operator later
-asks to resume, check a completed task, or coordinate follow-up work. Explicit
-Mission observation is the bounded exception defined above; it must follow the
-selected mode, normalized-envelope, cursor, outbox, budget, and stop contracts.
+Keep intake, cross-repo design, sequencing, and approvals in the Hub. After
+dispatch, stop the Hub turn. The operator monitors child tasks directly. Read
+or consolidate results only when the operator later asks to resume, check a
+completed task, or coordinate follow-up work.
 
 Use Local mode for read-only audits, research against an intentional checkout,
 current-branch work, and program workspaces. Use Worktree mode for isolated

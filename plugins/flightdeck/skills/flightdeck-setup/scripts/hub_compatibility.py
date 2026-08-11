@@ -62,6 +62,28 @@ def load_contract(path: Path) -> dict[str, Any]:
         raise ContractError("contract product must be flightdeck")
     if not isinstance(value.get("template_version"), str) or not value["template_version"]:
         raise ContractError("contract template_version must be a non-empty string")
+    runtime = value.get("runtime_capabilities")
+    adapters = runtime.get("adapters") if isinstance(runtime, dict) else None
+    codex = adapters.get("codex") if isinstance(adapters, dict) else None
+    omp = adapters.get("omp") if isinstance(adapters, dict) else None
+    controls = codex.get("optional_controls") if isinstance(codex, dict) else None
+    channels = codex.get("structured_channels") if isinstance(codex, dict) else None
+    if (
+        set(runtime or {}) != {"primary_runtime", "adapters"}
+        or runtime.get("primary_runtime") != "codex"
+        or set(adapters or {}) != {"codex", "omp"}
+        or not isinstance(codex, dict)
+        or set(codex) != {"available", "optional_controls", "structured_channels"}
+        or codex.get("available") is not True
+        or channels != ["flightdeck.runtime.work-recommendation/v1"]
+        or not isinstance(controls, list)
+        or len(controls) != len(set(controls))
+        or any(control not in {"model", "reasoning_effort"} for control in controls)
+        or not isinstance(omp, dict)
+        or set(omp) != {"available"}
+        or omp.get("available") is not False
+    ):
+        raise ContractError("contract runtime_capabilities are invalid")
     capabilities = value.get("capabilities")
     if not isinstance(capabilities, dict) or not capabilities:
         raise ContractError("contract capabilities must be a non-empty object")
@@ -78,6 +100,10 @@ def load_contract(path: Path) -> dict[str, Any]:
             raise ContractError(f"capability {capability_id} kind must match its ID")
         if not isinstance(capability.get("description"), str) or not capability["description"]:
             raise ContractError(f"capability {capability_id} description is required")
+        if not isinstance(capability.get("declaration_required", False), bool):
+            raise ContractError(
+                f"capability {capability_id} declaration_required must be a boolean"
+            )
         probe = capability.get("probe")
         if not isinstance(probe, dict):
             raise ContractError(f"capability {capability_id} probe must be an object")
@@ -263,6 +289,8 @@ def compatibility_result(
             failure = f"Hub compatibility contract is invalid: {contract_error}"
         elif hub_contract is not None and capability_id not in hub_contract["capabilities"]:
             failure = "capability is not declared by the Hub compatibility contract"
+        elif hub_contract is None and capability.get("declaration_required", False):
+            failure = "capability requires an explicit Hub compatibility declaration"
         elif capability["kind"] == "command":
             signature = capability["probe"]["help_contains"]
             if help_text is None:

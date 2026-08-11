@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://flightdeck.dev/schemas/operation-authoring-catalog-request.schema.json","title":"Flightdeck Operation authoring catalog request","type":"object","additionalProperties":false,"required":["schema_version"],"properties":{"schema_version":{"const":"flightdeck.operation-authoring.catalog-request/v1"}}}

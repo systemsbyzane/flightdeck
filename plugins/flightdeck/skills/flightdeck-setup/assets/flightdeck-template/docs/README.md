@@ -27,6 +27,10 @@ the Hub into a monorepo.
   lifecycle, status, routing, and approval model.
 - [Control-plane architecture](architecture/control-plane.md) - understand
   ownership, security, validation, and recovery boundaries.
+- [Hub-first application contract](architecture/hub-first.md) - consume bounded
+  Hub and Operations snapshots without inferring runtime state.
+- [Operation projection API](workflows/operation-projection-api.md) - display
+  one durable Mission with verified task-bound skill evidence.
 - [Repo bridge design](workflows/repo-bridge.md) - make Hub guidance available
   inside independent repository projects.
 - [Review readiness](review/codex-review-readiness.md) - prepare a change for

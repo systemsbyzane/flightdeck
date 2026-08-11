@@ -624,6 +624,26 @@ validation references, not document contents.
 Packaging, publication, external delivery, or compliance submission remains
 separately authorized.
 
+## Verified skill telemetry
+
+Generated-Hub template `1.3.0` adds the independent
+`flightdeck.command.skill-telemetry.v1` contract. A Mission sync may accept a
+bounded `skill_events` list only from explicit structured Codex task
+skill-event metadata with source `codex_task_skill_event`. Prompt text, task
+titles, display labels, commands, free text, and arbitrary tool payloads never
+prove invocation. Core binds each accepted event to the persisted Mission node
+and exact project/host/task receipt, deduplicates stable evidence IDs, rejects
+conflicts, and persists the ordered result atomically with the Mission.
+
+`bin/flightdeck mission skill-telemetry SLUG --json` returns the closed
+`flightdeck.skill-telemetry/v1` envelope: Mission operation ID and generation,
+operation and partial-failure status, bounded counts, deduplicated skills, and
+per-child opaque provenance. Pages sort deterministically and cursors bind the
+Mission generation; mutation between pages returns `snapshot_changed`.
+Supported-but-empty is `absent`. Missing, malformed, or incompatible contracts
+return typed errors and never fall back to Mission-file or command-text
+scraping.
+
 ## Existing Hubs and upgrades
 
 Plugin lifecycle and generated-Hub lifecycle remain separate. Upgrade the

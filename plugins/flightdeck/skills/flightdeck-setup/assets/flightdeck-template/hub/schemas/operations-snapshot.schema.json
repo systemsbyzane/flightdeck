@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/operations-snapshot.schema.json",
+  "title": "Flightdeck Operations Snapshot Contract",
+  "description": "Read-only, redacted projection of durable Hub-owned task and Mission records. It never reads Codex global recents.",
+  "oneOf": [{"$ref": "#/$defs/success"}, {"$ref": "#/$defs/error"}],
+  "$defs": {
+    "id": {"type": "string", "maxLength": 128, "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"},
+    "label": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\u0000-\\u001f\\u007f\\\\/]+$"},
+    "status": {"enum": ["queued", "working", "waiting", "approval_required", "blocked", "review_ready", "failed_validation", "cancelled", "reconcile_required"]},
+    "detail": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["availability", "operation_id"], "properties": {"availability": {"const": "available"}, "operation_id": {"type": "string", "pattern": "^operation-[0-9a-f]{24}$"}}},
+        {"type": "object", "additionalProperties": false, "required": ["availability"], "properties": {"availability": {"const": "unavailable"}}}
+      ]
+    },
+    "skills": {
+      "type": "object", "additionalProperties": false, "required": ["state", "items"],
+      "properties": {"state": {"const": "unavailable"}, "items": {"type": "array", "maxItems": 0}}
+    },
+    "runtimeCapabilities": {
+      "type": "object", "additionalProperties": false, "required": ["primary_runtime", "adapters"],
+      "properties": {
+        "primary_runtime": {"const": "codex"},
+        "adapters": {
+          "type": "object", "additionalProperties": false, "required": ["codex", "omp"],
+          "properties": {
+            "codex": {"type": "object", "additionalProperties": false, "required": ["available", "optional_controls"], "properties": {"available": {"const": true}, "optional_controls": {"type": "array", "uniqueItems": true, "items": {"enum": ["model", "reasoning_effort"]}}}},
+            "omp": {"type": "object", "additionalProperties": false, "required": ["available"], "properties": {"available": {"const": false}}}
+          }
+        }
+      }
+    },
+    "validation": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"status": {"enum": ["passed", "failed", "not_applicable"]}, "passed": {"type": "integer", "minimum": 0}, "failed": {"type": "integer", "minimum": 0}, "unavailable": {"type": "integer", "minimum": 0}}
+    },
+    "artifact": {
+      "type": "object", "additionalProperties": false, "required": ["type"],
+      "properties": {"type": {"$ref": "#/$defs/id"}, "artifact_id": {"$ref": "#/$defs/id"}}
+    },
+    "child": {
+      "type": "object", "additionalProperties": false,
+      "required": ["child_id", "logical_project_key", "display_label", "role_name", "status", "skills"],
+      "properties": {
+        "child_id": {"$ref": "#/$defs/id"}, "logical_project_key": {"$ref": "#/$defs/id"}, "display_label": {"$ref": "#/$defs/label"}, "role_name": {"$ref": "#/$defs/label"}, "status": {"$ref": "#/$defs/status"},
+        "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"},
+        "activity": {"type": "object", "additionalProperties": false, "required": ["code", "observed_at"], "properties": {"code": {"$ref": "#/$defs/id"}, "observed_at": {"type": "string", "format": "date-time"}}},
+        "validation": {"$ref": "#/$defs/validation"}, "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}}, "skills": {"$ref": "#/$defs/skills"}
+      }
+    },
+    "operation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation_id", "operation_kind", "detail", "display_title", "status", "created_at", "updated_at", "route_scope", "children", "skills"],
+      "properties": {
+        "operation_id": {"type": "string", "pattern": "^(?:mission|task):[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"}, "operation_kind": {"enum": ["mission", "task"]}, "detail": {"$ref": "#/$defs/detail"}, "display_title": {"$ref": "#/$defs/label"}, "status": {"$ref": "#/$defs/status"},
+        "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"},
+        "route_scope": {"type": "object", "additionalProperties": false, "properties": {"mode": {"enum": ["dispatch_only", "watch_only", "supervised"]}, "workload": {"$ref": "#/$defs/id"}, "logical_project_keys": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}}},
+        "children": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/child"}}, "validation": {"$ref": "#/$defs/validation"}, "skills": {"$ref": "#/$defs/skills"}
+      }
+    },
+    "success": {
+      "type": "object", "additionalProperties": false,
+      "required": ["api_version", "kind", "schema", "ok", "runtime_capabilities", "summary", "operations"],
+      "properties": {
+        "api_version": {"const": "flightdeck.operations-snapshot/v1"}, "kind": {"const": "OperationsSnapshot"}, "schema": {"const": "hub/schemas/operations-snapshot.schema.json"}, "ok": {"const": true},
+        "runtime_capabilities": {"$ref": "#/$defs/runtimeCapabilities"},
+        "summary": {"type": "object", "additionalProperties": false, "required": ["counts", "alerts"], "properties": {"counts": {"type": "object", "additionalProperties": false, "required": ["queued", "working", "waiting", "approval_required", "blocked", "review_ready", "failed_validation", "cancelled", "reconcile_required"], "properties": {"queued": {"type": "integer", "minimum": 0}, "working": {"type": "integer", "minimum": 0}, "waiting": {"type": "integer", "minimum": 0}, "approval_required": {"type": "integer", "minimum": 0}, "blocked": {"type": "integer", "minimum": 0}, "review_ready": {"type": "integer", "minimum": 0}, "failed_validation": {"type": "integer", "minimum": 0}, "cancelled": {"type": "integer", "minimum": 0}, "reconcile_required": {"type": "integer", "minimum": 0}}}, "alerts": {"type": "array", "maxItems": 100, "items": {"type": "object", "additionalProperties": false, "required": ["operation_id", "status", "detail"], "properties": {"operation_id": {"type": "string", "pattern": "^(?:mission|task):[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"}, "status": {"enum": ["approval_required", "blocked", "failed_validation", "reconcile_required"]}, "detail": {"$ref": "#/$defs/detail"}}}}}},
+        "operations": {"type": "array", "maxItems": 2000, "items": {"$ref": "#/$defs/operation"}}
+      }
+    },
+    "error": {
+      "type": "object", "additionalProperties": false, "required": ["api_version", "kind", "schema", "ok", "error"],
+      "properties": {
+        "api_version": {"const": "flightdeck.operations-snapshot/v1"}, "kind": {"const": "OperationsSnapshotError"}, "schema": {"const": "hub/schemas/operations-snapshot.schema.json"}, "ok": {"const": false},
+        "error": {"type": "object", "additionalProperties": false, "required": ["code", "message"], "properties": {"code": {"enum": ["invalid_request", "hub_root_not_found", "invalid_hub_root", "unsupported_hub_contract", "invalid_hub_state", "operation_limit_exceeded"]}, "message": {"type": "string", "minLength": 1, "maxLength": 256}}}
+      }
+    }
+  }
+}
