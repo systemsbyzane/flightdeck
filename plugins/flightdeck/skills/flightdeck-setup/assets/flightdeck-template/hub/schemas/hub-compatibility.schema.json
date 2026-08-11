@@ -9,6 +9,7 @@
     "schema",
     "product",
     "template_version",
+    "runtime_capabilities",
     "capabilities"
   ],
   "properties": {
@@ -34,6 +35,44 @@
       "additionalProperties": {
         "$ref": "#/$defs/capability"
       }
+    },
+    "runtime_capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary_runtime", "adapters"],
+      "properties": {
+        "primary_runtime": {"const": "codex"},
+        "adapters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["codex", "omp"],
+          "properties": {
+            "codex": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["available", "structured_channels", "optional_controls"],
+              "properties": {
+                "available": {"const": true},
+                "structured_channels": {
+                  "type": "array",
+                  "const": ["flightdeck.runtime.work-recommendation/v1"]
+                },
+                "optional_controls": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {"enum": ["model", "reasoning_effort"]}
+                }
+              }
+            },
+            "omp": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["available"],
+              "properties": {"available": {"const": false}}
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
@@ -58,6 +97,9 @@
           "type": "string",
           "minLength": 1
         },
+        "declaration_required": {
+          "type": "boolean"
+        },
         "probe": {
           "type": "object",
           "additionalProperties": false,
@@ -69,6 +111,9 @@
             "path": {
               "type": "string",
               "minLength": 1
+            },
+            "conformance": {
+              "const": "mission_sync_jit_worktree/v1"
             }
           },
           "oneOf": [

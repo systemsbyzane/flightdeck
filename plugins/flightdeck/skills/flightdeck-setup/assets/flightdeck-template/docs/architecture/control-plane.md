@@ -47,6 +47,12 @@ The Hub uses five layers:
 5. `hub/tasks/`, `hub/missions/`, `hub/reports/`, and `hub/state/` hold local
    generated state and are excluded from control-plane versioning by default.
 
+Selected-Hub Work metadata lives under ignored `hub/state/work`. It contains
+only display-safe Work identity, private-adapter binding digests, bounded
+normalized event metadata, and exact Operation associations. Prompt/response
+transcripts, commands, tool payloads, chain-of-thought, paths, credentials, and
+runtime project/task identities are outside this store.
+
 The common task lifecycle is:
 
 ```text
@@ -107,7 +113,8 @@ The Hub CLI never invents runtime identity or interprets raw child text.
 Durable Mission state under ignored `hub/missions/` contains graph ownership,
 required/optional dependencies, declared `read_only`/`write` access, exact project/task receipts, opaque per-thread
 cursors, normalized observation envelopes, bounded output declarations,
-core-materialized typed output refs, event digests, dedupe keys, status, and
+core-materialized typed output refs, explicit structured Codex skill events
+bound by core to exact task receipts, event digests, dedupe keys, status, and
 outbox receipts. It excludes raw commentary/final text,
 artifact bodies, credentials, and private evidence.
 
@@ -178,6 +185,15 @@ An action carries the resolver only when it transports an artifact and null
 otherwise, regardless of the consumer's future outputs. This is provenance
 control, not content transport. `external_approved` identifies a previously
 approved system and authorizes no upload or publication.
+
+Skill telemetry is observational only. The task adapter may forward a closed
+bounded event only from explicit Codex task skill-event metadata; prompt,
+title, label, command, free-text, and tool-payload inference is forbidden. Core
+materializes operation/node/logical-project/runtime-project/host/task binding,
+deduplicates stable evidence IDs, persists under the Mission lock, and exposes
+a generation-bound paginated summary. Missing exact identity, malformed or
+conflicting evidence, and over-budget input fail closed. Renderer visibility
+does not enforce this contract.
 
 A create response containing only `clientThreadId` is pending identity, not a
 wait target. The node stays `dispatch_pending` and cannot be observed until

@@ -84,6 +84,13 @@ create, and recovery. A client must require the exact capability it needs from
 the regular `hub/compatibility.json` manifest rather than infer support from
 the four older Mission capabilities or run Doctor/status as a capability probe.
 
+Template `1.6.1` adds
+`flightdeck.command.operations-snapshot-detail-identity.v1`. It preserves the
+existing Mission/task snapshot source identity and exposes a separate canonical
+detail identity only when a persisted Operation-authoring record reconciles
+exactly with its Mission. Legacy and Task records report detail unavailable;
+malformed, foreign, duplicate, or mismatched authoring identity fails closed.
+
 For a preserved Hub that needs both desktop surfaces, the later separately
 authorized migration must compare the exact managed paths returned by the
 compatibility checker for both capabilities, plus `hub/compatibility.json`.
