@@ -91,9 +91,35 @@ detail identity only when a persisted Operation-authoring record reconciles
 exactly with its Mission. Legacy and Task records report detail unavailable;
 malformed, foreign, duplicate, or mismatched authoring identity fails closed.
 
-For a preserved Hub that needs both desktop surfaces, the later separately
+Template `1.6.1` adds
+`flightdeck.command.operations-snapshot-detail-identity.v1`. It preserves the
+existing Mission/task snapshot source identity and exposes a separate canonical
+detail identity only when a persisted Operation-authoring record reconciles
+exactly with its Mission. Legacy and Task records report detail unavailable;
+malformed, foreign, duplicate, or mismatched authoring identity fails closed.
+
+Template `1.7.0` adds
+`flightdeck.command.work-operation-lifecycle.v1` over the existing Work and
+Operation-authoring stores. It persists review-only `not_started`, exact
+idempotent launch, durable decline-without-dispatch, launch recovery, exact
+route/bridge-bound native dispatch authorization, and deduplicated child
+receipt/partial-failure state. It preserves the immutable accepted adapter
+binding generation and never authorizes a client dispatcher merely because the
+producer capability is present. Version 1 Work records remain readable;
+authorized lifecycle mutation writes the closed version 2 record.
+
+Template `1.8.0` adds the declaration-required OMP Operation execution and
+observation capabilities. It preserves Codex as the ordinary Work conversation
+adapter and selects OMP only after exact Operation confirmation. The Hub
+authorizes exact agents and projects authenticated bounded observations; the
+opaque OMP session and raw protocol remain native-only. Existing generated
+Hubs require a separate preservation-first migration and ignored-state backup.
+Capability presence alone does not authorize a Client dispatcher.
+
+For a preserved Hub that needs these desktop surfaces, the later separately
 authorized migration must compare the exact managed paths returned by the
-compatibility checker for both capabilities, plus `hub/compatibility.json`.
+compatibility checker for every required capability, plus
+`hub/compatibility.json`.
 That comparison does not include ignored Mission records, operations, tasks,
 reports, attached repositories, or client dispatch state. Neither capability
 enables managed local dispatch: source-path reconciliation, lock-publication,

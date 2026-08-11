@@ -15,6 +15,15 @@ client must stop and surface the compatibility result; it must not scrape
 `hub/state/work`, inspect global runtime history, infer Work from Operations,
 or silently migrate the Hub.
 
+`flightdeck.command.work-operation-lifecycle.v1` is the companion lifecycle
+contract over the same WorkStore, OperationAuthoring record, and MissionStore.
+It does not create a competing Operation model. It adds durable proposal state,
+decline, launch recovery, exact native-only dispatch authorization, and
+deduplicated receipt attachment. A client must require this companion
+capability before presenting lifecycle actions or attempting managed dispatch.
+The declaration does not by itself authorize a client implementation to create
+runtime tasks; that owner must independently validate its dispatch boundary.
+
 ## Commands
 
 All mutating commands run from the explicitly selected Hub. Only list accepts
@@ -27,6 +36,10 @@ bin/flightdeck work adapter-bind --request FILE [--json]
 bin/flightdeck work open --request FILE [--json]
 bin/flightdeck work coordinate --request FILE [--json]
 bin/flightdeck work launch --request FILE [--json]
+bin/flightdeck work decline --request FILE [--json]
+bin/flightdeck work lifecycle-open --request FILE [--json]
+bin/flightdeck work dispatch-plan --request FILE [--json]
+bin/flightdeck work dispatch-report --request FILE [--json]
 bin/flightdeck work guidance --request FILE [--json]
 ```
 
@@ -89,6 +102,12 @@ invalidates the previous session binding. Binding state is persisted only in
 ignored, bounded, mode-restricted Work state and is excluded from every
 renderer-safe Work result.
 
+After acceptance, `runtime_binding.resume_generation` is immutable for that
+adapter binding and is the sole generation accepted on signed observations.
+The display-safe `resume.generation` may advance as Work events are persisted;
+the client must never substitute that mutable projection for the accepted
+binding generation.
+
 ## Signed runtime recommendation and proposal
 
 `work coordinate` never receives or persists a prompt, response, command,
@@ -123,7 +142,7 @@ token. It omits paths, path digests, runtime project IDs, host IDs, task IDs,
 and the private adapter binding. Proposal creation never launches or dispatches
 an Operation.
 
-## Explicit launch and recovery
+## Explicit launch, decline, and recovery
 
 `work launch` accepts only the exact Work ID, proposed Operation ID, and these
 five stored confirmation fields:
@@ -135,14 +154,73 @@ operation_id | plan_id | plan_generation | plan_digest | plan_token
 The Hub reconstructs the private exact proposal from current catalog facts and
 requires every stored field to match before delegating to
 `flightdeck.command.operation-authoring.v1`. A stale catalog or changed payload
-returns `stale_or_mismatched_plan`. A confirmed result links the exact
-Operation to Work. No Work command dispatches child tasks or claims success.
+returns `stale_or_mismatched_plan`. A confirmed result atomically links the
+exact persisted Operation to Work. Exact replay returns the existing link and
+does not author a second Operation.
+
+`work decline` accepts the same five-field confirmation. It persists
+`declined`, is idempotent for the same exact proposal, and guarantees that the
+producer creates neither an Operation nor a child receipt. A tampered, stale,
+foreign-Work, already-launched, or launch-unknown proposal fails closed. A
+declined proposal cannot later launch.
 
 If a launch commits but its response is lost, Operation authoring keeps the
 outcome unresolved. Work records `operation_launch_unknown`, remains
 `unknown_outcome`, and forbids a blind resubmit. `work open` performs recovery
 using only the original Operation ID. It links a recovered durable Mission
-state without exposing child runtime identities.
+state without exposing child runtime identities. `work lifecycle-open` is the
+companion restart projection: each proposal is exactly `not_started`,
+`declined`, `launched`, or `launch_unknown`; actions are enabled only while
+`not_started`, and the canonical active Operation link plus safe per-owner
+dispatch progress survive navigation, refresh, and process restart.
+
+## Native dispatch authorization and receipt attachment
+
+`work dispatch-plan` is read-only execution authorization after the exact
+Operation is durably launched and linked to the same Work. It re-resolves every
+persisted authored node through route planning and requires exact equality for
+logical project key, accepted runtime project ID, real-path digest, execution
+mode, and verified repository bridge. It returns a generation and digest over
+the complete target set, exact bridge handoffs, authorization boundary, and a
+closed policy:
+
+```text
+strategy: parallel_independent
+max_concurrency: min(target_count, 8)
+requires_all_receipts: true
+retry_known_failures_only: true
+```
+
+This command never starts a runtime task. An independently authorized native
+owner must dispatch dependency-independent targets concurrently and preserve
+the exact returned identities. It must not serialize them, silently downgrade
+the request to chat, or dispatch before confirmation.
+
+`work dispatch-report` attaches the resulting bounded receipt batch to the
+same Work and authoritative Mission. It requires the exact dispatch generation
+and plan digest, one stable report ID, one stable attempt key per child, and the
+exact runtime project, host, and path digest from the plan. Outcomes are
+`created`, `pending`, `unknown_outcome`, or `failed`. Pending reconciliation
+requires both the original pending client ID and the resolved task ID. Exact
+report replay is idempotent; report-ID reuse, consumed attempts, foreign or
+mismatched targets, duplicate child creation, retry of running/unknown work,
+and changed plan identity fail closed. Only known `failed` targets may be
+retried. Before the first Mission mutation the Hub persists an `applying`
+digest-only report journal. It checkpoints each accepted child in Work after
+MissionStore accepts the exact receipt; an interrupted exact replay skips
+matching applied children, resumes the remainder, and marks the journal
+`complete`. While a journal is `applying`, every different report identity is
+blocked as `unknown_outcome`. A Mission-rejected receipt terminates that journal
+as `rejected` with only a safe error code, preserves earlier accepted
+checkpoints, and permits a new report identity for remaining retryable targets;
+exact replay of the rejected report returns the same rejection. No task or
+pending identity is stored in Work. The Work projection preserves partial failure while MissionStore
+remains authoritative for accepted child progress and final result state.
+The client passes the canonical `active_operation.operation_id` unchanged to
+`flightdeck.command.operation-projection.v1` for safe child sessions, verified
+activity, progress, and output references. Final synthesis prose remains in the
+same persisted Work runtime conversation; this contract supplies durable facts
+and linkage, not a second transcript or renderer-generated conclusion.
 
 ## Guidance and Operation events
 
@@ -158,6 +236,8 @@ server-authored event ID. The closed types are:
 ```text
 work_created | runtime_delegated | runtime_unavailable | runtime_disconnected |
 operation_proposed | operation_launched | operation_launch_unknown |
+operation_declined | operation_dispatch_started | operation_dispatch_pending |
+operation_dispatch_unknown | operation_dispatch_failed |
 guidance_attached | operation_progress | operation_result
 ```
 
@@ -170,20 +250,44 @@ inferred from a title, prompt, display label, or runtime prose.
 
 ## Persistence and bounds
 
-Ignored state lives under `hub/state/work`. Writes use a Hub-contained lock and
-atomic rename. Records reject symlinks, unexpected filenames, identity/filename
+Ignored state lives under `hub/state/work`. Version 2 Work records add only
+closed lifecycle and receipt metadata; version 1 records are normalized in
+memory and are rewritten as version 2 only on an authorized mutation. Writes
+use a Hub-contained lock and atomic rename. Records reject symlinks, unexpected filenames, identity/filename
 mismatches, conflicting request keys, malformed timestamps, unknown fields,
 and invalid restart state. Limits are 10,000 Work records, 262,144 bytes per
-record, 200 persisted recommendations/events, and 50 Operation links per Work.
+record, 200 persisted recommendations/events, 200 receipt reports, and 50
+Operation links/targets per Work.
 Open responses add at most one deduplicated derived event per Operation.
 
 Closed error codes are defined by `work-error-result.schema.json`. Important
 states include `unsupported_hub_contract`, `invalid_hub_root`,
 `work_not_found`, `duplicate_request_conflict`, `unknown_target`,
 `ineligible_target`, `stale_or_mismatched_plan`, `unknown_outcome`,
-`operation_identity_conflict`, `terminal_operation`, `work_store_invalid`, and
-`stale_cursor`. Adapter-specific states are `adapter_unavailable`,
+`operation_identity_conflict`, `proposal_declined`, `conflicting_operation`,
+`terminal_operation`, `work_store_invalid`, and `stale_cursor`.
+Adapter-specific states are `adapter_unavailable`,
 `binding_absent`, `stale_binding`, `binding_mismatch`,
 `adapter_authentication_failed`, `runtime_disconnected`, and
 `unsupported_structured_channel`. Unknown internal failures return only
 `internal_error`.
+
+## OMP execution handoff
+
+Work launch remains the only proposal confirmation boundary. It does not
+silently bind the Work conversation to OMP. A native owner that supports
+`flightdeck.command.omp-operation-execution.v1` may pass the exact launched
+identity and `work dispatch-plan` generation to the separate
+[OMP Operation execution API](omp-operation-execution-api.md). That API binds
+stable Flightdeck agents to opaque OMP sessions and reports only authenticated
+bounded observations. Work and Control Center read projections; they never
+poll or command OMP. Older Clients must stop and plan migration rather than
+fall back to plain chat or managed Codex dispatch.
+
+Migration is preservation-first: back up ignored `hub/state/work`, Mission,
+Operation-authoring, project-verification, and bridge state; compare and update
+only the capability's declared managed paths plus `hub/compatibility.json`;
+then validate schemas and deterministic legacy reads before enabling the client
+adapter. Rollback stops use of the companion commands and restores the exact
+backed-up managed files and ignored state together. Downgrading code while
+leaving mutated version 2 Work records is unsupported and must fail closed.

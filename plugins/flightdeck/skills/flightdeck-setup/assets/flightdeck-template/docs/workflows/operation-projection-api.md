@@ -15,6 +15,19 @@ canonical `detail.operation_id` in a
 form `operation-<24 lowercase hex>`. An `unavailable` detail cannot be repaired
 or reconstructed from a prefix, title, list position, renderer input, Mission
 or task ID, or any runtime or project identity.
+For OMP-backed confirmed Operations, `session.state` is `omp_bound` and exposes
+only the stable Flightdeck agent ID. The `execution` object comes exclusively
+from authenticated, bounded durable observations accepted by
+`flightdeck.command.omp-operation-observation.v1`. It never contains an OMP
+session reference, native project identity, task body, raw protocol payload,
+reasoning, prompt, credentials, or arbitrary output. `execution-open` is the
+read-only recovery source; this projection never polls OMP.
+
+The projection exposes the persisted operation ID, title, mode, lifecycle,
+logical child identity, child state, safe output references, and an opaque
+resolved Codex task ID. A pending create exposes no pending client identity.
+Paths, runtime project identities, prompts, raw evidence, credentials, and
+untrusted child text are excluded.
 
 The snapshot producer exposes canonical detail identity only after the
 persisted Operation-authoring record, Mission identity, authoring binding, and

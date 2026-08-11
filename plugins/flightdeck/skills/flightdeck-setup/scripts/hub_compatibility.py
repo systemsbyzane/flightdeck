@@ -66,11 +66,22 @@ def load_contract(path: Path) -> dict[str, Any]:
     adapters = runtime.get("adapters") if isinstance(runtime, dict) else None
     codex = adapters.get("codex") if isinstance(adapters, dict) else None
     omp = adapters.get("omp") if isinstance(adapters, dict) else None
+    conversation = runtime.get("conversation") if isinstance(runtime, dict) else None
+    operation_execution = runtime.get("operation_execution") if isinstance(runtime, dict) else None
     controls = codex.get("optional_controls") if isinstance(codex, dict) else None
     channels = codex.get("structured_channels") if isinstance(codex, dict) else None
+    omp_controls = omp.get("optional_controls") if isinstance(omp, dict) else None
+    omp_channels = omp.get("structured_channels") if isinstance(omp, dict) else None
     if (
-        set(runtime or {}) != {"primary_runtime", "adapters"}
+        set(runtime or {}) != {"primary_runtime", "conversation", "operation_execution", "adapters"}
         or runtime.get("primary_runtime") != "codex"
+        or conversation != {"adapter": "codex"}
+        or operation_execution
+        != {
+            "adapter": "omp",
+            "execution_capability": "flightdeck.command.omp-operation-execution.v1",
+            "observation_capability": "flightdeck.command.omp-operation-observation.v1",
+        }
         or set(adapters or {}) != {"codex", "omp"}
         or not isinstance(codex, dict)
         or set(codex) != {"available", "optional_controls", "structured_channels"}
@@ -80,8 +91,10 @@ def load_contract(path: Path) -> dict[str, Any]:
         or len(controls) != len(set(controls))
         or any(control not in {"model", "reasoning_effort"} for control in controls)
         or not isinstance(omp, dict)
-        or set(omp) != {"available"}
-        or omp.get("available") is not False
+        or set(omp) != {"available", "optional_controls", "structured_channels"}
+        or omp.get("available") is not True
+        or omp_channels != ["flightdeck.runtime.omp-operation-observation/v1"]
+        or omp_controls != ["model", "reasoning_effort", "tool_policy"]
     ):
         raise ContractError("contract runtime_capabilities are invalid")
     capabilities = value.get("capabilities")

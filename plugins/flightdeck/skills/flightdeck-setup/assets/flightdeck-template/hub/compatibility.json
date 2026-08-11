@@ -2,17 +2,38 @@
   "schema_version": "flightdeck.hub-compatibility/v1",
   "schema": "hub/schemas/hub-compatibility.schema.json",
   "product": "flightdeck",
-  "template_version": "1.6.1",
+  "template_version": "1.8.0",
   "runtime_capabilities": {
     "primary_runtime": "codex",
+    "conversation": {
+      "adapter": "codex"
+    },
+    "operation_execution": {
+      "adapter": "omp",
+      "execution_capability": "flightdeck.command.omp-operation-execution.v1",
+      "observation_capability": "flightdeck.command.omp-operation-observation.v1"
+    },
     "adapters": {
       "codex": {
         "available": true,
-        "structured_channels": ["flightdeck.runtime.work-recommendation/v1"],
-        "optional_controls": ["model", "reasoning_effort"]
+        "structured_channels": [
+          "flightdeck.runtime.work-recommendation/v1"
+        ],
+        "optional_controls": [
+          "model",
+          "reasoning_effort"
+        ]
       },
       "omp": {
-        "available": false
+        "available": true,
+        "structured_channels": [
+          "flightdeck.runtime.omp-operation-observation/v1"
+        ],
+        "optional_controls": [
+          "model",
+          "reasoning_effort",
+          "tool_policy"
+        ]
       }
     }
   },
@@ -101,7 +122,10 @@
         "docs/workflows/operations.md",
         "lib/flightdeck/cli.rb",
         "lib/flightdeck/operations_snapshot.rb",
-        "hub/schemas/operations-snapshot.schema.json"
+        "hub/schemas/operations-snapshot.schema.json",
+        "lib/flightdeck/mission_store.rb",
+        "lib/flightdeck/omp_operation_execution.rb",
+        "hub/schemas/omp-operation-types.schema.json"
       ],
       "fallback": {
         "mode": "stop_and_plan_migration"
@@ -125,7 +149,10 @@
         "hub/schemas/operations-snapshot.schema.json",
         "lib/flightdeck/cli.rb",
         "lib/flightdeck/operation_authoring.rb",
-        "lib/flightdeck/operations_snapshot.rb"
+        "lib/flightdeck/operations_snapshot.rb",
+        "hub/schemas/omp-operation-types.schema.json",
+        "lib/flightdeck/mission_store.rb",
+        "lib/flightdeck/omp_operation_execution.rb"
       ],
       "fallback": {
         "mode": "stop_and_plan_migration"
@@ -142,7 +169,8 @@
         "docs/architecture/hub-first.md",
         "lib/flightdeck/cli.rb",
         "lib/flightdeck/hub_snapshot.rb",
-        "hub/schemas/hub-snapshot.schema.json"
+        "hub/schemas/hub-snapshot.schema.json",
+        "hub/schemas/hub-compatibility.schema.json"
       ],
       "fallback": {
         "mode": "stop_and_plan_migration"
@@ -187,7 +215,8 @@
       "managed_paths": [
         "bin/flightdeck",
         "lib/flightdeck/cli.rb",
-        "lib/flightdeck/route_planner.rb"
+        "lib/flightdeck/route_planner.rb",
+        "lib/flightdeck/bridge_store.rb"
       ],
       "fallback": {
         "mode": "manual_exact_path_handoff"
@@ -383,7 +412,13 @@
       },
       "managed_paths": [
         "lib/flightdeck/mission_sync.rb",
-        "hub/schemas/hub-compatibility.schema.json"
+        "hub/schemas/hub-compatibility.schema.json",
+        "bin/flightdeck",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/mission_graph.rb",
+        "lib/flightdeck/mission_store.rb",
+        "hub/schemas/mission.schema.json",
+        "hub/schemas/mission-observation.schema.json"
       ],
       "fallback": {
         "mode": "stop_and_plan_migration"
@@ -503,6 +538,156 @@
       "fallback": {
         "mode": "bundled_reference",
         "reference": "skills/flightdeck-mission/references/mission-contract.md"
+      }
+    },
+    "flightdeck.command.work-operation-lifecycle.v1": {
+      "kind": "command",
+      "declaration_required": true,
+      "description": "Persisted review-only Operation proposal state, exact decline and launch recovery, native-only dispatch authorization, deduplicated receipt attachment, and restart-safe progress linkage on the authoritative Work and Operation records.",
+      "probe": {
+        "help_contains": "bin/flightdeck work lifecycle-open "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/work-control-api.md",
+        "docs/workflows/operations.md",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/bridge_store.rb",
+        "lib/flightdeck/work_store.rb",
+        "lib/flightdeck/operation_authoring.rb",
+        "lib/flightdeck/mission_store.rb",
+        "lib/flightdeck/route_planner.rb",
+        "hub/schemas/work-types.schema.json",
+        "hub/schemas/work-decline-request.schema.json",
+        "hub/schemas/work-decline-result.schema.json",
+        "hub/schemas/work-lifecycle-open-request.schema.json",
+        "hub/schemas/work-lifecycle-open-result.schema.json",
+        "hub/schemas/work-dispatch-plan-request.schema.json",
+        "hub/schemas/work-dispatch-plan-result.schema.json",
+        "hub/schemas/work-dispatch-report-request.schema.json",
+        "hub/schemas/work-dispatch-report-result.schema.json",
+        "hub/schemas/work-error-result.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.command.omp-operation-execution.v1": {
+      "kind": "command",
+      "declaration_required": true,
+      "description": "Post-confirmation exact-once OMP execution authorization with stable Flightdeck agents, exact authored routing, opaque session binding, and native-only model/tool policy.",
+      "probe": {
+        "help_contains": "bin/flightdeck operation execution-plan "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/omp-operation-execution-api.md",
+        "docs/workflows/operations.md",
+        "docs/workflows/work-control-api.md",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/omp_operation_execution.rb",
+        "lib/flightdeck/work_store.rb",
+        "lib/flightdeck/operation_authoring.rb",
+        "lib/flightdeck/mission_store.rb",
+        "hub/schemas/hub-compatibility.schema.json",
+        "hub/schemas/omp-operation-types.schema.json",
+        "hub/schemas/omp-operation-execution-plan-request.schema.json",
+        "hub/schemas/omp-operation-execution-plan-result.schema.json",
+        "hub/schemas/omp-operation-bind-request.schema.json",
+        "hub/schemas/omp-operation-bind-result.schema.json",
+        "hub/schemas/omp-operation-error-result.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.command.omp-operation-observation.v1": {
+      "kind": "command",
+      "declaration_required": true,
+      "description": "Authenticated bounded OMP lifecycle observations and read-only durable projections for Work, Operations, and Control Center without raw OMP payloads.",
+      "probe": {
+        "help_contains": "bin/flightdeck operation execution-open "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/omp-operation-execution-api.md",
+        "docs/workflows/operation-projection-api.md",
+        "docs/workflows/operations.md",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/omp_operation_execution.rb",
+        "lib/flightdeck/mission_store.rb",
+        "lib/flightdeck/operations_snapshot.rb",
+        "hub/schemas/omp-operation-types.schema.json",
+        "hub/schemas/omp-operation-observe-request.schema.json",
+        "hub/schemas/omp-operation-observe-result.schema.json",
+        "hub/schemas/omp-operation-open-request.schema.json",
+        "hub/schemas/omp-operation-open-result.schema.json",
+        "hub/schemas/omp-operation-error-result.schema.json",
+        "hub/schemas/operation.schema.json",
+        "hub/schemas/operations-snapshot.schema.json",
+        "hub/schemas/hub-snapshot.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.command.operation-projection.v1": {
+      "kind": "command",
+      "description": "Versioned read-only managed-operation projection with authenticated persisted skill telemetry and bounded OMP execution observations.",
+      "probe": {
+        "help_contains": "bin/flightdeck mission operation "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/operation-projection-api.md",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/mission_store.rb",
+        "lib/flightdeck/omp_operation_execution.rb",
+        "hub/schemas/omp-operation-types.schema.json",
+        "hub/schemas/operation.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.command.skill-telemetry.v1": {
+      "kind": "command",
+      "description": "Bounded operation-wide projection of explicit structured Codex skill invocation events with exact child provenance.",
+      "probe": {
+        "help_contains": "bin/flightdeck mission skill-telemetry "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/missions.md",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/mission_store.rb",
+        "lib/flightdeck/mission_sync.rb",
+        "lib/flightdeck/skill_telemetry.rb",
+        "hub/schemas/mission.schema.json",
+        "hub/schemas/mission-observation.schema.json",
+        "hub/schemas/skill-telemetry.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.command.work-coordinator.v1": {
+      "kind": "command",
+      "description": "Deterministic Hub-owned Work intake compatibility boundary for runtime delegation, review-only multi-project proposals, and exact active-Operation guidance.",
+      "probe": {
+        "help_contains": "bin/flightdeck work coordinate "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/work-control-api.md",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/work_coordinator.rb",
+        "hub/schemas/work-coordinate-request.schema.json",
+        "hub/schemas/work-coordinate-result.schema.json",
+        "hub/schemas/work-coordinate-error.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
       }
     }
   }

@@ -39,9 +39,32 @@
     "runtime_capabilities": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["primary_runtime", "adapters"],
+      "required": [
+        "primary_runtime",
+        "conversation",
+        "operation_execution",
+        "adapters"
+      ],
       "properties": {
-        "primary_runtime": {"const": "codex"},
+        "primary_runtime": {
+          "const": "codex"
+        },
+        "conversation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["adapter"],
+          "properties": {"adapter": {"const": "codex"}}
+        },
+        "operation_execution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["adapter", "execution_capability", "observation_capability"],
+          "properties": {
+            "adapter": {"const": "omp"},
+            "execution_capability": {"const": "flightdeck.command.omp-operation-execution.v1"},
+            "observation_capability": {"const": "flightdeck.command.omp-operation-observation.v1"}
+          }
+        },
         "adapters": {
           "type": "object",
           "additionalProperties": false,
@@ -67,8 +90,24 @@
             "omp": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["available"],
-              "properties": {"available": {"const": false}}
+              "required": [
+                "available",
+                "structured_channels",
+                "optional_controls"
+              ],
+              "properties": {
+                "available": {
+                  "const": true
+                },
+                "structured_channels": {
+                  "type": "array",
+                  "const": ["flightdeck.runtime.omp-operation-observation/v1"]
+                },
+                "optional_controls": {
+                  "type": "array",
+                  "const": ["model", "reasoning_effort", "tool_policy"]
+                }
+              }
             }
           }
         }

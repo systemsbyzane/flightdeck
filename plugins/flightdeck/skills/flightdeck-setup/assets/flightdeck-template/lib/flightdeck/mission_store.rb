@@ -3,6 +3,7 @@
 require "digest"
 require "base64"
 require_relative "mission_graph"
+require_relative "omp_operation_execution"
 
 module Flightdeck
   class MissionStore
@@ -10,6 +11,9 @@ module Flightdeck
     LIST_SCHEMA = "hub/schemas/mission-list.schema.json"
     CLIENT_SNAPSHOT_API_VERSION = "flightdeck.mission-client-snapshot/v1"
     CLIENT_SNAPSHOT_SCHEMA = "hub/schemas/mission-client-snapshot.schema.json"
+    OPERATION_API_VERSION = "flightdeck.operation/v1"
+    OPERATION_SCHEMA = "hub/schemas/operation.schema.json"
+    OPERATION_CAPABILITY = "flightdeck.command.operation-projection.v1"
     LIST_DEFAULT_LIMIT = 50
     LIST_MAX_LIMIT = 100
     LIST_MAX_MISSIONS = 1_000
@@ -408,6 +412,7 @@ module Flightdeck
         node["observed_state"] = "running"
         node["status_code"] = "handing_off"
       end
+      OmpOperationExecution.new(config, clock: @clock).apply_to_mission!(view)
       derive_state!(view, touch: false)
       view["status"]["fan_in_ready"] = fan_in_ready?(view)
       view["status"]["prepared_actions"] = outbox(view).count { |action| action["status"] == "prepared" }
@@ -480,6 +485,29 @@ module Flightdeck
       }
     rescue ValidationError
       raise ClientSnapshotError.new("malformed_mission_record", "Mission record is malformed.")
+    end
+
+    # Renderer-safe projection of one exact durable Mission Operation. Raw OMP
+    # session references remain private; only the stable Flightdeck agent and
+    # authenticated bounded observation are exposed.
+    def operation_projection(slug)
+      verify_operation_projection_capability!
+      mission = status(slug)
+      events = Array(mission.dig("status", "skill_events"))
+      {
+        "api_version" => OPERATION_API_VERSION,
+        "kind" => "Operation",
+        "schema" => OPERATION_SCHEMA,
+        "ok" => true,
+        "operation" => {
+          "operation_id" => mission.dig("metadata", "id"),
+          "title" => mission.dig("metadata", "title"),
+          "mode" => mission.dig("spec", "mode"),
+          "state" => mission.dig("status", "state"),
+          "updated_at" => mission.dig("metadata", "updated_at"),
+          "children" => nodes(mission).map { |node| operation_child_projection(node, events) }
+        }
+      }
     end
 
     def validate(slug)
@@ -971,6 +999,92 @@ module Flightdeck
     end
 
     private
+
+    def verify_operation_projection_capability!
+      compatibility_path = File.join(config.root, "hub", "compatibility.json")
+      schema_path = File.join(config.root, OPERATION_SCHEMA)
+      unless [compatibility_path, schema_path].all? { |path| File.file?(path) && !File.symlink?(path) }
+        raise ValidationError, "Hub does not declare the Operation projection v1 contract"
+      end
+      compatibility = Support.load_data(compatibility_path)
+      capability = compatibility.dig("capabilities", OPERATION_CAPABILITY)
+      managed = Array(capability&.fetch("managed_paths", []))
+      unless compatibility["schema_version"] == "flightdeck.hub-compatibility/v1" &&
+             compatibility["product"] == "flightdeck" && capability.is_a?(Hash) &&
+             capability["kind"] == "command" &&
+             capability.dig("probe", "help_contains") == "bin/flightdeck mission operation " &&
+             [
+               "lib/flightdeck/mission_store.rb", "lib/flightdeck/omp_operation_execution.rb",
+               "hub/schemas/omp-operation-types.schema.json", OPERATION_SCHEMA
+             ].all? { |path| managed.include?(path) }
+        raise ValidationError, "Hub does not declare the Operation projection v1 contract"
+      end
+    rescue ValidationError
+      raise ValidationError, "Hub does not declare the Operation projection v1 contract"
+    end
+
+    def operation_child_projection(node, events)
+      task_id = node["task_id"]
+      omp = node["omp_execution"]
+      session = if omp
+                  { "state" => "omp_bound", "agent_id" => omp.fetch("agent_id") }
+                elsif task_id
+                  { "state" => "resolved", "task_id" => task_id }
+                elsif node["pending_client_id"]
+                  { "state" => "pending_identity" }
+                else
+                  { "state" => "unavailable" }
+                end
+      child_events = events.select { |event| event["node_id"] == node["id"] }
+      {
+        "node_id" => node["id"],
+        "project" => { "logical_project_key" => node["logical_project_key"] },
+        "state" => node["observed_state"],
+        "status_code" => node["status_code"],
+        "session" => session,
+        "execution" => omp || { "availability" => "unavailable" },
+        "verified_skills" => operation_skill_summary(child_events),
+        "files_changed" => { "availability" => "not_collected" },
+        "output_refs" => Array(node["output_refs"]).filter_map do |reference|
+          value = reference.is_a?(Hash) ? reference["ref"] : reference
+          value if value.to_s.start_with?("artifact:", "codex-task:", "review:omp/")
+        end
+      }
+    end
+
+    def operation_skill_summary(events)
+      items = events.group_by { |event| [event["skill_id"], event["skill_version"]] }.map do |(skill_id, skill_version), skill_events|
+        latest_by_child = skill_events.group_by { |event| event["node_id"] }.values.map do |child_events|
+          child_events.max_by { |event| [event["observed_at"], event["evidence_id"]] }
+        end
+        statuses = latest_by_child.map { |event| event["lifecycle_status"] }
+        {
+          "skill_id" => skill_id,
+          "skill_version" => skill_version,
+          "lifecycle_status" => operation_skill_status(statuses)
+        }
+      end.sort_by { |item| [item["skill_id"], item["skill_version"].to_s] }
+      state = if items.empty?
+                "absent"
+              elsif items.any? { |item| %w[failed blocked unknown_outcome].include?(item["lifecycle_status"]) }
+                "partial_failure"
+              elsif items.any? { |item| item["lifecycle_status"] == "started" }
+                "in_progress"
+              else
+                "succeeded"
+              end
+      { "state" => state, "items" => items }
+    end
+
+    def operation_skill_status(statuses)
+      return "unknown_outcome" if statuses.include?("unknown_outcome")
+      return "failed" if statuses.include?("failed")
+      return "blocked" if statuses.include?("blocked")
+      return "started" if statuses.include?("started")
+      return "succeeded" if statuses.include?("succeeded")
+
+      "completed"
+    end
 
     def discover_mission_ids
       root = config.mission_dir

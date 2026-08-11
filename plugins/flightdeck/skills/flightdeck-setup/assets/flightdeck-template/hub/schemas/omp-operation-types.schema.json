@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/omp-operation-types.schema.json",
+  "title": "Flightdeck OMP Operation shared types",
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "identifier": {"type": "string", "maxLength": 128, "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$"},
+    "workId": {"type": "string", "pattern": "^work-[0-9a-f]{24}$"},
+    "operationId": {"type": "string", "pattern": "^operation-[0-9a-f]{24}$"},
+    "executionId": {"type": "string", "pattern": "^omp-execution-[0-9a-f]{24}$"},
+    "executionGeneration": {"type": "string", "pattern": "^omp-execution-generation-[0-9a-f]{48}$"},
+    "agentId": {"type": "string", "pattern": "^flightdeck-agent-[0-9a-f]{48}$"},
+    "bindingGeneration": {"type": "string", "pattern": "^omp-binding-generation-[0-9a-f]{48}$"},
+    "requestKey": {"type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"},
+    "model": {"oneOf": [{"type": "string", "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"}, {"type": "null"}]},
+    "reasoningEffort": {"oneOf": [{"enum": ["low", "medium", "high", "xhigh"]}, {"type": "null"}]},
+    "toolPolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile", "allowed_tool_kinds", "network_access"],
+      "properties": {
+        "profile": {"enum": ["read_only", "workspace_write"]},
+        "allowed_tool_kinds": {"type": "array", "maxItems": 6, "uniqueItems": true, "items": {"enum": ["filesystem", "shell", "lsp", "subagent", "network", "other"]}},
+        "network_access": {"const": false}
+      }
+    },
+    "confirmation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation_id", "plan_id", "plan_generation", "plan_digest", "plan_token"],
+      "properties": {
+        "operation_id": {"$ref": "#/$defs/operationId"},
+        "plan_id": {"type": "string", "pattern": "^plan-[0-9a-f]{48}$"},
+        "plan_generation": {"type": "string", "pattern": "^generation-[0-9a-f]{48}$"},
+        "plan_digest": {"$ref": "#/$defs/sha256"},
+        "plan_token": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "executionIdentity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["execution_id", "execution_generation", "execution_digest", "state", "created_at", "updated_at"],
+      "properties": {
+        "execution_id": {"$ref": "#/$defs/executionId"},
+        "execution_generation": {"$ref": "#/$defs/executionGeneration"},
+        "execution_digest": {"$ref": "#/$defs/sha256"},
+        "state": {"enum": ["authorized", "running", "attention_required", "failed", "cancelled", "review_ready"]},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "authorizationBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "plan_id", "plan_generation", "plan_digest", "plan_token_digest", "confirmation_digest", "dispatch_generation", "dispatch_plan_digest"],
+      "properties": {
+        "state": {"const": "confirmed"},
+        "plan_id": {"type": "string", "pattern": "^plan-[0-9a-f]{48}$"},
+        "plan_generation": {"type": "string", "pattern": "^generation-[0-9a-f]{48}$"},
+        "plan_digest": {"$ref": "#/$defs/sha256"},
+        "plan_token_digest": {"$ref": "#/$defs/sha256"},
+        "confirmation_digest": {"$ref": "#/$defs/sha256"},
+        "dispatch_generation": {"type": "string", "pattern": "^dispatch-generation-[0-9a-f]{48}$"},
+        "dispatch_plan_digest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "runtimeBoundary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["conversation", "operation_execution"],
+      "properties": {"conversation": {"const": "codex"}, "operation_execution": {"const": "omp"}}
+    },
+    "toolObservation": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "status"], "properties": {"kind": {"enum": ["filesystem", "shell", "lsp", "subagent", "network", "other"]}, "status": {"enum": ["queued", "running", "succeeded", "failed", "blocked"]}}}
+      ]
+    },
+    "subagents": {
+      "type": "object", "additionalProperties": false,
+      "required": ["active", "completed", "failed", "blocked"],
+      "properties": {
+        "active": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "completed": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "failed": {"type": "integer", "minimum": 0, "maximum": 1000},
+        "blocked": {"type": "integer", "minimum": 0, "maximum": 1000}
+      }
+    },
+    "attention": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["required", "code"], "properties": {"required": {"const": false}, "code": {"type": "null"}}},
+        {"type": "object", "additionalProperties": false, "required": ["required", "code"], "properties": {"required": {"const": true}, "code": {"$ref": "#/$defs/identifier"}}}
+      ]
+    },
+    "finalResult": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "object", "additionalProperties": false, "required": ["summary", "evidence_refs"], "properties": {"summary": {"type": "string", "minLength": 1, "maxLength": 2048}, "evidence_refs": {"type": "array", "maxItems": 50, "uniqueItems": true, "items": {"type": "string", "pattern": "^omp-evidence-[0-9a-f]{48}$"}}}}
+      ]
+    },
+    "observation": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["sequence", "lifecycle", "action_summary", "tool", "subagents", "attention", "error_code", "observed_at", "final_result"],
+          "properties": {
+            "sequence": {"type": "integer", "minimum": 1, "maximum": 1000000},
+            "lifecycle": {"enum": ["queued", "starting", "running", "waiting", "needs_approval", "blocked", "review_ready", "failed_validation", "runtime_failure", "cancelled", "unknown_outcome"]},
+            "action_summary": {"oneOf": [{"type": "string", "minLength": 1, "maxLength": 512}, {"type": "null"}]},
+            "tool": {"$ref": "#/$defs/toolObservation"},
+            "subagents": {"$ref": "#/$defs/subagents"},
+            "attention": {"$ref": "#/$defs/attention"},
+            "error_code": {"oneOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]},
+            "observed_at": {"type": "string", "format": "date-time"},
+            "final_result": {"$ref": "#/$defs/finalResult"}
+          },
+          "allOf": [
+            {"if": {"properties": {"lifecycle": {"enum": ["review_ready", "failed_validation", "runtime_failure", "cancelled", "unknown_outcome"]}}, "required": ["lifecycle"]}, "then": {"properties": {"final_result": {"type": "object"}}}, "else": {"properties": {"final_result": {"type": "null"}}}},
+            {"if": {"properties": {"lifecycle": {"const": "review_ready"}}, "required": ["lifecycle"]}, "then": {"properties": {"final_result": {"type": "object", "properties": {"evidence_refs": {"minItems": 1}}}}}}
+          ]
+        }
+      ]
+    },
+    "safeAgent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["agent_id", "node_id", "logical_project_key", "dependencies", "execution_order", "requested_model", "binding_state", "observation"],
+      "properties": {
+        "agent_id": {"$ref": "#/$defs/agentId"},
+        "node_id": {"$ref": "#/$defs/identifier"},
+        "logical_project_key": {"$ref": "#/$defs/identifier"},
+        "dependencies": {"type": "array", "maxItems": 50, "uniqueItems": true, "items": {"$ref": "#/$defs/identifier"}},
+        "execution_order": {"type": "integer", "minimum": 0, "maximum": 49},
+        "requested_model": {"$ref": "#/$defs/model"},
+        "binding_state": {"enum": ["unbound", "bound"]},
+        "observation": {"$ref": "#/$defs/observation"}
+      }
+    }
+  }
+}

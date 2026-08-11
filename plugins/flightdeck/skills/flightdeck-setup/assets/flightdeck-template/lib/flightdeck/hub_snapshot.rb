@@ -135,24 +135,24 @@ module Flightdeck
     def runtime_capabilities!(compatibility)
       value = compatibility.fetch("runtime_capabilities")
       adapters = value["adapters"]
-      controls = adapters.dig("codex", "optional_controls") if adapters.is_a?(Hash)
+      codex_controls = adapters.dig("codex", "optional_controls") if adapters.is_a?(Hash)
+      omp_controls = adapters.dig("omp", "optional_controls") if adapters.is_a?(Hash)
       unless value["primary_runtime"] == "codex" && adapters.is_a?(Hash) &&
-             adapters.dig("codex", "available") == true && adapters.dig("omp", "available") == false
-        raise SnapshotError.new("unsupported_hub_contract", "Selected Hub has invalid runtime capability metadata.")
-      end
-      unless controls.is_a?(Array) && controls.uniq == controls &&
-             controls.all? { |control| %w[model reasoning_effort].include?(control) }
+             value.dig("conversation", "adapter") == "codex" && value.dig("operation_execution", "adapter") == "omp" &&
+             adapters.dig("codex", "available") == true && adapters.dig("omp", "available") == true &&
+             codex_controls.is_a?(Array) && codex_controls.uniq == codex_controls &&
+             codex_controls.all? { |control| %w[model reasoning_effort].include?(control) } &&
+             omp_controls == %w[model reasoning_effort tool_policy]
         raise SnapshotError.new("unsupported_hub_contract", "Selected Hub has invalid runtime capability metadata.")
       end
 
       {
         "primary_runtime" => "codex",
+        "conversation" => { "adapter" => "codex" },
+        "operation_execution" => { "adapter" => "omp" },
         "adapters" => {
-          "codex" => {
-            "available" => true,
-            "optional_controls" => controls
-          },
-          "omp" => { "available" => false }
+          "codex" => { "available" => true, "optional_controls" => codex_controls },
+          "omp" => { "available" => true, "optional_controls" => omp_controls }
         }
       }
     end

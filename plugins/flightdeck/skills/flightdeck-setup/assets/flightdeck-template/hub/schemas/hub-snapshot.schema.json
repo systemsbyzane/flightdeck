@@ -74,35 +74,18 @@
       }
     },
     "runtimeCapabilities": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["primary_runtime", "adapters"],
+      "type": "object", "additionalProperties": false, "required": ["primary_runtime", "conversation", "operation_execution", "adapters"],
       "properties": {
         "primary_runtime": {"const": "codex"},
+        "conversation": {"type": "object", "additionalProperties": false, "required": ["adapter"], "properties": {"adapter": {"const": "codex"}}},
+        "operation_execution": {"type": "object", "additionalProperties": false, "required": ["adapter"], "properties": {"adapter": {"const": "omp"}}},
         "adapters": {
           "type": "object",
           "additionalProperties": false,
           "required": ["codex", "omp"],
           "properties": {
-            "codex": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["available", "optional_controls"],
-              "properties": {
-                "available": {"const": true},
-                "optional_controls": {
-                  "type": "array",
-                  "uniqueItems": true,
-                  "items": {"enum": ["model", "reasoning_effort"]}
-                }
-              }
-            },
-            "omp": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["available"],
-              "properties": {"available": {"const": false}}
-            }
+            "codex": {"type": "object", "additionalProperties": false, "required": ["available", "optional_controls"], "properties": {"available": {"const": true}, "optional_controls": {"type": "array", "uniqueItems": true, "items": {"enum": ["model", "reasoning_effort"]}}}},
+            "omp": {"type": "object", "additionalProperties": false, "required": ["available", "optional_controls"], "properties": {"available": {"const": true}, "optional_controls": {"type": "array", "const": ["model", "reasoning_effort", "tool_policy"]}}}
           }
         }
       }

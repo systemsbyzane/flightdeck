@@ -20,6 +20,7 @@ module Flightdeck
       cancelled reconcile_required
     ].freeze
     ALERT_STATUSES = %w[blocked approval_required failed_validation reconcile_required].freeze
+    SKILL_FAILURE_STATUSES = %w[failed blocked unknown_outcome].freeze
 
     class SnapshotError < Error
       attr_reader :code
@@ -35,7 +36,7 @@ module Flightdeck
     end
 
     def snapshot
-      compatibility!
+      compatibility = compatibility!
       detail_identities = OperationAuthoring.new(@config).snapshot_detail_identities
       operations = mission_operations(detail_identities) + task_operations
       operations.sort_by! { |operation| [operation.fetch("updated_at"), operation.fetch("operation_id")] }.reverse!
@@ -80,10 +81,17 @@ module Flightdeck
       unless value["schema_version"] == "flightdeck.hub-compatibility/v1" && value["product"] == "flightdeck" &&
              capability.is_a?(Hash) && capability["kind"] == "command" &&
              capability.dig("probe", "help_contains") == "bin/flightdeck hub operations-snapshot " &&
-             ["lib/flightdeck/operations_snapshot.rb", SCHEMA].all? { |path| managed.include?(path) } &&
+             [
+               "lib/flightdeck/mission_store.rb", "lib/flightdeck/omp_operation_execution.rb",
+               "lib/flightdeck/operations_snapshot.rb", "hub/schemas/omp-operation-types.schema.json", SCHEMA
+             ].all? { |path| managed.include?(path) } &&
              detail_capability.is_a?(Hash) && detail_capability["kind"] == "command" &&
              detail_capability.dig("probe", "help_contains") == "bin/flightdeck hub operations-snapshot " &&
-             ["lib/flightdeck/operation_authoring.rb", "lib/flightdeck/operations_snapshot.rb", SCHEMA].all? { |path| detail_managed.include?(path) } &&
+             [
+               "lib/flightdeck/mission_store.rb", "lib/flightdeck/omp_operation_execution.rb",
+               "lib/flightdeck/operation_authoring.rb", "lib/flightdeck/operations_snapshot.rb",
+               "hub/schemas/omp-operation-types.schema.json", SCHEMA
+             ].all? { |path| detail_managed.include?(path) } &&
              authoring_capability.is_a?(Hash) && authoring_capability["kind"] == "command"
         raise SnapshotError.new("unsupported_hub_contract", "Selected Hub does not declare the Operations snapshot v1 contract.")
       end
@@ -94,27 +102,39 @@ module Flightdeck
     def runtime_capabilities!
       value = Support.load_data(File.join(@config.root, "hub", "compatibility.json")).fetch("runtime_capabilities")
       adapters = value["adapters"]
-      controls = adapters.dig("codex", "optional_controls") if adapters.is_a?(Hash)
+      codex_controls = adapters.dig("codex", "optional_controls") if adapters.is_a?(Hash)
+      omp_controls = adapters.dig("omp", "optional_controls") if adapters.is_a?(Hash)
       unless value["primary_runtime"] == "codex" && adapters.is_a?(Hash) &&
-             adapters.dig("codex", "available") == true && adapters.dig("omp", "available") == false &&
-             controls.is_a?(Array) && controls.uniq == controls &&
-             controls.all? { |control| %w[model reasoning_effort].include?(control) }
+             value.dig("conversation", "adapter") == "codex" && value.dig("operation_execution", "adapter") == "omp" &&
+             adapters.dig("codex", "available") == true && adapters.dig("omp", "available") == true &&
+             codex_controls.is_a?(Array) && codex_controls.uniq == codex_controls && codex_controls.all? { |control| %w[model reasoning_effort].include?(control) } &&
+             omp_controls == %w[model reasoning_effort tool_policy]
         raise SnapshotError.new("unsupported_hub_contract", "Selected Hub has invalid runtime capability metadata.")
       end
-      { "primary_runtime" => "codex", "adapters" => { "codex" => { "available" => true, "optional_controls" => controls }, "omp" => { "available" => false } } }
+      {
+        "primary_runtime" => "codex", "conversation" => { "adapter" => "codex" },
+        "operation_execution" => { "adapter" => "omp" },
+        "adapters" => {
+          "codex" => { "available" => true, "optional_controls" => codex_controls },
+          "omp" => { "available" => true, "optional_controls" => omp_controls }
+        }
+      }
     end
 
     def mission_operations(detail_identities)
       store = MissionStore.new(@config)
       record_ids(@config.mission_dir, "mission").map do |id|
-        mission = store.fetch(id)
-        errors = store.validate(id)
-        raise SnapshotError.new("invalid_hub_state", "Hub Operations state is invalid.") unless errors.empty?
+        raise SnapshotError.new("invalid_hub_state", "Hub Operations state is invalid.") unless store.validate(id).empty?
+        mission = store.status(id)
 
-        nodes = Array(mission.dig("spec", "graph", "nodes")).map { |node| mission_child(node) }
-        operation("mission", id, mission.dig("metadata", "title"), mission.dig("status", "state"), mission.dig("metadata", "created_at"), mission.dig("metadata", "updated_at"),
-                  { "mode" => mission.dig("spec", "mode"), "logical_project_keys" => nodes.map { |node| node["logical_project_key"] }.uniq.sort }, nodes,
-                  detail: detail_identity(detail_identities[id]))
+        events = Array(mission.dig("status", "skill_events"))
+        nodes = Array(mission.dig("spec", "graph", "nodes")).map { |node| mission_child(node, events) }
+        operation(
+          "mission", id, mission.dig("metadata", "title"), mission.dig("status", "state"),
+          mission.dig("metadata", "created_at"), mission.dig("metadata", "updated_at"),
+          { "mode" => mission.dig("spec", "mode"), "logical_project_keys" => nodes.map { |node| node["logical_project_key"] }.uniq.sort },
+          nodes, detail: detail_identity(detail_identities[id]), skills: skill_summary(events)
+        )
       end
     end
 
@@ -132,19 +152,18 @@ module Flightdeck
       end
     end
 
-    def operation(kind, id, title, state, created_at, updated_at, route_scope, children, detail: unavailable_detail, validation: nil)
-      status = map_state(state)
+    def operation(kind, id, title, state, created_at, updated_at, route_scope, children, detail: unavailable_detail, validation: nil, skills: unavailable_skills)
       value = {
         "operation_id" => "#{kind}:#{id}",
         "operation_kind" => kind,
         "detail" => detail,
         "display_title" => safe_title(title, id),
-        "status" => status,
+        "status" => map_state(state),
         "created_at" => iso8601!(created_at),
         "updated_at" => iso8601!(updated_at),
         "route_scope" => route_scope.reject { |_key, value| value.nil? },
         "children" => children,
-        "skills" => { "state" => "unavailable", "items" => [] }
+        "skills" => skills
       }
       value["validation"] = validation if validation
       value
@@ -163,9 +182,15 @@ module Flightdeck
       { "availability" => "unavailable" }
     end
 
-    def mission_child(node)
-      child(node.fetch("id"), node.fetch("logical_project_key"), node.fetch("observed_state"), node.fetch("created_at"), node.fetch("updated_at"),
-            activity: node["status_code"], observed_at: node["observed_at"], validation: node_validation(node), artifacts: node_artifacts(node))
+    def mission_child(node, events)
+      child(
+        node.fetch("id"), node.fetch("logical_project_key"), node.fetch("observed_state"),
+        node.fetch("created_at"), node.fetch("updated_at"),
+        activity: node["status_code"], observed_at: node["observed_at"],
+        validation: node_validation(node), artifacts: node_artifacts(node),
+        skills: skill_summary(events.select { |event| event["node_id"] == node["id"] }),
+        execution: node["omp_execution"] || { "availability" => "unavailable" }
+      )
     end
 
     def task_child(unit, workload)
@@ -174,7 +199,7 @@ module Flightdeck
       child(unit.fetch("id"), unit.fetch("logical_project_key"), unit.fetch("state"), nil, nil, workload: workload)
     end
 
-    def child(id, logical_key, state, created_at, updated_at, workload: nil, activity: nil, observed_at: nil, validation: nil, artifacts: nil)
+    def child(id, logical_key, state, created_at, updated_at, workload: nil, activity: nil, observed_at: nil, validation: nil, artifacts: nil, skills: unavailable_skills, execution: { "availability" => "unavailable" })
       key = identifier!(logical_key)
       info = project_info(key, workload)
       value = {
@@ -183,7 +208,8 @@ module Flightdeck
         "display_label" => info.fetch("display_label"),
         "role_name" => info.fetch("role_name"),
         "status" => map_state(state),
-        "skills" => { "state" => "unavailable", "items" => [] }
+        "skills" => skills,
+        "execution" => execution
       }
       value["created_at"] = iso8601!(created_at) if created_at
       value["updated_at"] = iso8601!(updated_at) if updated_at
@@ -191,6 +217,44 @@ module Flightdeck
       value["validation"] = validation if validation
       value["artifacts"] = artifacts if artifacts && !artifacts.empty?
       value
+    end
+
+    def skill_summary(events)
+      items = events.group_by { |event| [event["skill_id"], event["skill_version"]] }.map do |(skill_id, skill_version), skill_events|
+        latest_by_child = skill_events.group_by { |event| event["node_id"] }.values.map do |child_events|
+          child_events.max_by { |event| [event["observed_at"], event["evidence_id"]] }
+        end
+        statuses = latest_by_child.map { |event| event["lifecycle_status"] }
+        {
+          "skill_id" => identifier!(skill_id),
+          "skill_version" => skill_version,
+          "lifecycle_status" => aggregate_skill_status(statuses)
+        }
+      end.sort_by { |item| [item["skill_id"], item["skill_version"].to_s] }
+      state = if items.empty?
+                "absent"
+              elsif items.any? { |item| SKILL_FAILURE_STATUSES.include?(item["lifecycle_status"]) }
+                "partial_failure"
+              elsif items.any? { |item| item["lifecycle_status"] == "started" }
+                "in_progress"
+              else
+                "succeeded"
+              end
+      { "state" => state, "items" => items }
+    end
+
+    def unavailable_skills
+      { "state" => "unavailable", "items" => [] }
+    end
+
+    def aggregate_skill_status(statuses)
+      return "unknown_outcome" if statuses.include?("unknown_outcome")
+      return "failed" if statuses.include?("failed")
+      return "blocked" if statuses.include?("blocked")
+      return "started" if statuses.include?("started")
+      return "succeeded" if statuses.include?("succeeded")
+
+      "completed"
     end
 
     def project_info(key, fallback_workload)

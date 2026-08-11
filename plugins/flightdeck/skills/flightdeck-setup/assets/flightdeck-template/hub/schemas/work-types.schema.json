@@ -13,6 +13,7 @@
     "sessionGeneration": {"type": "string", "pattern": "^adapter-session-[0-9a-f]{48}$"},
     "resumeGeneration": {"type": "string", "pattern": "^resume-[0-9a-f]{48}$"},
     "logicalProjectKey": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$"},
+    "authorizationBoundary": {"type": "string", "pattern": "^scope-[0-9a-f]{48}$"},
     "runtime": {
       "type": "object", "additionalProperties": false,
       "required": ["adapter", "available", "optional_controls"],
@@ -160,6 +161,133 @@
         "plan_token": {"$ref": "#/$defs/sha256"}
       }
     },
+    "proposalLifecycleState": {"enum": ["not_started", "declined", "launched", "launch_unknown"]},
+    "proposalActions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["confirm_and_launch", "decline"],
+      "properties": {
+        "confirm_and_launch": {"type": "boolean"},
+        "decline": {"type": "boolean"}
+      }
+    },
+    "dispatchState": {
+      "enum": ["pending", "dispatch_pending", "dispatch_unknown", "awaiting_handoff", "running", "needs_approval", "blocked", "failed", "failed_validation", "runtime_failure", "review_ready", "stale", "cancelled", "complete", "unknown_outcome"]
+    },
+    "lifecycleDispatch": {
+      "type": "object", "additionalProperties": false,
+      "required": ["dispatch_id", "node_id", "logical_project_key", "state", "error_code", "updated_at"],
+      "properties": {
+        "dispatch_id": {"type": "string", "pattern": "^dispatch-[0-9a-f]{24}$"},
+        "node_id": {"$ref": "#/$defs/logicalProjectKey"},
+        "logical_project_key": {"$ref": "#/$defs/logicalProjectKey"},
+        "state": {"$ref": "#/$defs/dispatchState"},
+        "error_code": {"oneOf": [{"$ref": "#/$defs/logicalProjectKey"}, {"type": "null"}]},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "lifecycleProposal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["proposal", "state", "state_observed_at", "declined_at", "launched_at", "actions", "dispatches"],
+      "properties": {
+        "proposal": {"$ref": "#/$defs/proposal"},
+        "state": {"$ref": "#/$defs/proposalLifecycleState"},
+        "state_observed_at": {"type": "string", "format": "date-time"},
+        "declined_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+        "launched_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+        "actions": {"$ref": "#/$defs/proposalActions"},
+        "dispatches": {"type": "array", "maxItems": 50, "items": {"$ref": "#/$defs/lifecycleDispatch"}}
+      }
+    },
+    "bridgeArtifact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "relative_path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "relative_path": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "bridgeHandoff": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "repository_id", "mode", "profile", "version", "original_checkout_path", "bridge_target_path", "bridge_target_relative_path", "bridge_target_sha256", "artifacts", "instruction_order", "worktree_policy", "copy_into_worktree"],
+      "properties": {
+        "status": {"const": "verified"},
+        "repository_id": {"$ref": "#/$defs/logicalProjectKey"},
+        "mode": {"enum": ["reference", "materialized", "repo-native"]},
+        "profile": {"$ref": "#/$defs/logicalProjectKey"},
+        "version": {"type": "string", "minLength": 1, "maxLength": 64},
+        "original_checkout_path": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "bridge_target_path": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "bridge_target_relative_path": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "bridge_target_sha256": {"$ref": "#/$defs/sha256"},
+        "artifacts": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "#/$defs/bridgeArtifact"}},
+        "instruction_order": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "string", "minLength": 1, "maxLength": 512}},
+        "worktree_policy": {"enum": ["read_tracked_repo_native_bridge_in_active_worktree", "read_verified_bridge_from_original_checkout_when_ignored_target_absent"]},
+        "copy_into_worktree": {"const": false}
+      }
+    },
+    "dispatchRoute": {
+      "type": "object", "additionalProperties": false,
+      "required": ["repository_id", "project_key", "runtime_project_id", "project_path", "mode", "authorization_boundary", "bridge_handoff"],
+      "properties": {
+        "repository_id": {"oneOf": [{"$ref": "#/$defs/logicalProjectKey"}, {"type": "null"}]},
+        "project_key": {"$ref": "#/$defs/logicalProjectKey"},
+        "runtime_project_id": {"$ref": "#/$defs/opaqueRuntimeId"},
+        "project_path": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "mode": {"enum": ["local", "worktree", "remote"]},
+        "authorization_boundary": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "bridge_handoff": {"oneOf": [{"$ref": "#/$defs/bridgeHandoff"}, {"type": "null"}]}
+      }
+    },
+    "dispatchTarget": {
+      "type": "object", "additionalProperties": false,
+      "required": ["dispatch_id", "node_id", "logical_project_key", "runtime_project_id", "project_path_digest", "host_id", "authorization_boundary", "execution_mode", "access_mode", "work_type", "route"],
+      "properties": {
+        "dispatch_id": {"type": "string", "pattern": "^dispatch-[0-9a-f]{24}$"},
+        "node_id": {"$ref": "#/$defs/logicalProjectKey"},
+        "logical_project_key": {"$ref": "#/$defs/logicalProjectKey"},
+        "runtime_project_id": {"$ref": "#/$defs/opaqueRuntimeId"},
+        "project_path_digest": {"$ref": "#/$defs/sha256"},
+        "host_id": {"$ref": "#/$defs/logicalProjectKey"},
+        "authorization_boundary": {"$ref": "#/$defs/authorizationBoundary"},
+        "execution_mode": {"enum": ["local", "worktree", "remote"]},
+        "access_mode": {"enum": ["read_only", "write"]},
+        "work_type": {"enum": ["read_only", "implementation", "compliance", "artifact", "runtime_validation", "coordination"]},
+        "route": {"$ref": "#/$defs/dispatchRoute"}
+      }
+    },
+    "dispatchPolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["strategy", "max_concurrency", "requires_all_receipts", "retry_known_failures_only"],
+      "properties": {
+        "strategy": {"const": "parallel_independent"},
+        "max_concurrency": {"type": "integer", "minimum": 1, "maximum": 8},
+        "requires_all_receipts": {"const": true},
+        "retry_known_failures_only": {"const": true}
+      }
+    },
+    "dispatchResult": {
+      "type": "object", "additionalProperties": false,
+      "required": ["dispatch_id", "node_id", "attempt_key", "outcome", "runtime_project_id", "host_id", "project_path_digest", "task_id", "pending_client_id", "error_code"],
+      "properties": {
+        "dispatch_id": {"type": "string", "pattern": "^dispatch-[0-9a-f]{24}$"},
+        "node_id": {"$ref": "#/$defs/logicalProjectKey"},
+        "attempt_key": {"$ref": "#/$defs/requestKey"},
+        "outcome": {"enum": ["created", "pending", "unknown_outcome", "failed"]},
+        "runtime_project_id": {"$ref": "#/$defs/opaqueRuntimeId"},
+        "host_id": {"$ref": "#/$defs/logicalProjectKey"},
+        "project_path_digest": {"$ref": "#/$defs/sha256"},
+        "task_id": {"oneOf": [{"$ref": "#/$defs/opaqueRuntimeId"}, {"type": "null"}]},
+        "pending_client_id": {"oneOf": [{"$ref": "#/$defs/opaqueRuntimeId"}, {"type": "null"}]},
+        "error_code": {"oneOf": [{"$ref": "#/$defs/logicalProjectKey"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {"if": {"properties": {"outcome": {"const": "created"}}, "required": ["outcome"]}, "then": {"properties": {"task_id": {"$ref": "#/$defs/opaqueRuntimeId"}, "error_code": {"type": "null"}}}},
+        {"if": {"properties": {"outcome": {"const": "pending"}}, "required": ["outcome"]}, "then": {"properties": {"task_id": {"type": "null"}, "pending_client_id": {"$ref": "#/$defs/opaqueRuntimeId"}, "error_code": {"type": "null"}}}},
+        {"if": {"properties": {"outcome": {"const": "unknown_outcome"}}, "required": ["outcome"]}, "then": {"properties": {"task_id": {"type": "null"}, "error_code": {"type": "null"}}}},
+        {"if": {"properties": {"outcome": {"const": "failed"}}, "required": ["outcome"]}, "then": {"properties": {"task_id": {"type": "null"}, "pending_client_id": {"type": "null"}, "error_code": {"$ref": "#/$defs/logicalProjectKey"}}}}
+      ]
+    },
     "source": {
       "type": "object", "additionalProperties": false,
       "required": ["capability", "schema"],
@@ -173,7 +301,7 @@
       "required": ["event_id", "type", "status", "observed_at", "operation_id", "evidence_id", "payload_digest", "source"],
       "properties": {
         "event_id": {"type": "string", "pattern": "^work-event-[0-9a-f]{24}$"},
-        "type": {"enum": ["work_created", "runtime_delegated", "runtime_unavailable", "runtime_disconnected", "operation_proposed", "operation_launched", "operation_launch_unknown", "guidance_attached", "operation_progress", "operation_result"]},
+        "type": {"enum": ["work_created", "runtime_delegated", "runtime_unavailable", "runtime_disconnected", "operation_proposed", "operation_launched", "operation_launch_unknown", "operation_declined", "operation_dispatch_started", "operation_dispatch_pending", "operation_dispatch_unknown", "operation_dispatch_failed", "guidance_attached", "operation_progress", "operation_result"]},
         "status": {"enum": ["started", "completed", "blocked", "unknown_outcome", "in_progress", "available", "failed", "not_created"]},
         "observed_at": {"type": "string", "format": "date-time"},
         "operation_id": {"oneOf": [{"$ref": "#/$defs/operationId"}, {"type": "null"}]},

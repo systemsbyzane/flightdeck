@@ -14,22 +14,22 @@
         {"type": "object", "additionalProperties": false, "required": ["availability"], "properties": {"availability": {"const": "unavailable"}}}
       ]
     },
+    "skillItem": {
+      "type": "object", "additionalProperties": false, "required": ["skill_id", "skill_version", "lifecycle_status"],
+      "properties": {
+        "skill_id": {"$ref": "#/$defs/id"},
+        "skill_version": {"oneOf": [{"type": "string", "minLength": 1, "maxLength": 128}, {"type": "null"}]},
+        "lifecycle_status": {"enum": ["started", "completed", "succeeded", "failed", "blocked", "unknown_outcome"]}
+      }
+    },
     "skills": {
       "type": "object", "additionalProperties": false, "required": ["state", "items"],
       "properties": {"state": {"const": "unavailable"}, "items": {"type": "array", "maxItems": 0}}
     },
+    "execution": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["availability"], "properties": {"availability": {"const": "unavailable"}}}, {"$ref": "omp-operation-types.schema.json#/$defs/safeAgent"}]},
     "runtimeCapabilities": {
-      "type": "object", "additionalProperties": false, "required": ["primary_runtime", "adapters"],
-      "properties": {
-        "primary_runtime": {"const": "codex"},
-        "adapters": {
-          "type": "object", "additionalProperties": false, "required": ["codex", "omp"],
-          "properties": {
-            "codex": {"type": "object", "additionalProperties": false, "required": ["available", "optional_controls"], "properties": {"available": {"const": true}, "optional_controls": {"type": "array", "uniqueItems": true, "items": {"enum": ["model", "reasoning_effort"]}}}},
-            "omp": {"type": "object", "additionalProperties": false, "required": ["available"], "properties": {"available": {"const": false}}}
-          }
-        }
-      }
+      "type": "object", "additionalProperties": false, "required": ["primary_runtime", "conversation", "operation_execution", "adapters"],
+      "properties": {"primary_runtime": {"const": "codex"}, "conversation": {"type": "object", "additionalProperties": false, "required": ["adapter"], "properties": {"adapter": {"const": "codex"}}}, "operation_execution": {"type": "object", "additionalProperties": false, "required": ["adapter"], "properties": {"adapter": {"const": "omp"}}}, "adapters": {"type": "object", "additionalProperties": false, "required": ["codex", "omp"], "properties": {"codex": {"type": "object", "additionalProperties": false, "required": ["available", "optional_controls"], "properties": {"available": {"const": true}, "optional_controls": {"type": "array", "uniqueItems": true, "items": {"enum": ["model", "reasoning_effort"]}}}}, "omp": {"type": "object", "additionalProperties": false, "required": ["available", "optional_controls"], "properties": {"available": {"const": true}, "optional_controls": {"type": "array", "const": ["model", "reasoning_effort", "tool_policy"]}}}}}}
     },
     "validation": {
       "type": "object", "additionalProperties": false,
@@ -41,19 +41,20 @@
     },
     "child": {
       "type": "object", "additionalProperties": false,
-      "required": ["child_id", "logical_project_key", "display_label", "role_name", "status", "skills"],
+      "required": ["child_id", "logical_project_key", "display_label", "role_name", "status", "skills", "execution"],
       "properties": {
         "child_id": {"$ref": "#/$defs/id"}, "logical_project_key": {"$ref": "#/$defs/id"}, "display_label": {"$ref": "#/$defs/label"}, "role_name": {"$ref": "#/$defs/label"}, "status": {"$ref": "#/$defs/status"},
         "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"},
         "activity": {"type": "object", "additionalProperties": false, "required": ["code", "observed_at"], "properties": {"code": {"$ref": "#/$defs/id"}, "observed_at": {"type": "string", "format": "date-time"}}},
-        "validation": {"$ref": "#/$defs/validation"}, "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}}, "skills": {"$ref": "#/$defs/skills"}
+        "validation": {"$ref": "#/$defs/validation"}, "artifacts": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/artifact"}}, "skills": {"$ref": "#/$defs/skills"}, "execution": {"$ref": "#/$defs/execution"}
       }
     },
     "operation": {
       "type": "object", "additionalProperties": false,
       "required": ["operation_id", "operation_kind", "detail", "display_title", "status", "created_at", "updated_at", "route_scope", "children", "skills"],
       "properties": {
-        "operation_id": {"type": "string", "pattern": "^(?:mission|task):[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"}, "operation_kind": {"enum": ["mission", "task"]}, "detail": {"$ref": "#/$defs/detail"}, "display_title": {"$ref": "#/$defs/label"}, "status": {"$ref": "#/$defs/status"},
+        "operation_id": {"type": "string", "pattern": "^(?:mission|task):[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"},
+        "operation_kind": {"enum": ["mission", "task"]}, "detail": {"$ref": "#/$defs/detail"}, "display_title": {"$ref": "#/$defs/label"}, "status": {"$ref": "#/$defs/status"},
         "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"},
         "route_scope": {"type": "object", "additionalProperties": false, "properties": {"mode": {"enum": ["dispatch_only", "watch_only", "supervised"]}, "workload": {"$ref": "#/$defs/id"}, "logical_project_keys": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}}},
         "children": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/child"}}, "validation": {"$ref": "#/$defs/validation"}, "skills": {"$ref": "#/$defs/skills"}
