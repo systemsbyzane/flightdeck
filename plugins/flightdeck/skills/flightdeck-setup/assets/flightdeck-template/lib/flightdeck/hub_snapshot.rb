@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "bridge_store"
+require_relative "operation_execution"
 
 module Flightdeck
   # Read-only, renderer-safe projection of a selected Hub.  This deliberately
@@ -133,28 +134,9 @@ module Flightdeck
     end
 
     def runtime_capabilities!(compatibility)
-      value = compatibility.fetch("runtime_capabilities")
-      adapters = value["adapters"]
-      codex_controls = adapters.dig("codex", "optional_controls") if adapters.is_a?(Hash)
-      omp_controls = adapters.dig("omp", "optional_controls") if adapters.is_a?(Hash)
-      unless value["primary_runtime"] == "codex" && adapters.is_a?(Hash) &&
-             value.dig("conversation", "adapter") == "codex" && value.dig("operation_execution", "adapter") == "omp" &&
-             adapters.dig("codex", "available") == true && adapters.dig("omp", "available") == true &&
-             codex_controls.is_a?(Array) && codex_controls.uniq == codex_controls &&
-             codex_controls.all? { |control| %w[model reasoning_effort].include?(control) } &&
-             omp_controls == %w[model reasoning_effort tool_policy]
-        raise SnapshotError.new("unsupported_hub_contract", "Selected Hub has invalid runtime capability metadata.")
-      end
-
-      {
-        "primary_runtime" => "codex",
-        "conversation" => { "adapter" => "codex" },
-        "operation_execution" => { "adapter" => "omp" },
-        "adapters" => {
-          "codex" => { "available" => true, "optional_controls" => codex_controls },
-          "omp" => { "available" => true, "optional_controls" => omp_controls }
-        }
-      }
+      OperationExecution.runtime_capabilities_projection!(compatibility.fetch("runtime_capabilities"))
+    rescue OperationExecution::ContractError
+      raise SnapshotError.new("unsupported_hub_contract", "Selected Hub has invalid runtime capability metadata.")
     end
 
     def safe_label!(value, fallback)

@@ -272,16 +272,16 @@ Adapter-specific states are `adapter_unavailable`,
 `unsupported_structured_channel`. Unknown internal failures return only
 `internal_error`.
 
-## OMP execution handoff
+## Operation execution adapter handoff
 
 Work launch remains the only proposal confirmation boundary. It does not
-silently bind the Work conversation to OMP. A native owner that supports
-`flightdeck.command.omp-operation-execution.v1` may pass the exact launched
+silently bind the Work conversation to an Operation adapter. A native owner that supports
+`flightdeck.command.operation-execution.v1` may pass the exact launched
 identity and `work dispatch-plan` generation to the separate
-[OMP Operation execution API](omp-operation-execution-api.md). That API binds
-stable Flightdeck agents to opaque OMP sessions and reports only authenticated
+[Operation execution adapter API](operation-execution-api.md). That API binds
+stable Flightdeck agents to opaque adapter sessions and reports only authenticated
 bounded observations. Work and Control Center read projections; they never
-poll or command OMP. Older Clients must stop and plan migration rather than
+poll or command an adapter. Older Clients must stop and plan migration rather than
 fall back to plain chat or managed Codex dispatch.
 
 Migration is preservation-first: back up ignored `hub/state/work`, Mission,

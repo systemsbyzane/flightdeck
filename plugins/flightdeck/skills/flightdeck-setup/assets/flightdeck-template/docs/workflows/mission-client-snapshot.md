@@ -24,6 +24,14 @@ its opaque parent-chat ID, and core compares its digest to the persisted
 binding before it loads the status projection, owner routes, task bindings, or
 lifecycle events.
 
+A record carrying the validated persisted `metadata.operation_authoring`
+binding is an authored Operation, not a Mission. It is excluded from `mission
+list` and `mission client-snapshot` returns `operation_not_mission`; clients
+must use canonical Operation detail instead. Classification never uses an ID
+prefix, title, graph shape, list position, or runtime identity. Clients that
+depend on this guarantee must require
+`flightdeck.command.mission-operation-separation.v1`.
+
 The success result contains:
 
 - provenance binding the supplied opaque parent-chat ID to the Mission ID and

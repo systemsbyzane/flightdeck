@@ -116,6 +116,36 @@ opaque OMP session and raw protocol remain native-only. Existing generated
 Hubs require a separate preservation-first migration and ignored-state backup.
 Capability presence alone does not authorize a Client dispatcher.
 
+Template `1.9.0` supersedes the OMP-specific consumer wire contract with the
+runtime-neutral `operation-execution.v1` and `operation-observation.v1`
+capabilities. OMP is the first available adapter; Codex app-server is explicitly
+unavailable until its binding and observation implementation is independently
+validated. Migrate schemas, implementation, projections, documentation, tests,
+and compatibility as one reviewed set with compatibility last. Rollback restores
+the complete pre-1.9 managed set and must not reinterpret
+`hub/state/operation-execution` records as legacy OMP state.
+
+Template `1.10.0` adds the declaration-required Operation detail v2 and
+Mission/Operation separation contracts. It preserves operation-detail v1
+unchanged, classifies authored Operations only through their validated
+persisted authoring binding, excludes those records from user-facing Mission
+discovery, and projects authenticated per-agent observations with a configured
+heartbeat threshold. Migrate the implementation, three new schemas, Mission
+snapshot error enum, documentation, tests, and compatibility declaration as
+one reviewed set with `hub/compatibility.json` last. Rollback restores the
+complete 1.9 managed preimage and does not alter ignored authored Operation or
+execution state.
+
+Template `1.11.0` adds
+`flightdeck.command.operation-start-recovery.v1`: exact-route pre-bind failure
+reporting, bounded restart-safe audit recovery, and producer-generation-bound
+retry binding. Operation detail v2 and Operations snapshot reuse their existing
+closed shapes to project the failure as failed or needs-recovery without
+pretending that a session observation exists. The execution store writes record
+v2 and reads record v1. Apply implementation, six new schemas, shared types,
+error schema, docs, tests, and compatibility last; rollback must preserve any
+v2 execution records for a forward restore.
+
 For a preserved Hub that needs these desktop surfaces, the later separately
 authorized migration must compare the exact managed paths returned by the
 compatibility checker for every required capability, plus

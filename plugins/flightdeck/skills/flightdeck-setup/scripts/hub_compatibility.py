@@ -66,23 +66,26 @@ def load_contract(path: Path) -> dict[str, Any]:
     adapters = runtime.get("adapters") if isinstance(runtime, dict) else None
     codex = adapters.get("codex") if isinstance(adapters, dict) else None
     omp = adapters.get("omp") if isinstance(adapters, dict) else None
+    codex_app_server = adapters.get("codex_app_server") if isinstance(adapters, dict) else None
     conversation = runtime.get("conversation") if isinstance(runtime, dict) else None
     operation_execution = runtime.get("operation_execution") if isinstance(runtime, dict) else None
     controls = codex.get("optional_controls") if isinstance(codex, dict) else None
     channels = codex.get("structured_channels") if isinstance(codex, dict) else None
     omp_controls = omp.get("optional_controls") if isinstance(omp, dict) else None
     omp_channels = omp.get("structured_channels") if isinstance(omp, dict) else None
+    app_server_controls = codex_app_server.get("optional_controls") if isinstance(codex_app_server, dict) else None
+    app_server_channels = codex_app_server.get("structured_channels") if isinstance(codex_app_server, dict) else None
+    selected_adapter = operation_execution.get("selected_adapter") if isinstance(operation_execution, dict) else None
     if (
         set(runtime or {}) != {"primary_runtime", "conversation", "operation_execution", "adapters"}
         or runtime.get("primary_runtime") != "codex"
         or conversation != {"adapter": "codex"}
-        or operation_execution
-        != {
-            "adapter": "omp",
-            "execution_capability": "flightdeck.command.omp-operation-execution.v1",
-            "observation_capability": "flightdeck.command.omp-operation-observation.v1",
-        }
-        or set(adapters or {}) != {"codex", "omp"}
+        or not isinstance(operation_execution, dict)
+        or set(operation_execution) != {"selected_adapter", "execution_capability", "observation_capability"}
+        or selected_adapter not in {"omp", "codex_app_server"}
+        or operation_execution.get("execution_capability") != "flightdeck.command.operation-execution.v1"
+        or operation_execution.get("observation_capability") != "flightdeck.command.operation-observation.v1"
+        or set(adapters or {}) != {"codex", "omp", "codex_app_server"}
         or not isinstance(codex, dict)
         or set(codex) != {"available", "optional_controls", "structured_channels"}
         or codex.get("available") is not True
@@ -91,10 +94,22 @@ def load_contract(path: Path) -> dict[str, Any]:
         or len(controls) != len(set(controls))
         or any(control not in {"model", "reasoning_effort"} for control in controls)
         or not isinstance(omp, dict)
-        or set(omp) != {"available", "optional_controls", "structured_channels"}
-        or omp.get("available") is not True
-        or omp_channels != ["flightdeck.runtime.omp-operation-observation/v1"]
+        or set(omp) != {"available", "configuration_schema", "execution_capability", "observation_capability", "optional_controls", "structured_channels"}
+        or not isinstance(omp.get("available"), bool)
+        or omp.get("configuration_schema") != "flightdeck.adapter.omp.configuration/v1"
+        or omp.get("execution_capability") != "flightdeck.command.operation-execution.v1"
+        or omp.get("observation_capability") != "flightdeck.command.operation-observation.v1"
+        or omp_channels != (["flightdeck.runtime.omp-operation-observation/v1"] if omp.get("available") else [])
         or omp_controls != ["model", "reasoning_effort", "tool_policy"]
+        or not isinstance(codex_app_server, dict)
+        or set(codex_app_server) != {"available", "configuration_schema", "execution_capability", "observation_capability", "optional_controls", "structured_channels"}
+        or not isinstance(codex_app_server.get("available"), bool)
+        or codex_app_server.get("configuration_schema") != "flightdeck.adapter.codex-app-server.configuration/v1"
+        or codex_app_server.get("execution_capability") != "flightdeck.command.operation-execution.v1"
+        or codex_app_server.get("observation_capability") != "flightdeck.command.operation-observation.v1"
+        or app_server_channels != (["flightdeck.runtime.codex-app-server-operation-observation/v1"] if codex_app_server.get("available") else [])
+        or app_server_controls != ["model", "reasoning_effort", "tool_policy"]
+        or adapters.get(selected_adapter, {}).get("available") is not True
     ):
         raise ContractError("contract runtime_capabilities are invalid")
     capabilities = value.get("capabilities")

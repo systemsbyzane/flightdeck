@@ -3,7 +3,7 @@
 require "digest"
 require "base64"
 require_relative "mission_graph"
-require_relative "omp_operation_execution"
+require_relative "operation_execution"
 
 module Flightdeck
   class MissionStore
@@ -412,7 +412,7 @@ module Flightdeck
         node["observed_state"] = "running"
         node["status_code"] = "handing_off"
       end
-      OmpOperationExecution.new(config, clock: @clock).apply_to_mission!(view)
+      OperationExecution.new(config, clock: @clock).apply_to_mission!(view)
       derive_state!(view, touch: false)
       view["status"]["fan_in_ready"] = fan_in_ready?(view)
       view["status"]["prepared_actions"] = outbox(view).count { |action| action["status"] == "prepared" }
@@ -434,6 +434,12 @@ module Flightdeck
       raise ClientSnapshotError.new("malformed_mission_record", "Mission record is malformed.") if File.symlink?(record_path)
 
       mission = snapshot(slug)
+      if operation_backed?(mission)
+        raise ClientSnapshotError.new(
+          "operation_not_mission",
+          "Authored Operations are available only through the Operation detail contract."
+        )
+      end
       validate_client_snapshot_binding!(mission, parent_chat_id)
       mission = read_only_status_view(mission)
       node_values = nodes(mission)
@@ -487,7 +493,7 @@ module Flightdeck
       raise ClientSnapshotError.new("malformed_mission_record", "Mission record is malformed.")
     end
 
-    # Renderer-safe projection of one exact durable Mission Operation. Raw OMP
+    # Renderer-safe projection of one exact durable Mission Operation. Raw adapter
     # session references remain private; only the stable Flightdeck agent and
     # authenticated bounded observation are exposed.
     def operation_projection(slug)
@@ -978,7 +984,19 @@ module Flightdeck
       end
 
       after_id = decode_list_cursor(cursor)
-      ids = discover_mission_ids.select { |mission_id| after_id.nil? || mission_id > after_id }
+      ids = discover_mission_ids.select do |mission_id|
+        next false if after_id && mission_id <= after_id
+
+        mission = fetch_list_record(mission_id)
+        validate_or_raise!(mission, expected_slug: mission_id)
+        !operation_backed?(mission)
+      rescue ValidationError, UsageError, SystemCallError
+        raise ListError.new(
+          "malformed_mission_record",
+          "Mission record is malformed.",
+          mission_id: mission_id
+        )
+      end
       page_ids = ids.first(limit + 1)
       has_more = page_ids.length > limit
       page_ids = page_ids.first(limit)
@@ -1000,6 +1018,19 @@ module Flightdeck
 
     private
 
+    # An authored Operation is classified only by the validated binding written
+    # by OperationAuthoring. IDs, titles, directory names, and graph content are
+    # never used as substitutes for this persisted producer identity.
+    def operation_backed?(mission)
+      binding = mission.dig("metadata", "operation_authoring")
+      return false if binding.nil?
+
+      binding.is_a?(Hash) && binding.keys.sort == %w[operation_digest plan_digest plan_id] &&
+        SHA256.match?(binding["operation_digest"].to_s) &&
+        SHA256.match?(binding["plan_digest"].to_s) &&
+        binding["plan_id"].to_s.match?(/\Aplan-[0-9a-f]{48}\z/)
+    end
+
     def verify_operation_projection_capability!
       compatibility_path = File.join(config.root, "hub", "compatibility.json")
       schema_path = File.join(config.root, OPERATION_SCHEMA)
@@ -1014,8 +1045,8 @@ module Flightdeck
              capability["kind"] == "command" &&
              capability.dig("probe", "help_contains") == "bin/flightdeck mission operation " &&
              [
-               "lib/flightdeck/mission_store.rb", "lib/flightdeck/omp_operation_execution.rb",
-               "hub/schemas/omp-operation-types.schema.json", OPERATION_SCHEMA
+               "lib/flightdeck/mission_store.rb", "lib/flightdeck/operation_execution.rb",
+               "hub/schemas/operation-execution-types.schema.json", OPERATION_SCHEMA
              ].all? { |path| managed.include?(path) }
         raise ValidationError, "Hub does not declare the Operation projection v1 contract"
       end
@@ -1025,9 +1056,9 @@ module Flightdeck
 
     def operation_child_projection(node, events)
       task_id = node["task_id"]
-      omp = node["omp_execution"]
-      session = if omp
-                  { "state" => "omp_bound", "agent_id" => omp.fetch("agent_id") }
+      execution = node["operation_execution"]
+      session = if execution
+                  { "state" => "execution_bound", "agent_id" => execution.fetch("agent_id") }
                 elsif task_id
                   { "state" => "resolved", "task_id" => task_id }
                 elsif node["pending_client_id"]
@@ -1042,12 +1073,12 @@ module Flightdeck
         "state" => node["observed_state"],
         "status_code" => node["status_code"],
         "session" => session,
-        "execution" => omp || { "availability" => "unavailable" },
+        "execution" => execution || { "availability" => "unavailable" },
         "verified_skills" => operation_skill_summary(child_events),
         "files_changed" => { "availability" => "not_collected" },
         "output_refs" => Array(node["output_refs"]).filter_map do |reference|
           value = reference.is_a?(Hash) ? reference["ref"] : reference
-          value if value.to_s.start_with?("artifact:", "codex-task:", "review:omp/")
+          value if value.to_s.start_with?("artifact:", "codex-task:", "review:operation-execution/")
         end
       }
     end

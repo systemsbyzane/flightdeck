@@ -51,7 +51,7 @@
           "additionalProperties": false,
           "required": ["code", "message"],
           "properties": {
-            "code": {"enum": ["invalid_request", "hub_root_not_found", "invalid_hub_root", "unsupported_hub_contract", "mission_not_found", "malformed_mission_record", "identity_unresolved"]},
+            "code": {"enum": ["invalid_request", "hub_root_not_found", "invalid_hub_root", "unsupported_hub_contract", "mission_not_found", "malformed_mission_record", "identity_unresolved", "operation_not_mission"]},
             "message": {"type": "string", "minLength": 1, "maxLength": 256}
           }
         },

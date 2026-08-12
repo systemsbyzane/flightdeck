@@ -1,5 +1,9 @@
 # OMP Operation execution API
 
+> Legacy template 1.8 contract. Template 1.9 consumers must use the
+> [runtime-neutral Operation execution adapter API](operation-execution-api.md).
+> Schema-file presence does not declare this legacy capability.
+
 Template `1.8.0` adds two declaration-required capabilities:
 
 - `flightdeck.command.omp-operation-execution.v1`

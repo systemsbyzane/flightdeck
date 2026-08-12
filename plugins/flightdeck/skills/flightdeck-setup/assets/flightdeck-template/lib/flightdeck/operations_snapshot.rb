@@ -82,15 +82,15 @@ module Flightdeck
              capability.is_a?(Hash) && capability["kind"] == "command" &&
              capability.dig("probe", "help_contains") == "bin/flightdeck hub operations-snapshot " &&
              [
-               "lib/flightdeck/mission_store.rb", "lib/flightdeck/omp_operation_execution.rb",
-               "lib/flightdeck/operations_snapshot.rb", "hub/schemas/omp-operation-types.schema.json", SCHEMA
+               "lib/flightdeck/mission_store.rb", "lib/flightdeck/operation_execution.rb",
+               "lib/flightdeck/operations_snapshot.rb", "hub/schemas/operation-execution-types.schema.json", SCHEMA
              ].all? { |path| managed.include?(path) } &&
              detail_capability.is_a?(Hash) && detail_capability["kind"] == "command" &&
              detail_capability.dig("probe", "help_contains") == "bin/flightdeck hub operations-snapshot " &&
              [
-               "lib/flightdeck/mission_store.rb", "lib/flightdeck/omp_operation_execution.rb",
+               "lib/flightdeck/mission_store.rb", "lib/flightdeck/operation_execution.rb",
                "lib/flightdeck/operation_authoring.rb", "lib/flightdeck/operations_snapshot.rb",
-               "hub/schemas/omp-operation-types.schema.json", SCHEMA
+               "hub/schemas/operation-execution-types.schema.json", SCHEMA
              ].all? { |path| detail_managed.include?(path) } &&
              authoring_capability.is_a?(Hash) && authoring_capability["kind"] == "command"
         raise SnapshotError.new("unsupported_hub_contract", "Selected Hub does not declare the Operations snapshot v1 contract.")
@@ -101,24 +101,9 @@ module Flightdeck
 
     def runtime_capabilities!
       value = Support.load_data(File.join(@config.root, "hub", "compatibility.json")).fetch("runtime_capabilities")
-      adapters = value["adapters"]
-      codex_controls = adapters.dig("codex", "optional_controls") if adapters.is_a?(Hash)
-      omp_controls = adapters.dig("omp", "optional_controls") if adapters.is_a?(Hash)
-      unless value["primary_runtime"] == "codex" && adapters.is_a?(Hash) &&
-             value.dig("conversation", "adapter") == "codex" && value.dig("operation_execution", "adapter") == "omp" &&
-             adapters.dig("codex", "available") == true && adapters.dig("omp", "available") == true &&
-             codex_controls.is_a?(Array) && codex_controls.uniq == codex_controls && codex_controls.all? { |control| %w[model reasoning_effort].include?(control) } &&
-             omp_controls == %w[model reasoning_effort tool_policy]
-        raise SnapshotError.new("unsupported_hub_contract", "Selected Hub has invalid runtime capability metadata.")
-      end
-      {
-        "primary_runtime" => "codex", "conversation" => { "adapter" => "codex" },
-        "operation_execution" => { "adapter" => "omp" },
-        "adapters" => {
-          "codex" => { "available" => true, "optional_controls" => codex_controls },
-          "omp" => { "available" => true, "optional_controls" => omp_controls }
-        }
-      }
+      OperationExecution.runtime_capabilities_projection!(value)
+    rescue OperationExecution::ContractError
+      raise SnapshotError.new("unsupported_hub_contract", "Selected Hub has invalid runtime capability metadata.")
     end
 
     def mission_operations(detail_identities)
@@ -189,7 +174,7 @@ module Flightdeck
         activity: node["status_code"], observed_at: node["observed_at"],
         validation: node_validation(node), artifacts: node_artifacts(node),
         skills: skill_summary(events.select { |event| event["node_id"] == node["id"] }),
-        execution: node["omp_execution"] || { "availability" => "unavailable" }
+        execution: node["operation_execution"] || { "availability" => "unavailable" }
       )
     end
 

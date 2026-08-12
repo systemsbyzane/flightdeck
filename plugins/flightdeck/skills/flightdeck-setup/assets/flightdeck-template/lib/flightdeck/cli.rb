@@ -16,7 +16,7 @@ require_relative "repository_store"
 require_relative "route_planner"
 require_relative "setup_store"
 require_relative "work_store"
-require_relative "omp_operation_execution"
+require_relative "operation_execution"
 
 module Flightdeck
   class CLI
@@ -751,9 +751,11 @@ module Flightdeck
 
     def operation(config, argv)
       subcommand = argv.shift
+      request = nil
       names = %w[
         authoring-catalog authoring-plan authoring-launch authoring-guidance authoring-operation detail
-        execution-plan execution-bind execution-observe execution-open
+        execution-plan execution-bind execution-start-report execution-start-open execution-retry-bind
+        execution-observe execution-open
       ]
       raise UsageError, "operation requires #{names.join(', ')}" unless names.include?(subcommand)
 
@@ -772,9 +774,9 @@ module Flightdeck
       end
 
       execution_command = subcommand.to_s.start_with?("execution-")
-      request = execution_command ? OmpOperationExecution.load_request(options.fetch(:request_path)) : OperationAuthoring.load_request(options.fetch(:request_path))
+      request = execution_command ? OperationExecution.load_request(options.fetch(:request_path)) : OperationAuthoring.load_request(options.fetch(:request_path))
       authoring = OperationAuthoring.new(config)
-      execution = OmpOperationExecution.new(config)
+      execution = OperationExecution.new(config)
       result = case subcommand
                when "authoring-catalog" then authoring.catalog(request)
                when "authoring-plan" then authoring.plan(request)
@@ -783,6 +785,9 @@ module Flightdeck
                when "authoring-operation" then authoring.operation(request)
                when "execution-plan" then execution.plan(request)
                when "execution-bind" then execution.bind(request)
+               when "execution-start-report" then execution.start_report(request)
+               when "execution-start-open" then execution.start_open(request)
+               when "execution-retry-bind" then execution.retry_bind(request)
                when "execution-observe" then execution.observe(request)
                when "execution-open" then execution.open(request)
                end
@@ -790,21 +795,21 @@ module Flightdeck
       0
     rescue UsageError, ValidationError => e
       if subcommand == "detail"
-        json(OperationDetail.error_result(e))
+        json(OperationDetail.error_result(e, request: request))
       elsif subcommand.to_s.start_with?("execution-")
-        json(OmpOperationExecution.error_result(subcommand, e))
+        json(OperationExecution.error_result(subcommand, e))
       else
         json(OperationAuthoring.error_result(subcommand.to_s.delete_prefix("authoring-"), e))
       end
       1
     rescue StandardError
       if subcommand == "detail"
-        json(OperationDetail.error_result(OperationDetail::ContractError.new("internal_error", "Operation detail failed closed")))
+        json(OperationDetail.error_result(OperationDetail::ContractError.new("internal_error", "Operation detail failed closed"), request: request))
         return 1
       end
       if subcommand.to_s.start_with?("execution-")
-        error = OmpOperationExecution::ContractError.new("internal_error", "OMP Operation command failed closed")
-        json(OmpOperationExecution.error_result(subcommand, error))
+        error = OperationExecution::ContractError.new("internal_error", "Operation execution command failed closed")
+        json(OperationExecution.error_result(subcommand, error))
       else
         error = OperationAuthoring::ContractError.new(
           "internal_error",
@@ -980,6 +985,9 @@ module Flightdeck
           bin/flightdeck operation authoring-operation --request FILE [--json]
           bin/flightdeck operation execution-plan --request FILE [--json]
           bin/flightdeck operation execution-bind --request FILE [--json]
+          bin/flightdeck operation execution-start-report --request FILE [--json]
+          bin/flightdeck operation execution-start-open --request FILE [--json]
+          bin/flightdeck operation execution-retry-bind --request FILE [--json]
           bin/flightdeck operation execution-observe --request FILE [--json]
           bin/flightdeck operation execution-open --request FILE [--json]
           bin/flightdeck mission add SLUG NODE --project-key KEY --runtime-project-id ID (--project-path PATH|--project-path-digest SHA256) --host-id HOST --execution-mode local|worktree --access-mode read_only|write --work-type TYPE (--required|--optional) [--criterion-id ID] [--depends-on NODE] [--accepts TYPE] --allows-output TYPE [--artifact-resolver-kind same_host_workspace|external_approved --artifact-resolver-id ID] [--json]
@@ -1000,7 +1008,8 @@ module Flightdeck
         mission skill-telemetry, mission authoring-catalog, mission
         authoring-plan, mission authoring-operation, mission objective-plan, mission objective-snapshot,
         mission sync-plan, mission outbox, mission next-actions, operation authoring-catalog,
-        operation authoring-plan, operation authoring-operation, and operation execution-open are read-only.
+        operation authoring-plan, operation authoring-operation, operation execution-open, and
+        operation execution-start-open are read-only.
         status --write, setup connect, repo onboard, bridge install, task new,
         task transition, mission authoring-create, mission objective-create, and other mission mutations use
         explicit state-changing names and write only their documented scope.
@@ -1013,10 +1022,12 @@ module Flightdeck
         It creates a durable planned Operation only; it never dispatches a task or claims task, skill,
         or work success. Never retry an unknown authoring-launch result; query
         operation authoring-operation with the original operation ID.
-        OMP Operation execution is a separate post-confirmation runtime boundary. execution-plan
+        Operation execution is a separate post-confirmation runtime-neutral boundary. execution-plan
         revalidates the exact launched Work proposal and current dispatch authorization; execution-bind
-        binds stable Flightdeck agents to opaque OMP sessions; execution-observe accepts only signed,
+        binds stable Flightdeck agents to opaque adapter sessions; execution-observe accepts only signed,
         bounded, renderer-safe observations. These commands never replace the Codex conversation adapter.
+        Pre-bind failures use execution-start-report; execution-start-open recovers the bounded audit ledger;
+        only execution-retry-bind may consume the exact producer-issued retry generation.
         Work stores selected-Hub display metadata and normalized event links only. It never stores
         prompts, responses, commands, tool payloads, paths, or renderer-visible runtime project/task IDs.
         work create is the ordinary runtime handoff and requires no classification or extra model turn.

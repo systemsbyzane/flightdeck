@@ -14,7 +14,7 @@
     "id": {"type": "string", "maxLength": 128, "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"},
     "skillItem": {"type": "object", "additionalProperties": false, "required": ["skill_id", "skill_version", "lifecycle_status"], "properties": {"skill_id": {"$ref": "#/$defs/id"}, "skill_version": {"oneOf": [{"type": "string", "minLength": 1, "maxLength": 128}, {"type": "null"}]}, "lifecycle_status": {"enum": ["started", "completed", "succeeded", "failed", "blocked", "unknown_outcome"]}}},
     "skills": {"type": "object", "additionalProperties": false, "required": ["state", "items"], "properties": {"state": {"enum": ["absent", "in_progress", "succeeded", "partial_failure"]}, "items": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/skillItem"}}}, "allOf": [{"if": {"properties": {"state": {"const": "absent"}}, "required": ["state"]}, "then": {"properties": {"items": {"maxItems": 0}}}}]},
-    "execution": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["availability"], "properties": {"availability": {"const": "unavailable"}}}, {"$ref": "omp-operation-types.schema.json#/$defs/safeAgent"}]},
+    "execution": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["availability"], "properties": {"availability": {"const": "unavailable"}}}, {"$ref": "operation-execution-types.schema.json#/$defs/safeAgent"}]},
     "operation": {"type": "object", "additionalProperties": false, "required": ["operation_id", "title", "mode", "state", "updated_at", "children"], "properties": {"operation_id": {"$ref": "#/$defs/id"}, "title": {"type": "string", "minLength": 1, "maxLength": 256}, "mode": {"enum": ["dispatch_only", "watch_only", "supervised"]}, "state": {"type": "string", "minLength": 1, "maxLength": 64}, "updated_at": {"type": "string", "format": "date-time"}, "children": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/child"}}}},
     "child": {
       "type": "object", "additionalProperties": false,
@@ -22,11 +22,11 @@
       "properties": {
         "node_id": {"$ref": "#/$defs/id"}, "project": {"type": "object", "additionalProperties": false, "required": ["logical_project_key"], "properties": {"logical_project_key": {"$ref": "#/$defs/id"}}},
         "state": {"type": "string", "minLength": 1, "maxLength": 64}, "status_code": {"type": ["string", "null"], "maxLength": 128},
-        "session": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["state", "task_id"], "properties": {"state": {"const": "resolved"}, "task_id": {"type": "string", "minLength": 1, "maxLength": 512}}}, {"type": "object", "additionalProperties": false, "required": ["state", "agent_id"], "properties": {"state": {"const": "omp_bound"}, "agent_id": {"$ref": "omp-operation-types.schema.json#/$defs/agentId"}}}, {"type": "object", "additionalProperties": false, "required": ["state"], "properties": {"state": {"enum": ["pending_identity", "unavailable"]}}}]},
+        "session": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["state", "task_id"], "properties": {"state": {"const": "resolved"}, "task_id": {"type": "string", "minLength": 1, "maxLength": 512}}}, {"type": "object", "additionalProperties": false, "required": ["state", "agent_id"], "properties": {"state": {"const": "execution_bound"}, "agent_id": {"$ref": "operation-execution-types.schema.json#/$defs/agentId"}}}, {"type": "object", "additionalProperties": false, "required": ["state"], "properties": {"state": {"enum": ["pending_identity", "unavailable"]}}}]},
         "execution": {"$ref": "#/$defs/execution"},
         "verified_skills": {"$ref": "#/$defs/skills"},
         "files_changed": {"type": "object", "additionalProperties": false, "required": ["availability"], "properties": {"availability": {"const": "not_collected"}}},
-        "output_refs": {"type": "array", "maxItems": 1000, "items": {"type": "string", "pattern": "^(artifact|codex-task):|^review:omp/omp-evidence-[0-9a-f]{48}$"}}
+        "output_refs": {"type": "array", "maxItems": 1000, "items": {"type": "string", "pattern": "^(artifact|codex-task):|^review:operation-execution/operation-evidence-[0-9a-f]{48}$"}}
       }
     }
   }

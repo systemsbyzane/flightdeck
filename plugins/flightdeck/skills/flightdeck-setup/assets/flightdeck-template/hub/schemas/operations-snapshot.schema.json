@@ -26,11 +26,8 @@
       "type": "object", "additionalProperties": false, "required": ["state", "items"],
       "properties": {"state": {"const": "unavailable"}, "items": {"type": "array", "maxItems": 0}}
     },
-    "execution": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["availability"], "properties": {"availability": {"const": "unavailable"}}}, {"$ref": "omp-operation-types.schema.json#/$defs/safeAgent"}]},
-    "runtimeCapabilities": {
-      "type": "object", "additionalProperties": false, "required": ["primary_runtime", "conversation", "operation_execution", "adapters"],
-      "properties": {"primary_runtime": {"const": "codex"}, "conversation": {"type": "object", "additionalProperties": false, "required": ["adapter"], "properties": {"adapter": {"const": "codex"}}}, "operation_execution": {"type": "object", "additionalProperties": false, "required": ["adapter"], "properties": {"adapter": {"const": "omp"}}}, "adapters": {"type": "object", "additionalProperties": false, "required": ["codex", "omp"], "properties": {"codex": {"type": "object", "additionalProperties": false, "required": ["available", "optional_controls"], "properties": {"available": {"const": true}, "optional_controls": {"type": "array", "uniqueItems": true, "items": {"enum": ["model", "reasoning_effort"]}}}}, "omp": {"type": "object", "additionalProperties": false, "required": ["available", "optional_controls"], "properties": {"available": {"const": true}, "optional_controls": {"type": "array", "const": ["model", "reasoning_effort", "tool_policy"]}}}}}}
-    },
+    "execution": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["availability"], "properties": {"availability": {"const": "unavailable"}}}, {"$ref": "operation-execution-types.schema.json#/$defs/safeAgent"}]},
+    "runtimeCapabilities": {"$ref": "operation-execution-types.schema.json#/$defs/runtimeCapabilitiesProjection"},
     "validation": {
       "type": "object", "additionalProperties": false,
       "properties": {"status": {"enum": ["passed", "failed", "not_applicable"]}, "passed": {"type": "integer", "minimum": 0}, "failed": {"type": "integer", "minimum": 0}, "unavailable": {"type": "integer", "minimum": 0}}

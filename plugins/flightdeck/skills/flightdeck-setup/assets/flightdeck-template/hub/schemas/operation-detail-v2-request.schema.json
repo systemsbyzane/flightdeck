@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/operation-detail-v2-request.schema.json",
+  "title": "Flightdeck Operation Detail v2 Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "operation_id"],
+  "properties": {
+    "schema_version": {"const": "flightdeck.operation-detail.request/v2"},
+    "operation_id": {"type": "string", "pattern": "^operation-[0-9a-f]{24}$"}
+  }
+}

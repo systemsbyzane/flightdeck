@@ -120,7 +120,7 @@ class PatchNotesTests(unittest.TestCase):
                 / "compatibility.json"
             ).read_text(encoding="utf-8")
         )
-        self.assertEqual(compatibility["template_version"], "1.8.0")
+        self.assertEqual(compatibility["template_version"], "1.11.0")
         capabilities = compatibility["capabilities"]
         command_ids = (
             "flightdeck.command.mission-manage.v1",
@@ -136,8 +136,8 @@ class PatchNotesTests(unittest.TestCase):
             "flightdeck.command.operations-snapshot-detail-identity.v1",
             "flightdeck.command.work-control.v1",
             "flightdeck.command.work-operation-lifecycle.v1",
-            "flightdeck.command.omp-operation-execution.v1",
-            "flightdeck.command.omp-operation-observation.v1",
+            "flightdeck.command.operation-execution.v1",
+            "flightdeck.command.operation-observation.v1",
         )
         for capability_id in command_ids:
             self.assertEqual(

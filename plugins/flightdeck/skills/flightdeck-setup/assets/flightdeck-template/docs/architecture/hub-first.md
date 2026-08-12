@@ -8,9 +8,10 @@ and capability declaration. Repository checkouts, a Codex project list, and
 cached runtime state are proof sources; none independently define application
 membership.
 
-Codex remains the declared compatibility runtime. This contract does not claim
-OpenAI Model Provider (OMP) support. It reserves a closed adapter record so a
-later Core/OMP adapter can be declared and implemented deliberately.
+Codex remains the declared ordinary-conversation runtime. Confirmed Operation
+execution is a separate runtime-neutral boundary: OMP is the selected available
+adapter, while Codex app-server is declared unavailable until independently
+implemented and validated.
 
 ## Contract
 
@@ -24,11 +25,13 @@ The success projection contains only:
 - Hub display name, template version, and Doctor capability.
 - Logical project key, safe display label, workload, availability, bridge
   health, destination kind, and routing capability.
-- Runtime capability metadata: Codex is available, model and reasoning effort
-  are optional controls, and OMP is explicitly unavailable.
+- Runtime capability metadata: Codex handles conversation; Operation execution
+  declares an exact selected adapter and renderer-safe availability/configuration
+  metadata for OMP and Codex app-server.
 
 It never contains a local path, runtime project UUID, local registry detail,
-bridge handoff, bridge digest, repository locator, or task identity. A Hub
+bridge handoff, bridge digest, repository locator, native adapter authorization,
+or task identity. A Hub
 coordinator is `destination: hub_coordinator`; a repository is only
 `destination: repository_routing_hint`. A client routes repository work through
 the Hub and must not treat that hint as a direct runtime destination.
@@ -148,5 +151,5 @@ capability is available.
 
 Rollback is additive: clients stop calling the new command and continue their
 prior command paths. Do not delete project verification or bridge state as a
-rollback shortcut; correct the declaration or local proof and retry. OMP stays
-unavailable until a separately versioned adapter is implemented and declared.
+rollback shortcut; correct the declaration or local proof and retry. An
+unavailable or unsupported Operation adapter always fails closed.

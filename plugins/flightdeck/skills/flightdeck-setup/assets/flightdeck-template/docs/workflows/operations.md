@@ -138,14 +138,16 @@ surface. It returns exactly one typed disposition:
 - `operation_proposal` when the request explicitly names at least two exact
   attached projects (or explicitly requests every attached project);
 - `guidance_attached` when the caller supplies one exact active authored
-  Operation identity; or
+Operation identity; or
 - `runtime_unavailable` when the declared primary adapter is unavailable.
 
 An Operation proposal is review-only. It uses the existing Operation-authoring
 plan and cannot launch until the operator confirms the exact plan identity,
-digest, generation, and token. The current Hub delegates ordinary conversation
-to its declared Codex adapter. A future OMP migration changes the compatibility
-declaration and adapter implementation, not the Work UI contract.
+digest, generation, and token. The Hub delegates ordinary conversation to its
+declared Codex adapter. A confirmed Operation separately selects the exact
+declared execution adapter; template 1.9 selects OMP and declares Codex
+app-server unavailable. Changing that selection changes compatibility and
+adapter implementation, not the Work UI or durable Operation lifecycle.
 
 `operation detail` resolves only an exact durable authored Operation and
 projects goal, authorization boundary, progress, named project agents,
@@ -153,6 +155,11 @@ dependencies, typed validations, artifacts, approvals, result totals, and
 explicit non-goals. Changed files and skills remain unavailable until an
 authenticated task-bound producer persists them; the projection never infers
 them from prose, prompts, titles, or expected-skill lists.
+Pre-bind execution failures are durable producer state rather than inferred
+client activity. The start-recovery capability binds each report to the exact
+Operation, agent, dispatch generation/receipt, and registered runtime project;
+retry requires the current producer-issued retry generation. Detail and the
+Operations snapshot render only its bounded sanitized projection.
 
 Mission objectives are separate from execution-graph `MissionRecord` state.
 `mission objective-plan` produces an ordered review of exact durable Operation
@@ -178,6 +185,10 @@ Mission bodies, outcomes, prompts, task IDs, project identities and paths,
 output declarations and references, outbox data, credentials, and evidence.
 Clients must require `flightdeck.command.mission-list.v1`; they must not infer
 support from a template version or scrape ignored Mission YAML.
+Authored Operation records are excluded only when their validated persisted
+Operation-authoring binding is present. Require
+`flightdeck.command.mission-operation-separation.v1` when that separation is a
+consumer invariant; legacy Mission records remain listed normally.
 
 `mission skill-telemetry` is the JSON-only read contract for explicit
 structured Codex task skill events accepted during Mission sync. It returns a

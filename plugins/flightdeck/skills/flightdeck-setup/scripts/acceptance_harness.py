@@ -417,9 +417,9 @@ def main() -> int:
                     "--require",
                     "flightdeck.command.operations-snapshot-detail-identity.v1",
                     "--require",
-                    "flightdeck.command.omp-operation-execution.v1",
+                    "flightdeck.command.operation-execution.v1",
                     "--require",
-                    "flightdeck.command.omp-operation-observation.v1",
+                    "flightdeck.command.operation-observation.v1",
                     "--require",
                     "flightdeck.document.mission-control.v1",
                 ],
@@ -434,7 +434,7 @@ def main() -> int:
                 and compatibility.get("hub", {})
                 .get("identity", {})
                 .get("template_version")
-                == "1.8.0"
+                == "1.11.0"
                 and not compatibility.get("requirements", {}).get("missing")
                 and tree_state(hub) == compatibility_before,
                 compatibility,

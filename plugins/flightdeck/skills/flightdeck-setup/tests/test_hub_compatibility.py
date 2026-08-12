@@ -65,14 +65,14 @@ class HubCompatibilityTest(unittest.TestCase):
             "flightdeck.command.operations-snapshot-detail-identity.v1",
             "flightdeck.command.work-control.v1",
             "flightdeck.command.work-operation-lifecycle.v1",
-            "flightdeck.command.omp-operation-execution.v1",
-            "flightdeck.command.omp-operation-observation.v1",
+            "flightdeck.command.operation-execution.v1",
+            "flightdeck.command.operation-observation.v1",
         )
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("compatible", report["status"])
         self.assertTrue(report["compatible"])
-        self.assertEqual("1.8.0", report["hub"]["identity"]["template_version"])
+        self.assertEqual("1.11.0", report["hub"]["identity"]["template_version"])
         self.assertEqual([], report["requirements"]["missing"])
         contract = json.loads((TEMPLATE / "hub" / "compatibility.json").read_text(encoding="utf-8"))
         self.assertIs(
@@ -90,15 +90,41 @@ class HubCompatibilityTest(unittest.TestCase):
         self.assertIs(
             True,
             contract["capabilities"][
-                "flightdeck.command.omp-operation-execution.v1"
+                "flightdeck.command.operation-execution.v1"
             ]["declaration_required"],
         )
         self.assertIs(
             True,
             contract["capabilities"][
-                "flightdeck.command.omp-operation-observation.v1"
+                "flightdeck.command.operation-observation.v1"
             ]["declaration_required"],
         )
+
+    def test_runtime_neutral_contract_accepts_an_available_codex_app_server_adapter(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="flightdeck-compatibility-") as directory:
+            hub = Path(directory) / "codex-adapter-hub"
+            shutil.copytree(TEMPLATE, hub)
+            contract_path = hub / "hub" / "compatibility.json"
+            contract = json.loads(contract_path.read_text(encoding="utf-8"))
+            runtime = contract["runtime_capabilities"]
+            runtime["operation_execution"]["selected_adapter"] = "codex_app_server"
+            runtime["adapters"]["omp"]["available"] = False
+            runtime["adapters"]["omp"]["structured_channels"] = []
+            runtime["adapters"]["codex_app_server"]["available"] = True
+            runtime["adapters"]["codex_app_server"]["structured_channels"] = [
+                "flightdeck.runtime.codex-app-server-operation-observation/v1"
+            ]
+            contract_path.write_text(json.dumps(contract, indent=2) + "\n", encoding="utf-8")
+
+            result, report = self.run_checker(
+                hub,
+                "flightdeck.command.operation-execution.v1",
+                "flightdeck.command.operation-observation.v1",
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual("compatible", report["status"])
+            self.assertTrue(report["compatible"])
 
     def test_preserved_hub_without_mission_authoring_is_selectable_but_unsupported(self) -> None:
         with tempfile.TemporaryDirectory(prefix="flightdeck-compatibility-") as directory:
@@ -189,11 +215,11 @@ class HubCompatibilityTest(unittest.TestCase):
                         "docs/workflows/plugin-lifecycle.md",
                         "hub/compatibility.json",
                         "hub/schemas/hub-compatibility.schema.json",
-                        "hub/schemas/omp-operation-types.schema.json",
+                        "hub/schemas/operation-execution-types.schema.json",
                         "hub/schemas/operations-snapshot.schema.json",
                         "lib/flightdeck/cli.rb",
                         "lib/flightdeck/mission_store.rb",
-                        "lib/flightdeck/omp_operation_execution.rb",
+                        "lib/flightdeck/operation_execution.rb",
                         "lib/flightdeck/operation_authoring.rb",
                         "lib/flightdeck/operations_snapshot.rb",
                     ]

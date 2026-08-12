@@ -2,16 +2,16 @@
   "schema_version": "flightdeck.hub-compatibility/v1",
   "schema": "hub/schemas/hub-compatibility.schema.json",
   "product": "flightdeck",
-  "template_version": "1.8.0",
+  "template_version": "1.11.0",
   "runtime_capabilities": {
     "primary_runtime": "codex",
     "conversation": {
       "adapter": "codex"
     },
     "operation_execution": {
-      "adapter": "omp",
-      "execution_capability": "flightdeck.command.omp-operation-execution.v1",
-      "observation_capability": "flightdeck.command.omp-operation-observation.v1"
+      "selected_adapter": "omp",
+      "execution_capability": "flightdeck.command.operation-execution.v1",
+      "observation_capability": "flightdeck.command.operation-observation.v1"
     },
     "adapters": {
       "codex": {
@@ -26,9 +26,24 @@
       },
       "omp": {
         "available": true,
+        "configuration_schema": "flightdeck.adapter.omp.configuration/v1",
+        "execution_capability": "flightdeck.command.operation-execution.v1",
+        "observation_capability": "flightdeck.command.operation-observation.v1",
         "structured_channels": [
           "flightdeck.runtime.omp-operation-observation/v1"
         ],
+        "optional_controls": [
+          "model",
+          "reasoning_effort",
+          "tool_policy"
+        ]
+      },
+      "codex_app_server": {
+        "available": false,
+        "configuration_schema": "flightdeck.adapter.codex-app-server.configuration/v1",
+        "execution_capability": "flightdeck.command.operation-execution.v1",
+        "observation_capability": "flightdeck.command.operation-observation.v1",
+        "structured_channels": [],
         "optional_controls": [
           "model",
           "reasoning_effort",
@@ -87,6 +102,51 @@
         "mode": "stop_and_plan_migration"
       }
     },
+    "flightdeck.command.operation-detail.v2": {
+      "kind": "command",
+      "description": "Read-only bounded authored-Operation detail with exact source identity, project and authorization scope, agent graph, authenticated durable observations, heartbeat staleness, approvals, evidence, and truthful unavailable states.",
+      "declaration_required": true,
+      "probe": {
+        "help_contains": "bin/flightdeck operation detail "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/operation-projection-api.md",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/mission_store.rb",
+        "lib/flightdeck/operation_authoring.rb",
+        "lib/flightdeck/operation_detail.rb",
+        "lib/flightdeck/operation_execution.rb",
+        "hub/schemas/mission.schema.json",
+        "hub/schemas/operation-detail-v2-request.schema.json",
+        "hub/schemas/operation-detail-v2-result.schema.json",
+        "hub/schemas/operation-detail-v2-error.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.command.mission-operation-separation.v1": {
+      "kind": "command",
+      "description": "Classifies authored Operations only from their validated persisted authoring binding and excludes them from user-facing Mission list and client-snapshot projections.",
+      "declaration_required": true,
+      "probe": {
+        "help_contains": "bin/flightdeck mission list "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/mission-client-snapshot.md",
+        "docs/workflows/operations.md",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/mission_store.rb",
+        "hub/schemas/mission.schema.json",
+        "hub/schemas/mission-list.schema.json",
+        "hub/schemas/mission-client-snapshot.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
     "flightdeck.command.mission-objectives.v1": {
       "kind": "command",
       "description": "Typed planning, explicit creation, exact recovery, and read-only projection of Mission objectives containing ordered Operations.",
@@ -124,8 +184,8 @@
         "lib/flightdeck/operations_snapshot.rb",
         "hub/schemas/operations-snapshot.schema.json",
         "lib/flightdeck/mission_store.rb",
-        "lib/flightdeck/omp_operation_execution.rb",
-        "hub/schemas/omp-operation-types.schema.json"
+        "lib/flightdeck/operation_execution.rb",
+        "hub/schemas/operation-execution-types.schema.json"
       ],
       "fallback": {
         "mode": "stop_and_plan_migration"
@@ -150,9 +210,9 @@
         "lib/flightdeck/cli.rb",
         "lib/flightdeck/operation_authoring.rb",
         "lib/flightdeck/operations_snapshot.rb",
-        "hub/schemas/omp-operation-types.schema.json",
+        "hub/schemas/operation-execution-types.schema.json",
         "lib/flightdeck/mission_store.rb",
-        "lib/flightdeck/omp_operation_execution.rb"
+        "lib/flightdeck/operation_execution.rb"
       ],
       "fallback": {
         "mode": "stop_and_plan_migration"
@@ -572,57 +632,57 @@
         "mode": "stop_and_plan_migration"
       }
     },
-    "flightdeck.command.omp-operation-execution.v1": {
+    "flightdeck.command.operation-execution.v1": {
       "kind": "command",
       "declaration_required": true,
-      "description": "Post-confirmation exact-once OMP execution authorization with stable Flightdeck agents, exact authored routing, opaque session binding, and native-only model/tool policy.",
+      "description": "Post-confirmation exact-once runtime-neutral Operation execution authorization with a declared adapter, stable Flightdeck agents, exact authored routing, opaque session binding, and native-only adapter configuration.",
       "probe": {
         "help_contains": "bin/flightdeck operation execution-plan "
       },
       "managed_paths": [
         "bin/flightdeck",
-        "docs/workflows/omp-operation-execution-api.md",
+        "docs/workflows/operation-execution-api.md",
         "docs/workflows/operations.md",
         "docs/workflows/work-control-api.md",
         "lib/flightdeck/cli.rb",
-        "lib/flightdeck/omp_operation_execution.rb",
+        "lib/flightdeck/operation_execution.rb",
         "lib/flightdeck/work_store.rb",
         "lib/flightdeck/operation_authoring.rb",
         "lib/flightdeck/mission_store.rb",
         "hub/schemas/hub-compatibility.schema.json",
-        "hub/schemas/omp-operation-types.schema.json",
-        "hub/schemas/omp-operation-execution-plan-request.schema.json",
-        "hub/schemas/omp-operation-execution-plan-result.schema.json",
-        "hub/schemas/omp-operation-bind-request.schema.json",
-        "hub/schemas/omp-operation-bind-result.schema.json",
-        "hub/schemas/omp-operation-error-result.schema.json"
+        "hub/schemas/operation-execution-types.schema.json",
+        "hub/schemas/operation-execution-plan-request.schema.json",
+        "hub/schemas/operation-execution-plan-result.schema.json",
+        "hub/schemas/operation-execution-bind-request.schema.json",
+        "hub/schemas/operation-execution-bind-result.schema.json",
+        "hub/schemas/operation-execution-error-result.schema.json"
       ],
       "fallback": {
         "mode": "stop_and_plan_migration"
       }
     },
-    "flightdeck.command.omp-operation-observation.v1": {
+    "flightdeck.command.operation-observation.v1": {
       "kind": "command",
       "declaration_required": true,
-      "description": "Authenticated bounded OMP lifecycle observations and read-only durable projections for Work, Operations, and Control Center without raw OMP payloads.",
+      "description": "Authenticated bounded adapter lifecycle observations and read-only durable projections for Work, Operations, and Control Center without raw runtime payloads.",
       "probe": {
         "help_contains": "bin/flightdeck operation execution-open "
       },
       "managed_paths": [
         "bin/flightdeck",
-        "docs/workflows/omp-operation-execution-api.md",
+        "docs/workflows/operation-execution-api.md",
         "docs/workflows/operation-projection-api.md",
         "docs/workflows/operations.md",
         "lib/flightdeck/cli.rb",
-        "lib/flightdeck/omp_operation_execution.rb",
+        "lib/flightdeck/operation_execution.rb",
         "lib/flightdeck/mission_store.rb",
         "lib/flightdeck/operations_snapshot.rb",
-        "hub/schemas/omp-operation-types.schema.json",
-        "hub/schemas/omp-operation-observe-request.schema.json",
-        "hub/schemas/omp-operation-observe-result.schema.json",
-        "hub/schemas/omp-operation-open-request.schema.json",
-        "hub/schemas/omp-operation-open-result.schema.json",
-        "hub/schemas/omp-operation-error-result.schema.json",
+        "hub/schemas/operation-execution-types.schema.json",
+        "hub/schemas/operation-execution-observe-request.schema.json",
+        "hub/schemas/operation-execution-observe-result.schema.json",
+        "hub/schemas/operation-execution-open-request.schema.json",
+        "hub/schemas/operation-execution-open-result.schema.json",
+        "hub/schemas/operation-execution-error-result.schema.json",
         "hub/schemas/operation.schema.json",
         "hub/schemas/operations-snapshot.schema.json",
         "hub/schemas/hub-snapshot.schema.json"
@@ -631,9 +691,42 @@
         "mode": "stop_and_plan_migration"
       }
     },
+    "flightdeck.command.operation-start-recovery.v1": {
+      "kind": "command",
+      "declaration_required": true,
+      "description": "Durable fail-closed pre-bind agent start failures, bounded audit recovery, and exact-generation retry binding before an adapter session binding exists.",
+      "probe": {
+        "help_contains": "bin/flightdeck operation execution-start-open "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/operation-execution-api.md",
+        "docs/workflows/operation-projection-api.md",
+        "docs/workflows/operations.md",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/operation_detail.rb",
+        "lib/flightdeck/operation_execution.rb",
+        "lib/flightdeck/mission_store.rb",
+        "lib/flightdeck/operations_snapshot.rb",
+        "hub/schemas/operation-execution-types.schema.json",
+        "hub/schemas/operation-execution-start-report-request.schema.json",
+        "hub/schemas/operation-execution-start-report-result.schema.json",
+        "hub/schemas/operation-execution-start-open-request.schema.json",
+        "hub/schemas/operation-execution-start-open-result.schema.json",
+        "hub/schemas/operation-execution-retry-bind-request.schema.json",
+        "hub/schemas/operation-execution-retry-bind-result.schema.json",
+        "hub/schemas/operation-execution-error-result.schema.json",
+        "hub/schemas/operation-detail-v2-result.schema.json",
+        "hub/schemas/operation.schema.json",
+        "hub/schemas/operations-snapshot.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
     "flightdeck.command.operation-projection.v1": {
       "kind": "command",
-      "description": "Versioned read-only managed-operation projection with authenticated persisted skill telemetry and bounded OMP execution observations.",
+      "description": "Versioned read-only managed-operation projection with authenticated persisted skill telemetry and bounded runtime-neutral execution observations.",
       "probe": {
         "help_contains": "bin/flightdeck mission operation "
       },
@@ -642,8 +735,8 @@
         "docs/workflows/operation-projection-api.md",
         "lib/flightdeck/cli.rb",
         "lib/flightdeck/mission_store.rb",
-        "lib/flightdeck/omp_operation_execution.rb",
-        "hub/schemas/omp-operation-types.schema.json",
+        "lib/flightdeck/operation_execution.rb",
+        "hub/schemas/operation-execution-types.schema.json",
         "hub/schemas/operation.schema.json"
       ],
       "fallback": {

@@ -17,7 +17,7 @@ require "flightdeck/doctor"
 require "flightdeck/hub_snapshot"
 require "flightdeck/operations_snapshot"
 require "flightdeck/operation_detail"
-require "flightdeck/omp_operation_execution"
+require "flightdeck/operation_execution"
 require "flightdeck/work_coordinator"
 require "flightdeck/mission_objectives"
 require "flightdeck/mission_store"
@@ -312,7 +312,7 @@ class FlightdeckTest < Minitest::Test
       assert_equal "healthy", repository["bridge_health"]
       assert_equal ["model", "reasoning_effort"], snapshot.dig("runtime_capabilities", "adapters", "codex", "optional_controls")
       assert_equal "codex", snapshot.dig("runtime_capabilities", "conversation", "adapter")
-      assert_equal "omp", snapshot.dig("runtime_capabilities", "operation_execution", "adapter")
+      assert_equal "omp", snapshot.dig("runtime_capabilities", "operation_execution", "selected_adapter")
       assert_equal true, snapshot.dig("runtime_capabilities", "adapters", "omp", "available")
 
       rendered = output.string
@@ -402,7 +402,7 @@ class FlightdeckTest < Minitest::Test
       assert_equal "OperationsSnapshot", snapshot["kind"]
       assert_equal true, snapshot.dig("runtime_capabilities", "adapters", "omp", "available")
       assert_equal "codex", snapshot.dig("runtime_capabilities", "conversation", "adapter")
-      assert_equal "omp", snapshot.dig("runtime_capabilities", "operation_execution", "adapter")
+      assert_equal "omp", snapshot.dig("runtime_capabilities", "operation_execution", "selected_adapter")
       operation = snapshot.fetch("operations").fetch(0)
       assert_equal "mission:operations-mission", operation["operation_id"]
       assert_equal "queued", operation["status"]
@@ -1180,7 +1180,7 @@ class FlightdeckTest < Minitest::Test
     assert_includes schema.dig("$defs", "error", "properties", "error", "properties", "code", "enum"), "identity_unresolved"
 
     compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
-    assert_equal "1.8.0", compatibility["template_version"]
+    assert_equal "1.11.0", compatibility["template_version"]
     capability = compatibility.dig("capabilities", "flightdeck.command.mission-client-snapshot.v1")
     assert_equal "command", capability["kind"]
     assert_includes capability["managed_paths"], "hub/schemas/mission-client-snapshot.schema.json"
@@ -1277,6 +1277,79 @@ class FlightdeckTest < Minitest::Test
       assert_equal "guidance_attached", guidance["disposition"]
       assert_equal launched.fetch("operation_id"), guidance.dig("guidance", "operation_id")
     end
+  end
+
+  def test_authored_operations_are_not_missions_and_detail_v2_preserves_exact_source_identity
+    with_operation_authoring_fixture do |_root, config, authoring, _catalog, target|
+      mission_store = Flightdeck::MissionStore.new(config)
+      mission_store.create(
+        slug: "ordinary-mission", title: "Ordinary Mission", outcome: "Remain visible as a Mission."
+      )
+      proposal = operation_proposal(target, title: "Authored Operation only")
+      plan = operation_plan(authoring, proposal)
+      launched = authoring.launch(operation_launch_request(plan, proposal))
+
+      listed = mission_store.list_page
+      assert_equal ["ordinary-mission"], listed.fetch("missions").map { |item| item.fetch("mission_id") }
+      error = assert_raises(Flightdeck::MissionStore::ClientSnapshotError) do
+        mission_store.client_snapshot(slug: launched.fetch("operation_id"), parent_chat_id: "opaque-parent-chat-0001")
+      end
+      assert_equal "operation_not_mission", error.code
+
+      detail = Flightdeck::OperationDetail.new(config).detail(
+        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST,
+        "operation_id" => launched.fetch("operation_id")
+      ).fetch("operation")
+      assert_equal "authored_operation", detail["classification"]
+      assert_equal launched.fetch("operation_id"), detail["operation_id"]
+      assert_equal({ "kind" => "mission_record", "source_id" => "mission:#{launched.fetch('operation_id')}" }, detail["source"])
+      assert_equal "queued", detail["status"]
+      assert_equal "unavailable", detail.dig("agents", 0, "binding", "state")
+      assert_nil detail.dig("agents", 0, "agent_id")
+      assert_equal "unavailable", detail.dig("agents", 0, "last_observation", "availability")
+      assert_equal "unavailable", detail.dig("result", "availability")
+      assert_equal target.fetch("logical_project_key"), detail.dig("project_scope", 0, "logical_project_key")
+      assert_equal false, detail.dig("authorization", "external_actions_authorized")
+      refute_includes JSON.generate(detail), target.fetch("runtime_project_id")
+      refute_includes JSON.generate(detail), target.fetch("project_path_digest")
+
+      v1 = Flightdeck::OperationDetail.new(config).detail(
+        "schema_version" => Flightdeck::OperationDetail::REQUEST,
+        "operation_id" => launched.fetch("operation_id")
+      )
+      assert_equal Flightdeck::OperationDetail::RESULT, v1["schema_version"]
+    end
+  end
+
+  def test_operation_detail_v2_and_mission_operation_separation_are_declared_closed_and_additive
+    compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
+    detail = compatibility.dig("capabilities", Flightdeck::OperationDetail::V2_CAPABILITY)
+    separation = compatibility.dig("capabilities", "flightdeck.command.mission-operation-separation.v1")
+    assert_equal "1.11.0", compatibility["template_version"]
+    assert_equal true, detail["declaration_required"]
+    assert_equal true, separation["declaration_required"]
+    assert_equal({ "mode" => "stop_and_plan_migration" }, detail["fallback"])
+    assert_equal({ "mode" => "stop_and_plan_migration" }, separation["fallback"])
+    %w[operation-detail-v2-request.schema.json operation-detail-v2-result.schema.json operation-detail-v2-error.schema.json].each do |name|
+      schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", name)))
+      assert_equal "https://flightdeck.dev/schemas/#{name}", schema["$id"]
+      assert_equal false, schema["additionalProperties"]
+      assert_includes detail["managed_paths"], "hub/schemas/#{name}"
+    end
+    assert_includes separation["managed_paths"], "hub/schemas/mission-list.schema.json"
+    assert_includes separation["managed_paths"], "hub/schemas/mission-client-snapshot.schema.json"
+    assert_equal "operation_not_mission", JSON.parse(
+      File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "mission-client-snapshot.schema.json"))
+    ).dig("$defs", "error", "properties", "error", "properties", "code", "enum").last
+
+    error = Flightdeck::OperationDetail.error_result(
+      Flightdeck::OperationDetail::ContractError.new("operation_unavailable", "Unavailable"),
+      request: { "schema_version" => Flightdeck::OperationDetail::V2_REQUEST }
+    )
+    assert_equal Flightdeck::OperationDetail::V2_ERROR, error["schema_version"]
+    assert_equal "hub/schemas/operation-detail-v2-error.schema.json", error["schema"]
+    assert_equal Flightdeck::OperationDetail::ERROR,
+                 Flightdeck::OperationDetail.error_result(Flightdeck::UsageError.new("bad"))["schema_version"]
   end
 
   def test_mission_objective_preserves_ordered_operation_membership_and_requires_exact_confirmation
@@ -1578,7 +1651,8 @@ class FlightdeckTest < Minitest::Test
       "operation_id" => operation_id
     )
     request = {
-      "schema_version" => Flightdeck::OmpOperationExecution::PLAN_REQUEST,
+      "schema_version" => Flightdeck::OperationExecution::PLAN_REQUEST,
+      "adapter" => operation_execution_adapter,
       "work_id" => work_id,
       "operation_id" => operation_id,
       "confirmation" => fixture.fetch("confirmation"),
@@ -1589,12 +1663,16 @@ class FlightdeckTest < Minitest::Test
         {
           "node_id" => target.fetch("node_id"),
           "authorized_task" => "Implement only the confirmed bounded Operation scope for #{target.fetch('logical_project_key')}.",
-          "requested_model" => "gpt-5",
-          "reasoning_effort" => "high",
-          "tool_policy" => {
-            "profile" => target.fetch("access_mode") == "write" ? "workspace_write" : "read_only",
-            "allowed_tool_kinds" => %w[filesystem lsp shell subagent],
-            "network_access" => false
+          "adapter_configuration" => {
+            "adapter_id" => "omp",
+            "schema_version" => "flightdeck.adapter.omp.configuration/v1",
+            "requested_model" => "gpt-5",
+            "reasoning_effort" => "high",
+            "tool_policy" => {
+              "profile" => target.fetch("access_mode") == "write" ? "workspace_write" : "read_only",
+              "allowed_tool_kinds" => %w[filesystem lsp shell subagent],
+              "network_access" => false
+            }
           }
         }
       end
@@ -1602,9 +1680,19 @@ class FlightdeckTest < Minitest::Test
     [request, dispatch]
   end
 
+  def operation_execution_adapter
+    {
+      "id" => "omp",
+      "configuration_schema" => "flightdeck.adapter.omp.configuration/v1",
+      "execution_capability" => Flightdeck::OperationExecution::EXECUTION_CAPABILITY,
+      "observation_capability" => Flightdeck::OperationExecution::OBSERVATION_CAPABILITY
+    }
+  end
+
   def signed_omp_observation(execution, plan, binding, session_ref:, sequence:, lifecycle:, observed_at:, suffix:)
     request = {
-      "schema_version" => Flightdeck::OmpOperationExecution::OBSERVE_REQUEST,
+      "schema_version" => Flightdeck::OperationExecution::OBSERVE_REQUEST,
+      "adapter" => plan.fetch("adapter"),
       "work_id" => plan.fetch("work_id"),
       "operation_id" => plan.fetch("operation_id"),
       "execution_id" => plan.dig("execution", "execution_id"),
@@ -1623,14 +1711,59 @@ class FlightdeckTest < Minitest::Test
       "observed_at" => observed_at,
       "final_result" => lifecycle == "review_ready" ? {
         "summary" => "Confirmed Operation work is ready for Flightdeck review.",
-        "evidence_refs" => ["omp-evidence-#{'a' * 48}"]
+        "evidence_refs" => ["operation-evidence-#{'a' * 48}"]
       } : nil,
-      "omp_session_ref" => session_ref,
+      "adapter_session_ref" => session_ref,
       "signature" => ""
     }
-    payload = request.reject { |key, _| %w[omp_session_ref signature].include?(key) }
+    payload = request.reject { |key, _| %w[adapter_session_ref signature].include?(key) }
     request["signature"] = OpenSSL::HMAC.hexdigest("SHA256", session_ref, execution.send(:canonical_json, payload))
     request
+  end
+
+  def execution_start_report_request(plan, agent, suffix:, retry_generation: nil, retryable: true,
+                                     failure_code: "adapter_start_failed", summary: "Adapter session start failed safely.",
+                                     failed_at: "2026-08-10T16:00:01Z")
+    {
+      "schema_version" => Flightdeck::OperationExecution::START_REPORT_REQUEST,
+      "adapter" => plan.fetch("adapter"),
+      "work_id" => plan.fetch("work_id"),
+      "operation_id" => plan.fetch("operation_id"),
+      "execution_id" => plan.dig("execution", "execution_id"),
+      "execution_generation" => plan.dig("execution", "execution_generation"),
+      "execution_digest" => plan.dig("execution", "execution_digest"),
+      "agent_id" => agent.fetch("agent_id"),
+      "dispatch_generation" => plan.dig("authorization", "dispatch_generation"),
+      "dispatch_id" => agent.dig("native_authorization", "dispatch_id"),
+      "runtime_project_id" => agent.dig("native_authorization", "runtime_project_id"),
+      "retry_generation" => retry_generation,
+      "report_id" => "execution-start-report-#{suffix}",
+      "failure" => {
+        "code" => failure_code,
+        "summary" => summary,
+        "retryable" => retryable,
+        "failed_at" => failed_at
+      }
+    }
+  end
+
+  def execution_retry_bind_request(plan, agent, retry_generation:, session_ref:, suffix:)
+    {
+      "schema_version" => Flightdeck::OperationExecution::RETRY_BIND_REQUEST,
+      "adapter" => plan.fetch("adapter"),
+      "work_id" => plan.fetch("work_id"),
+      "operation_id" => plan.fetch("operation_id"),
+      "execution_id" => plan.dig("execution", "execution_id"),
+      "execution_generation" => plan.dig("execution", "execution_generation"),
+      "execution_digest" => plan.dig("execution", "execution_digest"),
+      "agent_id" => agent.fetch("agent_id"),
+      "dispatch_generation" => plan.dig("authorization", "dispatch_generation"),
+      "dispatch_id" => agent.dig("native_authorization", "dispatch_id"),
+      "runtime_project_id" => agent.dig("native_authorization", "runtime_project_id"),
+      "retry_generation" => retry_generation,
+      "binding_idempotency_key" => "execution-retry-bind-#{suffix}",
+      "adapter_session_ref" => session_ref
+    }
   end
 
   def test_work_create_list_open_restart_and_ordinary_runtime_boundary_are_display_safe
@@ -1991,7 +2124,7 @@ class FlightdeckTest < Minitest::Test
       assert_equal "unknown_outcome", error.code
       error = assert_raises(Flightdeck::WorkStore::ContractError) { store.launch(request) }
       assert_equal "unknown_outcome", error.code
-      assert_equal 1, Flightdeck::MissionStore.new(config).list_page.fetch("missions").length
+      assert_empty Flightdeck::MissionStore.new(config).list_page.fetch("missions")
       authoring.define_singleton_method(:write_operation!, original)
 
       recovered = Flightdeck::WorkStore.new(Flightdeck::Config.new(root: root), clock: clock).open(
@@ -2291,7 +2424,7 @@ class FlightdeckTest < Minitest::Test
       assert_equal false, launched.dig("operation", "replayed")
       replayed = Flightdeck::WorkStore.new(config, clock: clock).launch(launch_request)
       assert_equal true, replayed.dig("operation", "replayed")
-      assert_equal 1, Flightdeck::MissionStore.new(config).list_page.fetch("missions").length
+      assert_empty Flightdeck::MissionStore.new(config).list_page.fetch("missions")
 
       plan = store.dispatch_plan(
         "schema_version" => Flightdeck::WorkStore::DISPATCH_PLAN_REQUEST,
@@ -2531,7 +2664,7 @@ class FlightdeckTest < Minitest::Test
     end
   end
 
-  def test_omp_operation_execution_is_post_confirmation_exact_once_authenticated_and_renderer_safe
+  def test_operation_execution_is_post_confirmation_exact_once_authenticated_and_renderer_safe
     with_hub do |root, config|
       project = initialize_repository(root, "omp-operation-owner")
       config = register_repository(config, "omp-operation-owner", project)
@@ -2559,11 +2692,12 @@ class FlightdeckTest < Minitest::Test
       end
       assert_equal "adapter_unavailable", error.code
       request, _dispatch = omp_execution_request(work, fixture, suffix: "omp-0001")
-      execution = Flightdeck::OmpOperationExecution.new(config, clock: clock, random_hex: ->(_bytes) { "1" * 32 })
+      execution = Flightdeck::OperationExecution.new(config, clock: clock, random_hex: ->(_bytes) { "1" * 32 })
 
       plan = execution.plan(request)
-      assert_equal Flightdeck::OmpOperationExecution::EXECUTION_CAPABILITY, plan["capability"]
-      assert_equal({ "conversation" => "codex", "operation_execution" => "omp" }, plan["runtime_boundary"])
+      assert_equal Flightdeck::OperationExecution::EXECUTION_CAPABILITY, plan["capability"]
+      assert_equal({ "conversation" => { "adapter" => "codex" }, "operation_execution" => operation_execution_adapter }, plan["runtime_boundary"])
+      assert_equal operation_execution_adapter, plan["adapter"]
       assert_equal "confirmed", plan.dig("authorization", "state")
       assert_equal fixture.dig("confirmation", "plan_digest"), plan.dig("authorization", "plan_digest")
       assert_equal Digest::SHA256.hexdigest(fixture.dig("confirmation", "plan_token")), plan.dig("authorization", "plan_token_digest")
@@ -2575,13 +2709,14 @@ class FlightdeckTest < Minitest::Test
 
       conflict = Marshal.load(Marshal.dump(request))
       conflict.dig("agents", 0)["authorized_task"] = "Conflicting task content."
-      error = assert_raises(Flightdeck::OmpOperationExecution::ContractError) { execution.plan(conflict) }
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.plan(conflict) }
       assert_equal "duplicate_request_conflict", error.code
 
       session_ref = "omp-session-operation-owner-0001"
       agent = plan.fetch("agents").first
       bind_request = {
-        "schema_version" => Flightdeck::OmpOperationExecution::BIND_REQUEST,
+        "schema_version" => Flightdeck::OperationExecution::BIND_REQUEST,
+        "adapter" => plan.fetch("adapter"),
         "work_id" => plan.fetch("work_id"),
         "operation_id" => plan.fetch("operation_id"),
         "execution_id" => plan.dig("execution", "execution_id"),
@@ -2589,14 +2724,14 @@ class FlightdeckTest < Minitest::Test
         "execution_digest" => plan.dig("execution", "execution_digest"),
         "agent_id" => agent.fetch("agent_id"),
         "binding_idempotency_key" => "omp-binding-operation-owner-0001",
-        "omp_session_ref" => session_ref
+        "adapter_session_ref" => session_ref
       }
       binding = execution.bind(bind_request)
       assert_equal "bound", binding.dig("binding", "state")
       assert_equal true, execution.bind(bind_request)["replayed"]
       assert_equal "bound", execution.plan(request).dig("agents", 0, "binding_state")
-      error = assert_raises(Flightdeck::OmpOperationExecution::ContractError) do
-        execution.bind(bind_request.merge("omp_session_ref" => "omp-session-operation-owner-foreign"))
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) do
+        execution.bind(bind_request.merge("adapter_session_ref" => "omp-session-operation-owner-foreign"))
       end
       assert_equal "duplicate_request_conflict", error.code
 
@@ -2612,20 +2747,20 @@ class FlightdeckTest < Minitest::Test
         execution, plan, binding, session_ref: session_ref, sequence: 3, lifecycle: "running",
         observed_at: "2026-08-10T16:00:02Z", suffix: "operation-owner-0003"
       )
-      error = assert_raises(Flightdeck::OmpOperationExecution::ContractError) { execution.observe(out_of_order) }
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.observe(out_of_order) }
       assert_equal "out_of_order_observation", error.code
       stale = signed_omp_observation(
         execution, plan, binding, session_ref: session_ref, sequence: 2, lifecycle: "running",
         observed_at: "2026-08-10T16:00:02Z", suffix: "operation-owner-stale"
       )
-      stale["binding_generation"] = "omp-binding-generation-#{'0' * 48}"
-      error = assert_raises(Flightdeck::OmpOperationExecution::ContractError) { execution.observe(stale) }
+      stale["binding_generation"] = "operation-execution-binding-generation-#{'0' * 48}"
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.observe(stale) }
       assert_equal "stale_binding", error.code
       bad_signature = signed_omp_observation(
         execution, plan, binding, session_ref: session_ref, sequence: 2, lifecycle: "running",
         observed_at: "2026-08-10T16:00:02Z", suffix: "operation-owner-auth"
       ).merge("signature" => "0" * 64)
-      error = assert_raises(Flightdeck::OmpOperationExecution::ContractError) { execution.observe(bad_signature) }
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.observe(bad_signature) }
       assert_equal "authentication_failed", error.code
 
       final = signed_omp_observation(
@@ -2638,10 +2773,11 @@ class FlightdeckTest < Minitest::Test
         execution, plan, binding, session_ref: session_ref, sequence: 3, lifecycle: "running",
         observed_at: "2026-08-10T16:00:03Z", suffix: "operation-owner-after-terminal"
       )
-      error = assert_raises(Flightdeck::OmpOperationExecution::ContractError) { execution.observe(after_terminal) }
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.observe(after_terminal) }
       assert_equal "out_of_order_observation", error.code
-      opened = Flightdeck::OmpOperationExecution.new(config, clock: clock).open(
-        "schema_version" => Flightdeck::OmpOperationExecution::OPEN_REQUEST,
+      opened = Flightdeck::OperationExecution.new(config, clock: clock).open(
+        "schema_version" => Flightdeck::OperationExecution::OPEN_REQUEST,
+        "adapter" => plan.fetch("adapter"),
         "work_id" => plan.fetch("work_id"), "operation_id" => plan.fetch("operation_id"),
         "execution_id" => plan.dig("execution", "execution_id")
       )
@@ -2649,7 +2785,8 @@ class FlightdeckTest < Minitest::Test
       assert_equal "review_ready", opened.dig("agents", 0, "observation", "lifecycle")
       open_path = File.join(root, "omp-operation-open.json")
       File.write(open_path, JSON.generate(
-        "schema_version" => Flightdeck::OmpOperationExecution::OPEN_REQUEST,
+        "schema_version" => Flightdeck::OperationExecution::OPEN_REQUEST,
+        "adapter" => plan.fetch("adapter"),
         "work_id" => plan.fetch("work_id"), "operation_id" => plan.fetch("operation_id"),
         "execution_id" => plan.dig("execution", "execution_id")
       ))
@@ -2657,7 +2794,7 @@ class FlightdeckTest < Minitest::Test
       assert_equal 0, Flightdeck::CLI.new(root: root, out: cli_output, err: StringIO.new).run(
         ["operation", "execution-open", "--request", open_path, "--json"]
       )
-      assert_equal Flightdeck::OmpOperationExecution::OPEN_RESULT, JSON.parse(cli_output.string)["schema_version"]
+      assert_equal Flightdeck::OperationExecution::OPEN_RESULT, JSON.parse(cli_output.string)["schema_version"]
       rendered = JSON.generate(opened)
       refute_includes rendered, session_ref
       refute_includes rendered, "runtime_project_id"
@@ -2666,7 +2803,7 @@ class FlightdeckTest < Minitest::Test
 
       operation = Flightdeck::MissionStore.new(config).operation_projection(plan.fetch("operation_id"))
       child = operation.dig("operation", "children", 0)
-      assert_equal "omp_bound", child.dig("session", "state")
+      assert_equal "execution_bound", child.dig("session", "state")
       assert_equal agent.fetch("agent_id"), child.dig("session", "agent_id")
       assert_equal "review_ready", child.dig("execution", "observation", "lifecycle")
       assert_equal "review_ready", operation.dig("operation", "state")
@@ -2683,20 +2820,21 @@ class FlightdeckTest < Minitest::Test
       assert_equal plan.fetch("operation_id"), snapshot_operation.dig("detail", "operation_id")
       assert_equal "review_ready", snapshot_operation.dig("children", 0, "execution", "observation", "lifecycle")
 
-      persisted = File.read(Dir.glob(File.join(root, "hub/state/omp-operation-execution/*.json")).first)
+      persisted = File.read(Dir.glob(File.join(root, "hub/state/operation-execution/*.json")).first)
       refute_includes persisted, session_ref
       refute_includes persisted, "signature"
       refute_includes persisted, "system_prompt"
       refute_includes persisted, project
-      record_path = Dir.glob(File.join(root, "hub/state/omp-operation-execution/*.json")).first
+      record_path = Dir.glob(File.join(root, "hub/state/operation-execution/*.json")).first
       tampered_record = JSON.parse(File.read(record_path))
       tampered_record["operation_id"] = "operation-#{'f' * 24}"
       tampered_record["record_digest"] = nil
       tampered_record["record_digest"] = Digest::SHA256.hexdigest(execution.send(:canonical_json, tampered_record))
       Flightdeck::Support.atomic_write(record_path, "#{JSON.pretty_generate(tampered_record)}\n")
-      error = assert_raises(Flightdeck::OmpOperationExecution::ContractError) do
-        Flightdeck::OmpOperationExecution.new(config).open(
-          "schema_version" => Flightdeck::OmpOperationExecution::OPEN_REQUEST,
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) do
+        Flightdeck::OperationExecution.new(config).open(
+          "schema_version" => Flightdeck::OperationExecution::OPEN_REQUEST,
+          "adapter" => plan.fetch("adapter"),
           "work_id" => plan.fetch("work_id"), "operation_id" => plan.fetch("operation_id"),
           "execution_id" => plan.dig("execution", "execution_id")
         )
@@ -2705,7 +2843,375 @@ class FlightdeckTest < Minitest::Test
     end
   end
 
-  def test_omp_operation_execution_rejects_proposal_only_declined_tampered_foreign_and_untrusted_input
+  def test_operation_detail_v2_projects_bound_progress_approval_terminal_and_configured_staleness
+    with_hub do |root, config|
+      project = initialize_repository(root, "operation-detail-live-owner")
+      config = register_repository(config, "operation-detail-live-owner", project)
+      config = write_declarations(config, [declaration("operation-detail-live-owner", project)])
+      write_project_verifications(config, "operation-detail-live-owner" => verified_project("operation-detail-live-owner", project))
+      Flightdeck::BridgeStore.new(config).install(repository_id: "operation-detail-live-owner", mode: "reference", profile: "application")
+      config = Flightdeck::Config.new(root: root)
+      clock = -> { Time.iso8601("2026-08-10T16:00:10Z") }
+      store = Flightdeck::WorkStore.new(config, clock: clock)
+      fixture = propose_work_operation(store, suffix: "detail-live-0001", project_keys: ["operation-detail-live-owner"])
+      request, = omp_execution_request(store, fixture, suffix: "detail-live-0001")
+      execution = Flightdeck::OperationExecution.new(config, clock: clock)
+      plan = execution.plan(request)
+      agent = plan.fetch("agents").first
+      session_ref = "omp-session-detail-live-owner-0001"
+      binding = execution.bind(
+        "schema_version" => Flightdeck::OperationExecution::BIND_REQUEST,
+        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
+        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id"),
+        "execution_generation" => plan.dig("execution", "execution_generation"),
+        "execution_digest" => plan.dig("execution", "execution_digest"), "agent_id" => agent.fetch("agent_id"),
+        "binding_idempotency_key" => "detail-live-binding-0001", "adapter_session_ref" => session_ref
+      )
+
+      starting = Flightdeck::OperationDetail.new(config, clock: clock).detail(
+        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST,
+        "operation_id" => plan.fetch("operation_id")
+      ).fetch("operation")
+      assert_equal "starting", starting["status"]
+      assert_equal "bound", starting.dig("agents", 0, "binding", "state")
+
+      approval = signed_omp_observation(
+        execution, plan, binding, session_ref: session_ref, sequence: 1, lifecycle: "needs_approval",
+        observed_at: "2026-08-10T16:00:01Z", suffix: "detail-live-approval"
+      )
+      execution.observe(approval)
+      approval_detail = Flightdeck::OperationDetail.new(config, clock: clock).detail(
+        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST,
+        "operation_id" => plan.fetch("operation_id")
+      ).fetch("operation")
+      assert_equal "approval_required", approval_detail["status"]
+      assert_equal "available", approval_detail.dig("approvals", "availability")
+      assert_equal 1, approval_detail.dig("agents", 0, "last_observation", "sequence")
+
+      terminal = signed_omp_observation(
+        execution, plan, binding, session_ref: session_ref, sequence: 2, lifecycle: "review_ready",
+        observed_at: "2026-08-10T16:00:02Z", suffix: "detail-live-terminal"
+      )
+      execution.observe(terminal)
+      completed = Flightdeck::OperationDetail.new(config, clock: -> { Time.iso8601("2026-08-12T16:00:00Z") }).detail(
+        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST,
+        "operation_id" => plan.fetch("operation_id")
+      ).fetch("operation")
+      assert_equal "review_ready", completed["status"]
+      assert_equal "available", completed.dig("result", "availability")
+      assert_equal ["operation-evidence-#{'a' * 48}"], completed.dig("evidence", "references")
+      assert_equal "review_ready", completed.dig("agents", 0, "last_observation", "lifecycle")
+    end
+
+    with_hub do |root, config|
+      project = initialize_repository(root, "operation-detail-stale-owner")
+      config = register_repository(config, "operation-detail-stale-owner", project)
+      config = write_declarations(config, [declaration("operation-detail-stale-owner", project)])
+      write_project_verifications(config, "operation-detail-stale-owner" => verified_project("operation-detail-stale-owner", project))
+      Flightdeck::BridgeStore.new(config).install(repository_id: "operation-detail-stale-owner", mode: "reference", profile: "application")
+      config = Flightdeck::Config.new(root: root)
+      store = Flightdeck::WorkStore.new(config, clock: -> { Time.iso8601("2026-08-10T16:00:00Z") })
+      fixture = propose_work_operation(store, suffix: "detail-stale-0001", project_keys: ["operation-detail-stale-owner"])
+      request, = omp_execution_request(store, fixture, suffix: "detail-stale-0001")
+      execution = Flightdeck::OperationExecution.new(config, clock: -> { Time.iso8601("2026-08-10T16:00:00Z") })
+      plan = execution.plan(request)
+      session_ref = "omp-session-detail-stale-owner-0001"
+      agent = plan.fetch("agents").first
+      binding = execution.bind(
+        "schema_version" => Flightdeck::OperationExecution::BIND_REQUEST,
+        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
+        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id"),
+        "execution_generation" => plan.dig("execution", "execution_generation"),
+        "execution_digest" => plan.dig("execution", "execution_digest"), "agent_id" => agent.fetch("agent_id"),
+        "binding_idempotency_key" => "detail-stale-binding-0001", "adapter_session_ref" => session_ref
+      )
+      execution.observe(signed_omp_observation(
+        execution, plan, binding, session_ref: session_ref, sequence: 1, lifecycle: "running",
+        observed_at: "2026-08-10T16:00:00Z", suffix: "detail-stale-running"
+      ))
+      threshold = Flightdeck::MissionStore.new(config).snapshot(plan.fetch("operation_id")).dig("spec", "budgets", "stale_after_seconds")
+      at_threshold = Time.iso8601("2026-08-10T16:00:00Z") + threshold
+      fresh = Flightdeck::OperationDetail.new(config, clock: -> { at_threshold }).detail(
+        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST, "operation_id" => plan.fetch("operation_id")
+      )
+      assert_equal "working", fresh.dig("operation", "status")
+      stale = Flightdeck::OperationDetail.new(config, clock: -> { at_threshold + 1 }).detail(
+        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST, "operation_id" => plan.fetch("operation_id")
+      )
+      assert_equal "stalled", stale.dig("operation", "status")
+      assert_equal "execution_heartbeat_stale", Flightdeck::MissionStore.new(config, clock: -> { at_threshold + 1 }).status(plan.fetch("operation_id")).dig("spec", "graph", "nodes", 0, "status_code")
+    end
+  end
+
+  def test_operation_start_failure_is_durable_visible_idempotent_and_retry_bind_recovers
+    with_hub do |root, config|
+      project = initialize_repository(root, "start-recovery-owner")
+      config = register_repository(config, "start-recovery-owner", project)
+      config = write_declarations(config, [declaration("start-recovery-owner", project)])
+      write_project_verifications(config, "start-recovery-owner" => verified_project("start-recovery-owner", project))
+      Flightdeck::BridgeStore.new(config).install(repository_id: "start-recovery-owner", mode: "reference", profile: "application")
+      config = Flightdeck::Config.new(root: root)
+      clock = -> { Time.iso8601("2026-08-10T16:00:02Z") }
+      store = Flightdeck::WorkStore.new(config, clock: clock)
+      fixture = propose_work_operation(store, suffix: "start-recovery-0001", project_keys: ["start-recovery-owner"])
+      request, = omp_execution_request(store, fixture, suffix: "start-recovery-0001")
+      execution = Flightdeck::OperationExecution.new(config, clock: clock)
+      plan = execution.plan(request)
+      agent = plan.fetch("agents").first
+      report_request = execution_start_report_request(plan, agent, suffix: "allowed-0001")
+      reported = execution.start_report(report_request)
+      assert_equal Flightdeck::OperationExecution::START_RECOVERY_CAPABILITY, reported["capability"]
+      assert_equal "retry_authorized", reported.dig("recovery", "state")
+      assert_match(/^operation-execution-retry-generation-[0-9a-f]{48}$/, reported.dig("recovery", "retry_generation"))
+      assert_equal false, reported["replayed"]
+      assert_equal true, execution.start_report(report_request)["replayed"]
+
+      detail = Flightdeck::OperationDetail.new(config, clock: clock).detail(
+        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST,
+        "operation_id" => plan.fetch("operation_id")
+      ).fetch("operation")
+      assert_equal "needs_recovery", detail["status"]
+      assert_equal "needs_recovery", detail.dig("agents", 0, "lifecycle")
+      assert_equal "unbound", detail.dig("agents", 0, "binding", "state")
+      assert_equal "available", detail.dig("agents", 0, "current_activity", "availability")
+      assert_equal "Adapter session start failed safely.", detail.dig("agents", 0, "current_activity", "action_summary")
+      assert_equal "unavailable", detail.dig("agents", 0, "last_observation", "availability")
+      assert_equal "available", detail.dig("approvals", "availability")
+
+      snapshot = Flightdeck::OperationsSnapshot.new(config).snapshot
+      operation = snapshot.fetch("operations").find { |item| item.dig("detail", "operation_id") == plan.fetch("operation_id") }
+      assert_equal "reconcile_required", operation["status"]
+      assert_equal "reconcile_required", operation.dig("children", 0, "status")
+      assert_equal "execution_start_retry_authorized", operation.dig("children", 0, "activity", "code")
+      assert_nil operation.dig("children", 0, "execution", "observation")
+
+      restarted = Flightdeck::OperationExecution.new(Flightdeck::Config.new(root: root), clock: clock)
+      recovered = restarted.start_open(
+        "schema_version" => Flightdeck::OperationExecution::START_OPEN_REQUEST,
+        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
+        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id"),
+        "agent_id" => agent.fetch("agent_id")
+      )
+      assert_equal "retry_authorized", recovered.dig("recovery", "state")
+      assert_equal ["adapter_start_failed"], recovered.fetch("failures").map { |item| item.fetch("failure_code") }
+
+      direct_bind = {
+        "schema_version" => Flightdeck::OperationExecution::BIND_REQUEST,
+        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
+        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id"),
+        "execution_generation" => plan.dig("execution", "execution_generation"),
+        "execution_digest" => plan.dig("execution", "execution_digest"), "agent_id" => agent.fetch("agent_id"),
+        "binding_idempotency_key" => "direct-bind-after-failure-0001",
+        "adapter_session_ref" => "omp-session-direct-after-failure-0001"
+      }
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { restarted.bind(direct_bind) }
+      assert_equal "retry_generation_required", error.code
+
+      retry_request = execution_retry_bind_request(
+        plan, agent, retry_generation: reported.dig("recovery", "retry_generation"),
+        session_ref: "omp-session-start-recovery-0001", suffix: "allowed-0001"
+      )
+      bound = restarted.retry_bind(retry_request)
+      assert_equal "bound", bound.dig("binding", "state")
+      assert_equal true, restarted.retry_bind(retry_request)["replayed"]
+      after = restarted.start_open(
+        "schema_version" => Flightdeck::OperationExecution::START_OPEN_REQUEST,
+        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
+        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id"),
+        "agent_id" => agent.fetch("agent_id")
+      )
+      assert_equal "bound", after.dig("recovery", "state")
+      assert_nil after.dig("recovery", "retry_generation")
+      assert_equal 1, after.fetch("failures").length
+      detail = Flightdeck::OperationDetail.new(config, clock: clock).detail(
+        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST, "operation_id" => plan.fetch("operation_id")
+      )
+      assert_equal "starting", detail.dig("operation", "status")
+      assert_equal "unavailable", detail.dig("operation", "agents", 0, "current_activity", "availability")
+      after_bound_report = execution_start_report_request(
+        plan, agent, suffix: "after-bound-0002",
+        retry_generation: reported.dig("recovery", "retry_generation")
+      )
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { restarted.start_report(after_bound_report) }
+      assert_equal "agent_already_bound", error.code
+    end
+  end
+
+  def test_operation_start_failure_rejects_conflicts_foreign_identity_stale_generation_and_nonretryable_bind
+    with_hub do |root, config|
+      project = initialize_repository(root, "start-denied-owner")
+      config = register_repository(config, "start-denied-owner", project)
+      config = write_declarations(config, [declaration("start-denied-owner", project)])
+      write_project_verifications(config, "start-denied-owner" => verified_project("start-denied-owner", project))
+      Flightdeck::BridgeStore.new(config).install(repository_id: "start-denied-owner", mode: "reference", profile: "application")
+      config = Flightdeck::Config.new(root: root)
+      store = Flightdeck::WorkStore.new(config, clock: -> { Time.iso8601("2026-08-10T16:00:00Z") })
+      fixture = propose_work_operation(store, suffix: "start-denied-0001", project_keys: ["start-denied-owner"])
+      request, = omp_execution_request(store, fixture, suffix: "start-denied-0001")
+      execution = Flightdeck::OperationExecution.new(config, clock: -> { Time.iso8601("2026-08-10T16:00:02Z") })
+      plan = execution.plan(request)
+      agent = plan.fetch("agents").first
+      report = execution_start_report_request(plan, agent, suffix: "denied-0001")
+
+      malformed = Marshal.load(Marshal.dump(report)).merge("unexpected" => true)
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(malformed) }
+      assert_equal "malformed_request", error.code
+      unsafe = Marshal.load(Marshal.dump(report))
+      unsafe.dig("failure")["summary"] = "unsafe\u0000summary"
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(unsafe) }
+      assert_equal "untrusted_payload", error.code
+      oversized = Marshal.load(Marshal.dump(report))
+      oversized.dig("failure")["summary"] = "x" * (Flightdeck::OperationExecution::MAX_ACTION_BYTES + 1)
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(oversized) }
+      assert_equal "untrusted_payload", error.code
+      foreign_runtime = Marshal.load(Marshal.dump(report))
+      foreign_runtime["runtime_project_id"] = "foreign-runtime-project-0001"
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(foreign_runtime) }
+      assert_equal "authorization_conflict", error.code
+      foreign_dispatch = Marshal.load(Marshal.dump(report))
+      foreign_dispatch["dispatch_id"] = "dispatch-#{'f' * 24}"
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(foreign_dispatch) }
+      assert_equal "authorization_conflict", error.code
+      foreign_agent = Marshal.load(Marshal.dump(report))
+      foreign_agent["agent_id"] = "flightdeck-agent-#{'f' * 48}"
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(foreign_agent) }
+      assert_equal "operation_identity_conflict", error.code
+      stale_execution = Marshal.load(Marshal.dump(report))
+      stale_execution["execution_generation"] = "operation-execution-generation-#{'f' * 48}"
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(stale_execution) }
+      assert_equal "operation_identity_conflict", error.code
+      foreign_operation = Marshal.load(Marshal.dump(report))
+      foreign_operation["operation_id"] = "operation-#{'f' * 24}"
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(foreign_operation) }
+      assert_equal "not_created", error.code
+
+      accepted = execution.start_report(report)
+      conflict = Marshal.load(Marshal.dump(report))
+      conflict.dig("failure")["summary"] = "Conflicting retry report."
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(conflict) }
+      assert_equal "duplicate_request_conflict", error.code
+      stale = execution_start_report_request(
+        plan, agent, suffix: "denied-stale-0002",
+        retry_generation: "operation-execution-retry-generation-#{'0' * 48}"
+      )
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(stale) }
+      assert_equal "stale_retry_generation", error.code
+      foreign_retry = execution_retry_bind_request(
+        plan, agent, retry_generation: accepted.dig("recovery", "retry_generation"),
+        session_ref: "omp-session-start-denied-0001", suffix: "denied-0001"
+      )
+      foreign_retry["runtime_project_id"] = "foreign-runtime-project-0002"
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.retry_bind(foreign_retry) }
+      assert_equal "authorization_conflict", error.code
+    end
+
+    with_hub do |root, config|
+      project = initialize_repository(root, "start-terminal-owner")
+      config = register_repository(config, "start-terminal-owner", project)
+      config = write_declarations(config, [declaration("start-terminal-owner", project)])
+      write_project_verifications(config, "start-terminal-owner" => verified_project("start-terminal-owner", project))
+      Flightdeck::BridgeStore.new(config).install(repository_id: "start-terminal-owner", mode: "reference", profile: "application")
+      config = Flightdeck::Config.new(root: root)
+      store = Flightdeck::WorkStore.new(config)
+      fixture = propose_work_operation(store, suffix: "start-terminal-0001", project_keys: ["start-terminal-owner"])
+      request, = omp_execution_request(store, fixture, suffix: "start-terminal-0001")
+      execution = Flightdeck::OperationExecution.new(config)
+      plan = execution.plan(request)
+      agent = plan.fetch("agents").first
+      failed = execution.start_report(execution_start_report_request(
+        plan, agent, suffix: "terminal-0001", retryable: false,
+        failure_code: "adapter_unavailable", summary: "Declared adapter could not start."
+      ))
+      assert_equal "failed", failed.dig("recovery", "state")
+      assert_nil failed.dig("recovery", "retry_generation")
+      detail = Flightdeck::OperationDetail.new(config).detail(
+        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST, "operation_id" => plan.fetch("operation_id")
+      )
+      assert_equal "failed", detail.dig("operation", "status")
+      retry_request = execution_retry_bind_request(
+        plan, agent, retry_generation: "operation-execution-retry-generation-#{'a' * 48}",
+        session_ref: "omp-session-terminal-denied-0001", suffix: "terminal-denied-0001"
+      )
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.retry_bind(retry_request) }
+      assert_equal "retry_not_authorized", error.code
+    end
+  end
+
+  def test_operation_start_failure_history_is_bounded_and_legacy_record_upgrades_on_authorized_write
+    with_hub do |root, config|
+      project = initialize_repository(root, "start-bounded-owner")
+      config = register_repository(config, "start-bounded-owner", project)
+      config = write_declarations(config, [declaration("start-bounded-owner", project)])
+      write_project_verifications(config, "start-bounded-owner" => verified_project("start-bounded-owner", project))
+      Flightdeck::BridgeStore.new(config).install(repository_id: "start-bounded-owner", mode: "reference", profile: "application")
+      config = Flightdeck::Config.new(root: root)
+      store = Flightdeck::WorkStore.new(config)
+      fixture = propose_work_operation(store, suffix: "start-bounded-0001", project_keys: ["start-bounded-owner"])
+      request, = omp_execution_request(store, fixture, suffix: "start-bounded-0001")
+      execution = Flightdeck::OperationExecution.new(config)
+      plan = execution.plan(request)
+      agent = plan.fetch("agents").first
+
+      generation = nil
+      Flightdeck::OperationExecution::MAX_START_FAILURES.times do |index|
+        result = execution.start_report(execution_start_report_request(
+          plan, agent, suffix: format("bounded-%04d", index + 1), retry_generation: generation,
+          failed_at: format("2026-08-10T16:00:%02dZ", index + 1)
+        ))
+        generation = result.dig("recovery", "retry_generation")
+      end
+      overflow = execution_start_report_request(
+        plan, agent, suffix: "bounded-overflow", retry_generation: generation,
+        failed_at: "2026-08-10T16:00:09Z"
+      )
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(overflow) }
+      assert_equal "start_failure_limit_exceeded", error.code
+      opened = execution.start_open(
+        "schema_version" => Flightdeck::OperationExecution::START_OPEN_REQUEST,
+        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
+        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id"),
+        "agent_id" => agent.fetch("agent_id")
+      )
+      assert_equal Flightdeck::OperationExecution::MAX_START_FAILURES, opened.fetch("failures").length
+    end
+
+    with_hub do |root, config|
+      project = initialize_repository(root, "start-legacy-owner")
+      config = register_repository(config, "start-legacy-owner", project)
+      config = write_declarations(config, [declaration("start-legacy-owner", project)])
+      write_project_verifications(config, "start-legacy-owner" => verified_project("start-legacy-owner", project))
+      Flightdeck::BridgeStore.new(config).install(repository_id: "start-legacy-owner", mode: "reference", profile: "application")
+      config = Flightdeck::Config.new(root: root)
+      store = Flightdeck::WorkStore.new(config)
+      fixture = propose_work_operation(store, suffix: "start-legacy-0001", project_keys: ["start-legacy-owner"])
+      request, = omp_execution_request(store, fixture, suffix: "start-legacy-0001")
+      execution = Flightdeck::OperationExecution.new(config)
+      plan = execution.plan(request)
+      record_path = Dir.glob(File.join(root, "hub/state/operation-execution/*.json")).first
+      record = JSON.parse(File.read(record_path))
+      record["schema_version"] = Flightdeck::OperationExecution::LEGACY_RECORD_VERSION
+      record.fetch("agents").each { |item| item.delete("start") }
+      record["record_digest"] = nil
+      record["record_digest"] = Digest::SHA256.hexdigest(execution.send(:canonical_json, record))
+      Flightdeck::Support.atomic_write(record_path, "#{JSON.pretty_generate(record)}\n")
+
+      agent = plan.fetch("agents").first
+      initial = execution.start_open(
+        "schema_version" => Flightdeck::OperationExecution::START_OPEN_REQUEST,
+        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
+        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id"),
+        "agent_id" => agent.fetch("agent_id")
+      )
+      assert_equal "initial", initial.dig("recovery", "state")
+      execution.start_report(execution_start_report_request(plan, agent, suffix: "legacy-upgrade-0001"))
+      migrated = JSON.parse(File.read(record_path))
+      assert_equal Flightdeck::OperationExecution::RECORD_VERSION, migrated["schema_version"]
+      assert_equal "retry_authorized", migrated.dig("agents", 0, "start", "state")
+      assert_equal 1, migrated.dig("agents", 0, "start", "failures").length
+    end
+  end
+
+  def test_operation_execution_rejects_proposal_only_declined_tampered_foreign_and_untrusted_input
     with_hub do |root, config|
       project = initialize_repository(root, "omp-denied-owner")
       config = register_repository(config, "omp-denied-owner", project)
@@ -2716,7 +3222,8 @@ class FlightdeckTest < Minitest::Test
       work = Flightdeck::WorkStore.new(config, random_hex: ->(_bytes) { "2" * 24 })
       proposed = propose_work_operation(work, suffix: "omp-denied-0001", project_keys: ["omp-denied-owner"])
       fake = {
-        "schema_version" => Flightdeck::OmpOperationExecution::PLAN_REQUEST,
+        "schema_version" => Flightdeck::OperationExecution::PLAN_REQUEST,
+        "adapter" => operation_execution_adapter,
         "work_id" => proposed.dig("work", "work", "work_id"),
         "operation_id" => proposed.dig("proposal", "operation_id"),
         "confirmation" => proposed.fetch("confirmation"),
@@ -2725,15 +3232,15 @@ class FlightdeckTest < Minitest::Test
         "idempotency_key" => "omp-execution-denied-0001",
         "agents" => []
       }
-      execution = Flightdeck::OmpOperationExecution.new(config)
-      error = assert_raises(Flightdeck::OmpOperationExecution::ContractError) { execution.plan(fake) }
+      execution = Flightdeck::OperationExecution.new(config)
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.plan(fake) }
       assert_equal "proposal_not_launched", error.code
       work.decline(
         "schema_version" => Flightdeck::WorkStore::DECLINE_REQUEST,
         "work_id" => fake.fetch("work_id"), "operation_id" => fake.fetch("operation_id"),
         "confirmation" => fake.fetch("confirmation")
       )
-      error = assert_raises(Flightdeck::OmpOperationExecution::ContractError) { execution.plan(fake) }
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.plan(fake) }
       assert_equal "proposal_not_launched", error.code
     end
 
@@ -2747,52 +3254,140 @@ class FlightdeckTest < Minitest::Test
       work = Flightdeck::WorkStore.new(config, random_hex: ->(_bytes) { "3" * 24 })
       fixture = propose_work_operation(work, suffix: "omp-tamper-0001", project_keys: ["omp-tamper-owner"])
       request, = omp_execution_request(work, fixture, suffix: "omp-tamper-0001")
-      execution = Flightdeck::OmpOperationExecution.new(config)
+      execution = Flightdeck::OperationExecution.new(config)
       tampered = Marshal.load(Marshal.dump(request))
       tampered.fetch("confirmation")["plan_digest"] = "f" * 64
-      error = assert_raises(Flightdeck::OmpOperationExecution::ContractError) { execution.plan(tampered) }
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.plan(tampered) }
       assert_equal "stale_or_tampered_confirmation", error.code
       foreign = Marshal.load(Marshal.dump(request))
       foreign["work_id"] = "work-#{'f' * 24}"
-      error = assert_raises(Flightdeck::OmpOperationExecution::ContractError) { execution.plan(foreign) }
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.plan(foreign) }
       assert_equal "operation_identity_conflict", error.code
       untrusted = Marshal.load(Marshal.dump(request))
       untrusted.dig("agents", 0)["authorized_task"] = "Bearer #{'a' * 32}"
-      error = assert_raises(Flightdeck::OmpOperationExecution::ContractError) { execution.plan(untrusted) }
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.plan(untrusted) }
       assert_equal "untrusted_payload", error.code
       oversized = Marshal.load(Marshal.dump(request))
-      oversized.dig("agents", 0)["authorized_task"] = "x" * (Flightdeck::OmpOperationExecution::MAX_TASK_BYTES + 1)
-      error = assert_raises(Flightdeck::OmpOperationExecution::ContractError) { execution.plan(oversized) }
+      oversized.dig("agents", 0)["authorized_task"] = "x" * (Flightdeck::OperationExecution::MAX_TASK_BYTES + 1)
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.plan(oversized) }
       assert_equal "untrusted_payload", error.code
       malformed = Marshal.load(Marshal.dump(request))
       malformed["unexpected"] = true
-      error = assert_raises(Flightdeck::OmpOperationExecution::ContractError) { execution.plan(malformed) }
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.plan(malformed) }
       assert_equal "malformed_request", error.code
-      assert_empty Dir.glob(File.join(root, "hub/state/omp-operation-execution/*.json"))
+      assert_empty Dir.glob(File.join(root, "hub/state/operation-execution/*.json"))
     end
   end
 
   def test_omp_operation_contract_schemas_cli_and_runtime_compatibility_are_closed
     compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
-    assert_equal "1.8.0", compatibility["template_version"]
+    assert_equal "1.11.0", compatibility["template_version"]
     assert_equal "codex", compatibility.dig("runtime_capabilities", "conversation", "adapter")
-    assert_equal "omp", compatibility.dig("runtime_capabilities", "operation_execution", "adapter")
+    assert_equal "omp", compatibility.dig("runtime_capabilities", "operation_execution", "selected_adapter")
     assert_equal true, compatibility.dig("runtime_capabilities", "adapters", "omp", "available")
-    execution = compatibility.dig("capabilities", Flightdeck::OmpOperationExecution::EXECUTION_CAPABILITY)
-    observation = compatibility.dig("capabilities", Flightdeck::OmpOperationExecution::OBSERVATION_CAPABILITY)
+    assert_equal false, compatibility.dig("runtime_capabilities", "adapters", "codex_app_server", "available")
+    execution_types = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "operation-execution-types.schema.json")))
+    adapter_projections = execution_types.dig("$defs", "runtimeCapabilitiesProjection", "properties", "adapters", "properties")
+    assert_equal "flightdeck.adapter.omp.configuration/v1",
+                 adapter_projections.dig("omp", "allOf", 1, "properties", "configuration_schema", "const")
+    assert_equal "flightdeck.adapter.codex-app-server.configuration/v1",
+                 adapter_projections.dig("codex_app_server", "allOf", 1, "properties", "configuration_schema", "const")
+    execution = compatibility.dig("capabilities", Flightdeck::OperationExecution::EXECUTION_CAPABILITY)
+    observation = compatibility.dig("capabilities", Flightdeck::OperationExecution::OBSERVATION_CAPABILITY)
+    start_recovery = compatibility.dig("capabilities", Flightdeck::OperationExecution::START_RECOVERY_CAPABILITY)
     assert_equal true, execution["declaration_required"]
     assert_equal true, observation["declaration_required"]
+    assert_equal true, start_recovery["declaration_required"]
     assert_equal({ "mode" => "stop_and_plan_migration" }, execution["fallback"])
     assert_equal({ "mode" => "stop_and_plan_migration" }, observation["fallback"])
-    Flightdeck::OmpOperationExecution::SCHEMAS.each do |name|
+    assert_equal({ "mode" => "stop_and_plan_migration" }, start_recovery["fallback"])
+    Flightdeck::OperationExecution::SCHEMAS.each do |name|
       schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", name)))
       assert_equal "https://flightdeck.dev/schemas/#{name}", schema["$id"]
-      assert_includes execution["managed_paths"] + observation["managed_paths"], "hub/schemas/#{name}"
+      assert_includes execution["managed_paths"] + observation["managed_paths"] + start_recovery["managed_paths"], "hub/schemas/#{name}"
     end
     help = StringIO.new
     assert_equal 0, Flightdeck::CLI.new(root: TEMPLATE_ROOT, out: help, err: StringIO.new).run(["help"])
-    %w[execution-plan execution-bind execution-observe execution-open].each do |name|
+    %w[execution-plan execution-bind execution-start-report execution-start-open execution-retry-bind execution-observe execution-open].each do |name|
       assert_includes help.string, "bin/flightdeck operation #{name} --request FILE"
+    end
+  end
+
+  def test_operation_execution_rejects_unsupported_unavailable_and_mismatched_adapters
+    with_hub do |root, config|
+      compatibility_path = File.join(root, "hub", "compatibility.json")
+      compatibility = JSON.parse(File.read(compatibility_path))
+      compatibility.dig("runtime_capabilities", "operation_execution")["selected_adapter"] = "codex_app_server"
+      Flightdeck::Support.atomic_write(compatibility_path, "#{JSON.pretty_generate(compatibility)}\n")
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) do
+        Flightdeck::OperationExecution.new(config).plan({})
+      end
+      assert_equal "adapter_unavailable", error.code
+    end
+
+    with_hub do |_root, config|
+      execution = Flightdeck::OperationExecution.new(config)
+      unsupported = operation_execution_adapter.merge("id" => "foreign_runtime")
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) do
+        execution.send(:verify_adapter!, unsupported, operation_execution_adapter)
+      end
+      assert_equal "unsupported_adapter", error.code
+
+      mismatched = operation_execution_adapter.merge(
+        "id" => "codex_app_server",
+        "configuration_schema" => "flightdeck.adapter.codex-app-server.configuration/v1"
+      )
+      error = assert_raises(Flightdeck::OperationExecution::ContractError) do
+        execution.send(:verify_adapter!, mismatched, operation_execution_adapter)
+      end
+      assert_equal "authorization_conflict", error.code
+    end
+  end
+
+  def test_operation_execution_uses_available_codex_app_server_through_the_same_lifecycle
+    with_hub do |root, config|
+      project = initialize_repository(root, "codex-operation-owner")
+      config = register_repository(config, "codex-operation-owner", project)
+      config = write_declarations(config, [declaration("codex-operation-owner", project)])
+      write_project_verifications(config, "codex-operation-owner" => verified_project("codex-operation-owner", project))
+      Flightdeck::BridgeStore.new(config).install(repository_id: "codex-operation-owner", mode: "reference", profile: "application")
+      store = Flightdeck::WorkStore.new(config)
+      fixture = propose_work_operation(store, suffix: "codex-adapter-0001", project_keys: ["codex-operation-owner"])
+      request, = omp_execution_request(store, fixture, suffix: "codex-adapter-0001")
+
+      compatibility_path = File.join(root, "hub", "compatibility.json")
+      compatibility = JSON.parse(File.read(compatibility_path))
+      runtime = compatibility.fetch("runtime_capabilities")
+      runtime.fetch("operation_execution")["selected_adapter"] = "codex_app_server"
+      runtime.dig("adapters", "omp")["available"] = false
+      runtime.dig("adapters", "omp")["structured_channels"] = []
+      runtime.dig("adapters", "codex_app_server")["available"] = true
+      runtime.dig("adapters", "codex_app_server")["structured_channels"] = [
+        "flightdeck.runtime.codex-app-server-operation-observation/v1"
+      ]
+      Flightdeck::Support.atomic_write(compatibility_path, "#{JSON.pretty_generate(compatibility)}\n")
+
+      adapter = {
+        "id" => "codex_app_server",
+        "configuration_schema" => "flightdeck.adapter.codex-app-server.configuration/v1",
+        "execution_capability" => Flightdeck::OperationExecution::EXECUTION_CAPABILITY,
+        "observation_capability" => Flightdeck::OperationExecution::OBSERVATION_CAPABILITY
+      }
+      request["adapter"] = adapter
+      request["idempotency_key"] = "codex-execution-plan-0001"
+      request.fetch("agents").each do |agent|
+        agent.dig("adapter_configuration")["adapter_id"] = "codex_app_server"
+        agent.dig("adapter_configuration")["schema_version"] = "flightdeck.adapter.codex-app-server.configuration/v1"
+      end
+
+      plan = Flightdeck::OperationExecution.new(config).plan(request)
+      assert_equal adapter, plan["adapter"]
+      assert_equal "codex_app_server", plan.dig("agents", 0, "adapter_configuration", "adapter_id")
+      hub_runtime = Flightdeck::HubSnapshot.new(config).send(:runtime_capabilities!, compatibility)
+      assert_equal "codex_app_server", hub_runtime.dig("operation_execution", "selected_adapter")
+      operations = Flightdeck::OperationsSnapshot.new(config).snapshot
+      assert_equal "codex_app_server", operations.dig("runtime_capabilities", "operation_execution", "selected_adapter")
+      assert_equal "codex_app_server", operations.dig("operations", 0, "children", 0, "execution", "adapter", "id")
     end
   end
 
@@ -2812,7 +3407,7 @@ class FlightdeckTest < Minitest::Test
       )
       fixture = propose_work_operation(work, suffix: "omp-concurrent-0001", project_keys: projects.keys.sort)
       request, = omp_execution_request(work, fixture, suffix: "omp-concurrent-0001")
-      plan = Flightdeck::OmpOperationExecution.new(config).plan(request)
+      plan = Flightdeck::OperationExecution.new(config).plan(request)
       assert_equal 2, plan.dig("policy", "max_concurrency")
       assert_equal [0, 0], plan.fetch("agents").map { |agent| agent.fetch("execution_order") }
       assert_equal [[], []], plan.fetch("agents").map { |agent| agent.fetch("dependencies") }
@@ -2827,15 +3422,15 @@ class FlightdeckTest < Minitest::Test
       proposal = operation_proposal(target, title: "No OMP execution record")
       plan = operation_plan(authoring, proposal)
       authoring.launch(operation_launch_request(plan, proposal))
-      original = Flightdeck::OmpOperationExecution.instance_method(:verify_capabilities!)
-      Flightdeck::OmpOperationExecution.define_method(:verify_capabilities!) do
+      original = Flightdeck::OperationExecution.instance_method(:verify_capabilities!)
+      Flightdeck::OperationExecution.define_method(:verify_capabilities!) do
         raise "OMP capability validation must not run for a non-OMP Mission"
       end
       status = Flightdeck::MissionStore.new(config).status(plan.fetch("operation_id"))
       assert_equal "planned", status.dig("status", "state")
-      assert_nil status.dig("spec", "graph", "nodes", 0, "omp_execution")
+      assert_nil status.dig("spec", "graph", "nodes", 0, "operation_execution")
     ensure
-      Flightdeck::OmpOperationExecution.define_method(:verify_capabilities!, original) if original
+      Flightdeck::OperationExecution.define_method(:verify_capabilities!, original) if original
     end
   end
 
@@ -2843,7 +3438,7 @@ class FlightdeckTest < Minitest::Test
     compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
     capability = compatibility.dig("capabilities", Flightdeck::WorkStore::CAPABILITY)
     lifecycle = compatibility.dig("capabilities", Flightdeck::WorkStore::LIFECYCLE_CAPABILITY)
-    assert_equal "1.8.0", compatibility["template_version"]
+    assert_equal "1.11.0", compatibility["template_version"]
     assert_equal({ "mode" => "stop_and_plan_migration" }, capability["fallback"])
     assert_includes capability["managed_paths"], "lib/flightdeck/work_store.rb"
     assert_equal "bin/flightdeck work lifecycle-open ", lifecycle.dig("probe", "help_contains")

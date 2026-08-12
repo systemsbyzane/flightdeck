@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/operation-execution-start-report-result.schema.json",
+  "title": "Flightdeck persisted pre-bind agent start failure result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "schema", "ok", "capability", "adapter", "operation_id", "execution_id", "agent_id", "failure", "recovery", "replayed"],
+  "properties": {
+    "schema_version": {"const": "flightdeck.operation-execution.start-report-result/v1"},
+    "schema": {"const": "hub/schemas/operation-execution-start-report-result.schema.json"},
+    "ok": {"const": true},
+    "capability": {"const": "flightdeck.command.operation-start-recovery.v1"},
+    "adapter": {"$ref": "operation-execution-types.schema.json#/$defs/adapterDescriptor"},
+    "operation_id": {"$ref": "operation-execution-types.schema.json#/$defs/operationId"},
+    "execution_id": {"$ref": "operation-execution-types.schema.json#/$defs/executionId"},
+    "agent_id": {"$ref": "operation-execution-types.schema.json#/$defs/agentId"},
+    "failure": {"$ref": "operation-execution-types.schema.json#/$defs/startFailure"},
+    "recovery": {"$ref": "operation-execution-types.schema.json#/$defs/startRecovery"},
+    "replayed": {"type": "boolean"}
+  }
+}
