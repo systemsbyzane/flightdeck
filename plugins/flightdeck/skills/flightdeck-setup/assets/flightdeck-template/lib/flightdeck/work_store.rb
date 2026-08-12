@@ -1063,9 +1063,10 @@ module Flightdeck
                         @config.workloads.find { |_name, workload| workload["default_project_key"] == logical_key }&.first || "development"
                       end
       work_type = node.fetch("work_type")
+      route_work_type = node.fetch("execution_mode") == "worktree" ? "implementation" : "read_only"
       route = RoutePlanner.new(@config).plan(
         workload_name: workload_name,
-        work_type: work_type,
+        work_type: route_work_type,
         repository_id: repository_id,
         project_key: repository_id ? nil : logical_key
       )
@@ -1088,6 +1089,7 @@ module Flightdeck
         "execution_mode" => node.fetch("execution_mode"),
         "access_mode" => node.fetch("access_mode"),
         "work_type" => work_type,
+        "dependencies" => Array(node["dependencies"]).sort,
         "route" => {
           "repository_id" => repository_id,
           "project_key" => route.fetch("project_key"),
