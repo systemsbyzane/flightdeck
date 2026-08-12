@@ -1591,7 +1591,8 @@ class FlightdeckTest < Minitest::Test
     observation
   end
 
-  def propose_work_operation(store, suffix:, project_keys:, observed_at: "2026-08-09T12:00:00Z")
+  def propose_work_operation(store, suffix:, project_keys:, observed_at: "2026-08-09T12:00:00Z",
+                             access_mode: "write", execution_mode: "worktree")
     created = store.create(
       "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
       "request_key" => "request-work-lifecycle-#{suffix}",
@@ -1609,8 +1610,8 @@ class FlightdeckTest < Minitest::Test
       "title" => "Lifecycle #{suffix}",
       "work_intent" => "Exercise the exact persisted Work to Operation lifecycle.",
       "target_project_keys" => project_keys,
-      "access_mode" => "write",
-      "execution_mode" => "worktree",
+      "access_mode" => access_mode,
+      "execution_mode" => execution_mode,
       "success_criteria" => ["Every exact lifecycle transition is persisted and recoverable."],
       "non_goals" => ["Do not perform unconfirmed or live dispatch."]
     }
@@ -1662,7 +1663,7 @@ class FlightdeckTest < Minitest::Test
       "agents" => dispatch.fetch("targets").map do |target|
         {
           "node_id" => target.fetch("node_id"),
-          "authorized_task" => "Implement only the confirmed bounded Operation scope for #{target.fetch('logical_project_key')}.",
+          "authorized_task" => "Perform only the confirmed bounded Operation scope for #{target.fetch('logical_project_key')}.",
           "adapter_configuration" => {
             "adapter_id" => "omp",
             "schema_version" => "flightdeck.adapter.omp.configuration/v1",
@@ -1861,10 +1862,10 @@ class FlightdeckTest < Minitest::Test
         "recommendation_id" => "runtime-operation-recommendation-0001",
         "disposition" => "operation",
         "observed_at" => "2026-08-09T12:00:00Z",
-        "title" => "Implement Hub management",
-        "work_intent" => "Implement and validate the declared Hub management contract.",
+        "title" => "Review Hub management",
+        "work_intent" => "Inspect and validate the declared Hub management contract.",
         "target_project_keys" => %w[flightdeck-client flightdeck-plugin],
-        "access_mode" => "write",
+        "access_mode" => "read_only",
         "execution_mode" => "worktree",
         "success_criteria" => ["The declared contract is validated in every exact owner."],
         "non_goals" => ["Do not commit, push, publish, deploy, or communicate externally."]
@@ -2412,7 +2413,9 @@ class FlightdeckTest < Minitest::Test
         config, clock: clock,
         random_hex: ->(_bytes) { sequence += 1; format("%024x", sequence) }
       )
-      fixture = propose_work_operation(store, suffix: "dispatch-0001", project_keys: projects.keys.sort)
+      fixture = propose_work_operation(
+        store, suffix: "dispatch-0001", project_keys: projects.keys.sort, access_mode: "read_only"
+      )
       work_id = fixture.dig("work", "work", "work_id")
       operation_id = fixture.dig("proposal", "operation_id")
       launch_request = {
@@ -2678,7 +2681,9 @@ class FlightdeckTest < Minitest::Test
         config, clock: clock,
         random_hex: ->(_bytes) { sequence += 1; format("%024x", sequence) }
       )
-      fixture = propose_work_operation(work, suffix: "omp-0001", project_keys: ["omp-operation-owner"])
+      fixture = propose_work_operation(
+        work, suffix: "omp-0001", project_keys: ["omp-operation-owner"], access_mode: "read_only"
+      )
       error = assert_raises(Flightdeck::WorkStore::ContractError) do
         work.bind_adapter(
           "schema_version" => Flightdeck::WorkStore::ADAPTER_BIND_REQUEST,
@@ -2853,7 +2858,9 @@ class FlightdeckTest < Minitest::Test
       config = Flightdeck::Config.new(root: root)
       clock = -> { Time.iso8601("2026-08-10T16:00:10Z") }
       store = Flightdeck::WorkStore.new(config, clock: clock)
-      fixture = propose_work_operation(store, suffix: "detail-live-0001", project_keys: ["operation-detail-live-owner"])
+      fixture = propose_work_operation(
+        store, suffix: "detail-live-0001", project_keys: ["operation-detail-live-owner"], access_mode: "read_only"
+      )
       request, = omp_execution_request(store, fixture, suffix: "detail-live-0001")
       execution = Flightdeck::OperationExecution.new(config, clock: clock)
       plan = execution.plan(request)
@@ -2911,7 +2918,9 @@ class FlightdeckTest < Minitest::Test
       Flightdeck::BridgeStore.new(config).install(repository_id: "operation-detail-stale-owner", mode: "reference", profile: "application")
       config = Flightdeck::Config.new(root: root)
       store = Flightdeck::WorkStore.new(config, clock: -> { Time.iso8601("2026-08-10T16:00:00Z") })
-      fixture = propose_work_operation(store, suffix: "detail-stale-0001", project_keys: ["operation-detail-stale-owner"])
+      fixture = propose_work_operation(
+        store, suffix: "detail-stale-0001", project_keys: ["operation-detail-stale-owner"], access_mode: "read_only"
+      )
       request, = omp_execution_request(store, fixture, suffix: "detail-stale-0001")
       execution = Flightdeck::OperationExecution.new(config, clock: -> { Time.iso8601("2026-08-10T16:00:00Z") })
       plan = execution.plan(request)
@@ -3408,12 +3417,22 @@ class FlightdeckTest < Minitest::Test
       fixture = propose_work_operation(work, suffix: "omp-concurrent-0001", project_keys: projects.keys.sort)
       request, = omp_execution_request(work, fixture, suffix: "omp-concurrent-0001")
       plan = Flightdeck::OperationExecution.new(config).plan(request)
-      assert_equal 2, plan.dig("policy", "max_concurrency")
-      assert_equal [0, 0], plan.fetch("agents").map { |agent| agent.fetch("execution_order") }
-      assert_equal [[], []], plan.fetch("agents").map { |agent| agent.fetch("dependencies") }
+      assert_equal 4, plan.dig("policy", "max_concurrency")
+      agents = plan.fetch("agents")
+      assert_equal 4, agents.length
+      assert_equal [0, 0, 1, 1], agents.map { |agent| agent.fetch("execution_order") }
+      assert_equal %w[implementation implementation review review], agents.map { |agent| agent.dig("native_authorization", "work_type") }
+      implementations = agents.select { |agent| agent.fetch("dependencies").empty? }
+      reviewers = agents.reject { |agent| agent.fetch("dependencies").empty? }
+      assert_equal projects.keys.sort, implementations.map { |agent| agent.fetch("logical_project_key") }.sort
+      reviewers.each do |reviewer|
+        owner = implementations.find { |agent| agent.fetch("logical_project_key") == reviewer.fetch("logical_project_key") }
+        assert_equal [owner.fetch("node_id")], reviewer.fetch("dependencies")
+        assert_equal "read_only", reviewer.dig("native_authorization", "access_mode")
+      end
       mission = Flightdeck::MissionStore.new(config).snapshot(plan.fetch("operation_id"))
-      assert_equal [nil, nil], mission.dig("spec", "graph", "nodes").map { |node| node["task_id"] }
-      assert_equal [nil, nil], mission.dig("spec", "graph", "nodes").map { |node| node["pending_client_id"] }
+      assert_equal [nil] * 4, mission.dig("spec", "graph", "nodes").map { |node| node["task_id"] }
+      assert_equal [nil] * 4, mission.dig("spec", "graph", "nodes").map { |node| node["pending_client_id"] }
     end
   end
 

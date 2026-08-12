@@ -241,7 +241,7 @@
     },
     "dispatchTarget": {
       "type": "object", "additionalProperties": false,
-      "required": ["dispatch_id", "node_id", "logical_project_key", "runtime_project_id", "project_path_digest", "host_id", "authorization_boundary", "execution_mode", "access_mode", "work_type", "route"],
+      "required": ["dispatch_id", "node_id", "logical_project_key", "runtime_project_id", "project_path_digest", "host_id", "authorization_boundary", "execution_mode", "access_mode", "work_type", "dependencies", "route"],
       "properties": {
         "dispatch_id": {"type": "string", "pattern": "^dispatch-[0-9a-f]{24}$"},
         "node_id": {"$ref": "#/$defs/logicalProjectKey"},
@@ -252,7 +252,8 @@
         "authorization_boundary": {"$ref": "#/$defs/authorizationBoundary"},
         "execution_mode": {"enum": ["local", "worktree", "remote"]},
         "access_mode": {"enum": ["read_only", "write"]},
-        "work_type": {"enum": ["read_only", "implementation", "compliance", "artifact", "runtime_validation", "coordination"]},
+        "work_type": {"enum": ["research", "implementation", "review"]},
+        "dependencies": {"type": "array", "maxItems": 50, "uniqueItems": true, "items": {"$ref": "#/$defs/logicalProjectKey"}},
         "route": {"$ref": "#/$defs/dispatchRoute"}
       }
     },

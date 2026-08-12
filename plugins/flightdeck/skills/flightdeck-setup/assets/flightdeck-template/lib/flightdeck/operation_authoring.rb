@@ -111,6 +111,11 @@ module Flightdeck
       operation_id = "operation-#{proposal_digest[0, 24]}"
       mission_id = "operation-#{proposal_digest[0, 24]}"
       store = MissionStore.new(config, clock: @clock)
+      authorized_targets = operation_authorized_targets(selected)
+      nodes = operation_nodes(selected, canonical_proposal.fetch("success_criteria"))
+      if authorized_targets.length > MAX_ITEMS || nodes.length > MAX_ITEMS
+        raise ContractError.new("malformed_request", "Operation target and agent graph exceeds its bounded contract")
+      end
       mission = store.preview_complete(
         slug: mission_id,
         title: canonical_proposal.fetch("title"),
@@ -118,10 +123,10 @@ module Flightdeck
         mode: canonical_proposal.fetch("mode"),
         success_criteria: canonical_proposal.fetch("success_criteria"),
         non_goals: canonical_proposal.fetch("non_goals"),
-        authorized_targets: selected.map { |target| target.slice(*TARGET_FIELDS) },
-        nodes: operation_nodes(selected, canonical_proposal.fetch("success_criteria"))
+        authorized_targets: authorized_targets,
+        nodes: nodes
       )
-      planned = planned_operation(mission, selected)
+      planned = planned_operation(mission)
       canonical_plan = {
         "capability" => CAPABILITY,
         "catalog_generation" => catalog_result.fetch("catalog_generation"),
@@ -475,20 +480,41 @@ module Flightdeck
       selected
     end
 
+    def operation_authorized_targets(selected)
+      selected.flat_map do |target|
+        identity = target.slice(*TARGET_FIELDS)
+        if target.fetch("access_mode") == "write" && target.fetch("execution_mode") == "worktree"
+          [identity, identity.merge("access_mode" => "read_only")]
+        else
+          [identity]
+        end
+      end.uniq.sort_by { |target| canonical_json(target) }
+    end
+
     def operation_nodes(selected, criteria)
       criterion_ids = criteria.each_index.map { |index| format("criterion-%03d", index + 1) }
-      selected.sort_by { |target| target.fetch("target_id") }.each_with_index.map do |target, index|
-        {
-          node_id: format("target-%03d", index + 1), logical_project_key: target.fetch("logical_project_key"),
-          runtime_project_id: target.fetch("runtime_project_id"), project_path_digest: target.fetch("project_path_digest"),
-          host_id: target.fetch("host_id"), execution_mode: target.fetch("execution_mode"), access_mode: target.fetch("access_mode"),
-          work_type: target.fetch("access_mode") == "write" ? "implementation" : "read_only", required: true,
-          dependencies: [], accepted_input_types: [], allowed_output_types: ["operation_result"], criterion_ids: criterion_ids
+      selected.sort_by { |target| target.fetch("target_id") }.each_with_index.flat_map do |target, index|
+        common = {
+          logical_project_key: target.fetch("logical_project_key"), runtime_project_id: target.fetch("runtime_project_id"),
+          project_path_digest: target.fetch("project_path_digest"), host_id: target.fetch("host_id"),
+          execution_mode: target.fetch("execution_mode"), required: true, criterion_ids: criterion_ids
         }
+        if target.fetch("access_mode") == "write" && target.fetch("execution_mode") == "worktree"
+          implementation_id = format("implementation-%03d", index + 1)
+          [
+            common.merge(node_id: implementation_id, access_mode: "write", work_type: "implementation",
+                         dependencies: [], accepted_input_types: [], allowed_output_types: ["operation_result"]),
+            common.merge(node_id: format("review-%03d", index + 1), access_mode: "read_only", work_type: "review",
+                         dependencies: [implementation_id], accepted_input_types: ["operation_result"], allowed_output_types: ["operation_result"])
+          ]
+        else
+          [common.merge(node_id: format("research-%03d", index + 1), access_mode: "read_only", work_type: "research",
+                        dependencies: [], accepted_input_types: [], allowed_output_types: ["operation_result"])]
+        end
       end
     end
 
-    def planned_operation(mission, selected)
+    def planned_operation(mission)
       spec = mission.fetch("spec")
       {
         "mission_id" => mission.dig("metadata", "id"),
@@ -498,9 +524,9 @@ module Flightdeck
         "mode" => spec.fetch("mode"),
         "success_criteria" => spec.fetch("success_criteria"),
         "non_goals" => spec.fetch("non_goals"),
-        "authorized_targets" => selected.map { |target| target.slice(*TARGET_FIELDS) }.sort_by { |target| canonical_json(target) },
+        "authorized_targets" => spec.fetch("authorized_targets"),
         "authorization_boundary" => spec.fetch("authorization_boundary"),
-        "nodes" => spec.dig("graph", "nodes").map { |node| node.slice("id", *TARGET_FIELDS, "work_type", "required", "criterion_ids") }
+        "nodes" => spec.dig("graph", "nodes").map { |node| node.slice("id", *TARGET_FIELDS, "work_type", "required", "dependencies", "accepted_input_types", "allowed_output_types", "criterion_ids") }
       }
     end
 
@@ -510,7 +536,8 @@ module Flightdeck
           node_id: node.fetch("id"), logical_project_key: node.fetch("logical_project_key"), runtime_project_id: node.fetch("runtime_project_id"),
           project_path_digest: node.fetch("project_path_digest"), host_id: node.fetch("host_id"), execution_mode: node.fetch("execution_mode"),
           access_mode: node.fetch("access_mode"), work_type: node.fetch("work_type"), required: node.fetch("required"),
-          dependencies: [], accepted_input_types: [], allowed_output_types: ["operation_result"], criterion_ids: node.fetch("criterion_ids")
+          dependencies: node.fetch("dependencies"), accepted_input_types: node.fetch("accepted_input_types"),
+          allowed_output_types: node.fetch("allowed_output_types"), criterion_ids: node.fetch("criterion_ids")
         }
       end
     end
@@ -526,7 +553,7 @@ module Flightdeck
         "mode" => spec.fetch("mode"), "success_criteria" => spec.fetch("success_criteria"), "non_goals" => spec.fetch("non_goals"),
         "authorized_targets" => spec.fetch("authorized_targets").sort_by { |target| canonical_json(target) },
         "authorization_boundary" => spec.fetch("authorization_boundary"),
-        "nodes" => spec.dig("graph", "nodes").map { |node| node.slice("id", *TARGET_FIELDS, "work_type", "required", "criterion_ids") }
+        "nodes" => spec.dig("graph", "nodes").map { |node| node.slice("id", *TARGET_FIELDS, "work_type", "required", "dependencies", "accepted_input_types", "allowed_output_types", "criterion_ids") }
       }
       Digest::SHA256.hexdigest(canonical_json(projection))
     end
