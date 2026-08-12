@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/operation-execution-observe-request.schema.json",
+  "title": "Authenticated bounded Operation observation request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "adapter",
+    "work_id",
+    "operation_id",
+    "execution_id",
+    "execution_generation",
+    "execution_digest",
+    "agent_id",
+    "binding_generation",
+    "observation_id",
+    "sequence",
+    "lifecycle",
+    "action_summary",
+    "tool",
+    "subagents",
+    "attention",
+    "error_code",
+    "observed_at",
+    "final_result",
+    "adapter_session_ref",
+    "signature"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "flightdeck.operation-execution.observe-request/v1"
+    },
+    "adapter": {
+      "$ref": "operation-execution-types.schema.json#/$defs/adapterDescriptor"
+    },
+    "work_id": {
+      "$ref": "operation-execution-types.schema.json#/$defs/workId"
+    },
+    "operation_id": {
+      "$ref": "operation-execution-types.schema.json#/$defs/operationId"
+    },
+    "execution_id": {
+      "$ref": "operation-execution-types.schema.json#/$defs/executionId"
+    },
+    "execution_generation": {
+      "$ref": "operation-execution-types.schema.json#/$defs/executionGeneration"
+    },
+    "execution_digest": {
+      "$ref": "operation-execution-types.schema.json#/$defs/sha256"
+    },
+    "agent_id": {
+      "$ref": "operation-execution-types.schema.json#/$defs/agentId"
+    },
+    "binding_generation": {
+      "$ref": "operation-execution-types.schema.json#/$defs/bindingGeneration"
+    },
+    "observation_id": {
+      "$ref": "operation-execution-types.schema.json#/$defs/requestKey"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
+    "lifecycle": {
+      "enum": [
+        "queued",
+        "starting",
+        "running",
+        "waiting",
+        "needs_approval",
+        "blocked",
+        "review_ready",
+        "failed_validation",
+        "runtime_failure",
+        "cancelled",
+        "unknown_outcome"
+      ]
+    },
+    "action_summary": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tool": {
+      "$ref": "operation-execution-types.schema.json#/$defs/toolObservation"
+    },
+    "subagents": {
+      "$ref": "operation-execution-types.schema.json#/$defs/subagents"
+    },
+    "attention": {
+      "$ref": "operation-execution-types.schema.json#/$defs/attention"
+    },
+    "error_code": {
+      "oneOf": [
+        {
+          "$ref": "operation-execution-types.schema.json#/$defs/identifier"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "final_result": {
+      "$ref": "operation-execution-types.schema.json#/$defs/finalResult"
+    },
+    "adapter_session_ref": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 512,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,511}$"
+    },
+    "signature": {
+      "$ref": "operation-execution-types.schema.json#/$defs/sha256"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "lifecycle": {
+            "enum": [
+              "review_ready",
+              "failed_validation",
+              "runtime_failure",
+              "cancelled",
+              "unknown_outcome"
+            ]
+          }
+        },
+        "required": [
+          "lifecycle"
+        ]
+      },
+      "then": {
+        "properties": {
+          "final_result": {
+            "type": "object"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "final_result": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle": {
+            "const": "review_ready"
+          }
+        },
+        "required": [
+          "lifecycle"
+        ]
+      },
+      "then": {
+        "properties": {
+          "final_result": {
+            "type": "object",
+            "properties": {
+              "evidence_refs": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

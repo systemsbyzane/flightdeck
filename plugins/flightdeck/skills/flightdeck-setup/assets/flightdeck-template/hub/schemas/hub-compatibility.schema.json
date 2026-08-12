@@ -39,13 +39,36 @@
     "runtime_capabilities": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["primary_runtime", "adapters"],
+      "required": [
+        "primary_runtime",
+        "conversation",
+        "operation_execution",
+        "adapters"
+      ],
       "properties": {
-        "primary_runtime": {"const": "codex"},
+        "primary_runtime": {
+          "const": "codex"
+        },
+        "conversation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["adapter"],
+          "properties": {"adapter": {"const": "codex"}}
+        },
+        "operation_execution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["selected_adapter", "execution_capability", "observation_capability"],
+          "properties": {
+            "selected_adapter": {"enum": ["omp", "codex_app_server"]},
+            "execution_capability": {"const": "flightdeck.command.operation-execution.v1"},
+            "observation_capability": {"const": "flightdeck.command.operation-observation.v1"}
+          }
+        },
         "adapters": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["codex", "omp"],
+          "required": ["codex", "omp", "codex_app_server"],
           "properties": {
             "codex": {
               "type": "object",
@@ -67,12 +90,72 @@
             "omp": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["available"],
-              "properties": {"available": {"const": false}}
+              "required": [
+                "available",
+                "configuration_schema",
+                "execution_capability",
+                "observation_capability",
+                "structured_channels",
+                "optional_controls"
+              ],
+              "properties": {
+                "available": {"type": "boolean"},
+                "configuration_schema": {"const": "flightdeck.adapter.omp.configuration/v1"},
+                "execution_capability": {"const": "flightdeck.command.operation-execution.v1"},
+                "observation_capability": {"const": "flightdeck.command.operation-observation.v1"},
+                "structured_channels": {
+                  "type": "array",
+                  "maxItems": 1,
+                  "uniqueItems": true,
+                  "items": {"const": "flightdeck.runtime.omp-operation-observation/v1"}
+                },
+                "optional_controls": {
+                  "type": "array",
+                  "const": ["model", "reasoning_effort", "tool_policy"]
+                }
+              },
+              "allOf": [{
+                "if": {"properties": {"available": {"const": true}}, "required": ["available"]},
+                "then": {"properties": {"structured_channels": {"const": ["flightdeck.runtime.omp-operation-observation/v1"]}}},
+                "else": {"properties": {"structured_channels": {"maxItems": 0}}}
+              }]
+            },
+            "codex_app_server": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["available", "configuration_schema", "execution_capability", "observation_capability", "structured_channels", "optional_controls"],
+              "properties": {
+                "available": {"type": "boolean"},
+                "configuration_schema": {"const": "flightdeck.adapter.codex-app-server.configuration/v1"},
+                "execution_capability": {"const": "flightdeck.command.operation-execution.v1"},
+                "observation_capability": {"const": "flightdeck.command.operation-observation.v1"},
+                "structured_channels": {
+                  "type": "array",
+                  "maxItems": 1,
+                  "uniqueItems": true,
+                  "items": {"const": "flightdeck.runtime.codex-app-server-operation-observation/v1"}
+                },
+                "optional_controls": {"type": "array", "const": ["model", "reasoning_effort", "tool_policy"]}
+              },
+              "allOf": [{
+                "if": {"properties": {"available": {"const": true}}, "required": ["available"]},
+                "then": {"properties": {"structured_channels": {"const": ["flightdeck.runtime.codex-app-server-operation-observation/v1"]}}},
+                "else": {"properties": {"structured_channels": {"maxItems": 0}}}
+              }]
             }
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"operation_execution": {"properties": {"selected_adapter": {"const": "omp"}}}}, "required": ["operation_execution"]},
+          "then": {"properties": {"adapters": {"properties": {"omp": {"properties": {"available": {"const": true}}}}}}}
+        },
+        {
+          "if": {"properties": {"operation_execution": {"properties": {"selected_adapter": {"const": "codex_app_server"}}}}, "required": ["operation_execution"]},
+          "then": {"properties": {"adapters": {"properties": {"codex_app_server": {"properties": {"available": {"const": true}}}}}}}
+        }
+      ]
     }
   },
   "$defs": {

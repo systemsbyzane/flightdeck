@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/operation-execution-error-result.schema.json",
+  "title": "Flightdeck Operation fail-closed error result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "schema",
+    "ok",
+    "operation",
+    "error"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "flightdeck.operation-execution.error-result/v1"
+    },
+    "schema": {
+      "const": "hub/schemas/operation-execution-error-result.schema.json"
+    },
+    "ok": {
+      "const": false
+    },
+    "operation": {
+      "enum": [
+        "execution-plan",
+        "execution-bind",
+        "execution-start-report",
+        "execution-start-open",
+        "execution-retry-bind",
+        "execution-observe",
+        "execution-open"
+      ]
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "malformed_request",
+            "unsupported_schema",
+            "unsupported_hub_contract",
+            "adapter_unavailable",
+            "unsupported_adapter",
+            "proposal_not_launched",
+            "stale_or_tampered_confirmation",
+            "stale_or_mismatched_plan",
+            "operation_identity_conflict",
+            "duplicate_request_conflict",
+            "authorization_conflict",
+            "agent_unbound",
+            "agent_already_bound",
+            "retry_generation_required",
+            "stale_retry_generation",
+            "retry_not_authorized",
+            "start_failure_limit_exceeded",
+            "stale_binding",
+            "authentication_failed",
+            "out_of_order_observation",
+            "observation_limit_exceeded",
+            "untrusted_payload",
+            "execution_store_invalid",
+            "not_created",
+            "unknown_outcome",
+            "internal_error"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    }
+  }
+}

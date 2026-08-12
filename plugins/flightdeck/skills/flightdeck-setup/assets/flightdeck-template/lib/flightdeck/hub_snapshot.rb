@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "bridge_store"
+require_relative "operation_execution"
 
 module Flightdeck
   # Read-only, renderer-safe projection of a selected Hub.  This deliberately
@@ -133,28 +134,9 @@ module Flightdeck
     end
 
     def runtime_capabilities!(compatibility)
-      value = compatibility.fetch("runtime_capabilities")
-      adapters = value["adapters"]
-      controls = adapters.dig("codex", "optional_controls") if adapters.is_a?(Hash)
-      unless value["primary_runtime"] == "codex" && adapters.is_a?(Hash) &&
-             adapters.dig("codex", "available") == true && adapters.dig("omp", "available") == false
-        raise SnapshotError.new("unsupported_hub_contract", "Selected Hub has invalid runtime capability metadata.")
-      end
-      unless controls.is_a?(Array) && controls.uniq == controls &&
-             controls.all? { |control| %w[model reasoning_effort].include?(control) }
-        raise SnapshotError.new("unsupported_hub_contract", "Selected Hub has invalid runtime capability metadata.")
-      end
-
-      {
-        "primary_runtime" => "codex",
-        "adapters" => {
-          "codex" => {
-            "available" => true,
-            "optional_controls" => controls
-          },
-          "omp" => { "available" => false }
-        }
-      }
+      OperationExecution.runtime_capabilities_projection!(compatibility.fetch("runtime_capabilities"))
+    rescue OperationExecution::ContractError
+      raise SnapshotError.new("unsupported_hub_contract", "Selected Hub has invalid runtime capability metadata.")
     end
 
     def safe_label!(value, fallback)

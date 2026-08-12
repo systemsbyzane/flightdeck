@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/operation-execution-plan-result.schema.json",
+  "title": "Flightdeck native-only Operation execution plan result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "schema",
+    "ok",
+    "capability",
+    "adapter",
+    "work_id",
+    "operation_id",
+    "execution",
+    "authorization",
+    "runtime_boundary",
+    "policy",
+    "agents",
+    "replayed"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "flightdeck.operation-execution.execution-plan-result/v1"
+    },
+    "schema": {
+      "const": "hub/schemas/operation-execution-plan-result.schema.json"
+    },
+    "ok": {
+      "const": true
+    },
+    "capability": {
+      "const": "flightdeck.command.operation-execution.v1"
+    },
+    "adapter": {
+      "$ref": "operation-execution-types.schema.json#/$defs/adapterDescriptor"
+    },
+    "work_id": {
+      "$ref": "operation-execution-types.schema.json#/$defs/workId"
+    },
+    "operation_id": {
+      "$ref": "operation-execution-types.schema.json#/$defs/operationId"
+    },
+    "execution": {
+      "$ref": "operation-execution-types.schema.json#/$defs/executionIdentity"
+    },
+    "authorization": {
+      "$ref": "operation-execution-types.schema.json#/$defs/authorizationBinding"
+    },
+    "runtime_boundary": {
+      "$ref": "operation-execution-types.schema.json#/$defs/runtimeBoundary"
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strategy",
+        "max_concurrency"
+      ],
+      "properties": {
+        "strategy": {
+          "const": "parallel_independent"
+        },
+        "max_concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        }
+      }
+    },
+    "agents": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "agent_id",
+          "node_id",
+          "logical_project_key",
+          "dependencies",
+          "execution_order",
+          "authorized_task",
+          "adapter_configuration",
+          "native_authorization",
+          "binding_state"
+        ],
+        "properties": {
+          "agent_id": {
+            "$ref": "operation-execution-types.schema.json#/$defs/agentId"
+          },
+          "node_id": {
+            "$ref": "operation-execution-types.schema.json#/$defs/identifier"
+          },
+          "logical_project_key": {
+            "$ref": "operation-execution-types.schema.json#/$defs/identifier"
+          },
+          "dependencies": {
+            "type": "array",
+            "maxItems": 50,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "operation-execution-types.schema.json#/$defs/identifier"
+            }
+          },
+          "execution_order": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 49
+          },
+          "authorized_task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "adapter_configuration": {
+            "$ref": "operation-execution-types.schema.json#/$defs/adapterConfiguration"
+          },
+          "native_authorization": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "dispatch_id",
+              "runtime_project_id",
+              "project_path_digest",
+              "host_id",
+              "authorization_boundary",
+              "execution_mode",
+              "access_mode",
+              "work_type"
+            ],
+            "properties": {
+              "dispatch_id": {
+                "type": "string",
+                "pattern": "^dispatch-[0-9a-f]{24}$"
+              },
+              "runtime_project_id": {
+                "type": "string",
+                "minLength": 8,
+                "maxLength": 256
+              },
+              "project_path_digest": {
+                "$ref": "operation-execution-types.schema.json#/$defs/sha256"
+              },
+              "host_id": {
+                "$ref": "operation-execution-types.schema.json#/$defs/identifier"
+              },
+              "authorization_boundary": {
+                "$ref": "operation-execution-types.schema.json#/$defs/identifier"
+              },
+              "execution_mode": {
+                "enum": [
+                  "local",
+                  "worktree"
+                ]
+              },
+              "access_mode": {
+                "enum": [
+                  "read_only",
+                  "write"
+                ]
+              },
+              "work_type": {
+                "$ref": "operation-execution-types.schema.json#/$defs/identifier"
+              }
+            }
+          },
+          "binding_state": {
+            "enum": [
+              "unbound",
+              "bound"
+            ]
+          }
+        }
+      }
+    },
+    "replayed": {
+      "type": "boolean"
+    }
+  }
+}

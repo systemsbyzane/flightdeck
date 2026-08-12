@@ -7,6 +7,7 @@ require_relative "hub_snapshot"
 require_relative "operations_snapshot"
 require_relative "mission_authoring"
 require_relative "mission_objectives"
+require_relative "skill_telemetry"
 require_relative "operation_authoring"
 require_relative "operation_detail"
 require_relative "mission_sync"
@@ -15,6 +16,7 @@ require_relative "repository_store"
 require_relative "route_planner"
 require_relative "setup_store"
 require_relative "work_store"
+require_relative "operation_execution"
 
 module Flightdeck
   class CLI
@@ -532,6 +534,7 @@ module Flightdeck
       if %w[authoring-catalog authoring-plan authoring-create authoring-operation].include?(subcommand)
         return mission_authoring(config, subcommand, argv)
       end
+      return mission_skill_telemetry(config, argv) if subcommand == "skill-telemetry"
       store = MissionStore.new(config)
       case subcommand
       when "new"
@@ -567,6 +570,10 @@ module Flightdeck
       when "status"
         slug, json_output = mission_slug_with_json(argv, "mission status requires SLUG")
         emit_mission(store.status(slug), json_output, "Mission #{slug} status: #{store.status(slug).dig('status', 'state')}.")
+      when "operation"
+        slug, json_output = mission_slug_with_json(argv, "mission operation requires SLUG")
+        raise UsageError, "mission operation requires --json" unless json_output
+        json(store.operation_projection(slug))
       when "validate"
         slug, json_output = mission_slug_with_json(argv, "mission validate requires SLUG")
         errors = store.validate(slug)
@@ -676,7 +683,7 @@ module Flightdeck
         slug, json_output = mission_slug_with_json(argv, "mission close requires SLUG")
         emit_mission(store.close(slug), json_output, "Explicitly closed mission #{slug}.")
       else
-        raise UsageError, "mission requires new, show, validate, status, add, record-dispatch, sync-plan, sync-apply, checkpoint, outbox, next-actions, prepare, acknowledge, fail, or close"
+        raise UsageError, "mission requires new, show, validate, status, operation, skill-telemetry, add, record-dispatch, sync-plan, sync-apply, checkpoint, outbox, next-actions, prepare, acknowledge, fail, or close"
       end
       0
     end
@@ -707,9 +714,49 @@ module Flightdeck
       1
     end
 
+    def mission_skill_telemetry(config, argv)
+      operation_id = required_argument!(argv, "mission skill-telemetry requires SLUG")
+      options = { limit: SkillTelemetry::DEFAULT_LIMIT }
+      OptionParser.new do |parser|
+        parser.on("--limit N", Integer) { |value| options[:limit] = value }
+        parser.on("--cursor CURSOR") { |value| options[:cursor] = value }
+        parser.on("--json") { options[:json] = true }
+      end.parse!(argv)
+      empty!(argv)
+      json(SkillTelemetry.new(config).snapshot(operation_id: operation_id, limit: options[:limit], cursor: options[:cursor]))
+      0
+    rescue SkillTelemetry::ContractError => e
+      error = { "code" => e.code, "message" => e.message }
+      error["operation_id"] = e.operation_id if e.operation_id
+      json(
+        "api_version" => SkillTelemetry::API_VERSION,
+        "kind" => "MissionSkillTelemetryError",
+        "schema" => SkillTelemetry::SCHEMA,
+        "capability" => SkillTelemetry::CAPABILITY,
+        "ok" => false,
+        "error" => error
+      )
+      1
+    rescue UsageError, OptionParser::ParseError
+      json(
+        "api_version" => SkillTelemetry::API_VERSION,
+        "kind" => "MissionSkillTelemetryError",
+        "schema" => SkillTelemetry::SCHEMA,
+        "capability" => SkillTelemetry::CAPABILITY,
+        "ok" => false,
+        "error" => { "code" => "invalid_request", "message" => "Skill telemetry request is invalid." }
+      )
+      2
+    end
+
     def operation(config, argv)
       subcommand = argv.shift
-      names = %w[authoring-catalog authoring-plan authoring-launch authoring-guidance authoring-operation detail]
+      request = nil
+      names = %w[
+        authoring-catalog authoring-plan authoring-launch authoring-guidance authoring-operation detail
+        execution-plan execution-bind execution-start-report execution-start-open execution-retry-bind
+        execution-observe execution-open
+      ]
       raise UsageError, "operation requires #{names.join(', ')}" unless names.include?(subcommand)
 
       options = {}
@@ -726,36 +773,52 @@ module Flightdeck
         return 0
       end
 
-      request = OperationAuthoring.load_request(options.fetch(:request_path))
+      execution_command = subcommand.to_s.start_with?("execution-")
+      request = execution_command ? OperationExecution.load_request(options.fetch(:request_path)) : OperationAuthoring.load_request(options.fetch(:request_path))
       authoring = OperationAuthoring.new(config)
+      execution = OperationExecution.new(config)
       result = case subcommand
                when "authoring-catalog" then authoring.catalog(request)
                when "authoring-plan" then authoring.plan(request)
                when "authoring-launch" then authoring.launch(request)
                when "authoring-guidance" then authoring.guidance(request)
                when "authoring-operation" then authoring.operation(request)
+               when "execution-plan" then execution.plan(request)
+               when "execution-bind" then execution.bind(request)
+               when "execution-start-report" then execution.start_report(request)
+               when "execution-start-open" then execution.start_open(request)
+               when "execution-retry-bind" then execution.retry_bind(request)
+               when "execution-observe" then execution.observe(request)
+               when "execution-open" then execution.open(request)
                end
       json(result)
       0
     rescue UsageError, ValidationError => e
       if subcommand == "detail"
-        json(OperationDetail.error_result(e))
+        json(OperationDetail.error_result(e, request: request))
+      elsif subcommand.to_s.start_with?("execution-")
+        json(OperationExecution.error_result(subcommand, e))
       else
         json(OperationAuthoring.error_result(subcommand.to_s.delete_prefix("authoring-"), e))
       end
       1
     rescue StandardError
       if subcommand == "detail"
-        json(OperationDetail.error_result(OperationDetail::ContractError.new("internal_error", "Operation detail failed closed")))
+        json(OperationDetail.error_result(OperationDetail::ContractError.new("internal_error", "Operation detail failed closed"), request: request))
         return 1
       end
-      error = OperationAuthoring::ContractError.new(
-        "internal_error",
-        subcommand == "authoring-launch" ?
-          "Operation launch failed closed; recover only with the original operation ID" :
-          "Operation authoring failed closed"
-      )
-      json(OperationAuthoring.error_result(subcommand.to_s.delete_prefix("authoring-"), error))
+      if subcommand.to_s.start_with?("execution-")
+        error = OperationExecution::ContractError.new("internal_error", "Operation execution command failed closed")
+        json(OperationExecution.error_result(subcommand, error))
+      else
+        error = OperationAuthoring::ContractError.new(
+          "internal_error",
+          subcommand == "authoring-launch" ?
+            "Operation launch failed closed; recover only with the original operation ID" :
+            "Operation authoring failed closed"
+        )
+        json(OperationAuthoring.error_result(subcommand.to_s.delete_prefix("authoring-"), error))
+      end
       1
     end
 
@@ -792,7 +855,7 @@ module Flightdeck
 
     def work(config, argv)
       subcommand = argv.shift
-      names = %w[create adapter-bind open coordinate launch guidance]
+      names = %w[create adapter-bind open coordinate launch decline lifecycle-open dispatch-plan dispatch-report guidance]
       raise UsageError, "work requires #{names.join(', ')}" unless names.include?(subcommand)
 
       options = {}
@@ -811,6 +874,10 @@ module Flightdeck
                when "open" then store.open(request)
                when "coordinate" then store.coordinate(request)
                when "launch" then store.launch(request)
+               when "decline" then store.decline(request)
+               when "lifecycle-open" then store.lifecycle_open(request)
+               when "dispatch-plan" then store.dispatch_plan(request)
+               when "dispatch-report" then store.dispatch_report(request)
                when "guidance" then store.guidance(request)
                end
       json(result)
@@ -877,6 +944,10 @@ module Flightdeck
           bin/flightdeck work open --request FILE [--json]
           bin/flightdeck work coordinate --request FILE [--json]
           bin/flightdeck work launch --request FILE [--json]
+          bin/flightdeck work decline --request FILE [--json]
+          bin/flightdeck work lifecycle-open --request FILE [--json]
+          bin/flightdeck work dispatch-plan --request FILE [--json]
+          bin/flightdeck work dispatch-report --request FILE [--json]
           bin/flightdeck work guidance --request FILE [--json]
           bin/flightdeck operation detail --request FILE [--json]
           bin/flightdeck mission objective-plan --request FILE [--json]
@@ -901,6 +972,8 @@ module Flightdeck
           bin/flightdeck mission show SLUG [--json]
           bin/flightdeck mission validate SLUG [--json]
           bin/flightdeck mission status SLUG [--json]
+          bin/flightdeck mission operation SLUG --json
+          bin/flightdeck mission skill-telemetry SLUG [--limit 1..100] [--cursor CURSOR] [--json]
           bin/flightdeck mission authoring-catalog --request FILE [--json]
           bin/flightdeck mission authoring-plan --request FILE [--json]
           bin/flightdeck mission authoring-create --request FILE [--json]
@@ -910,6 +983,13 @@ module Flightdeck
           bin/flightdeck operation authoring-launch --request FILE [--json]
           bin/flightdeck operation authoring-guidance --request FILE [--json]
           bin/flightdeck operation authoring-operation --request FILE [--json]
+          bin/flightdeck operation execution-plan --request FILE [--json]
+          bin/flightdeck operation execution-bind --request FILE [--json]
+          bin/flightdeck operation execution-start-report --request FILE [--json]
+          bin/flightdeck operation execution-start-open --request FILE [--json]
+          bin/flightdeck operation execution-retry-bind --request FILE [--json]
+          bin/flightdeck operation execution-observe --request FILE [--json]
+          bin/flightdeck operation execution-open --request FILE [--json]
           bin/flightdeck mission add SLUG NODE --project-key KEY --runtime-project-id ID (--project-path PATH|--project-path-digest SHA256) --host-id HOST --execution-mode local|worktree --access-mode read_only|write --work-type TYPE (--required|--optional) [--criterion-id ID] [--depends-on NODE] [--accepts TYPE] --allows-output TYPE [--artifact-resolver-kind same_host_workspace|external_approved --artifact-resolver-id ID] [--json]
           bin/flightdeck mission record-dispatch SLUG NODE --runtime-project-id ID --host-id HOST [--task-id ID [--pending-client-id ID]|--pending-client-id ID|--dispatch-unknown] [--project-path PATH|--project-path-digest SHA256] [--json]
           bin/flightdeck mission sync-plan SLUG --observations FILE [--json]
@@ -922,11 +1002,14 @@ module Flightdeck
           bin/flightdeck mission fail SLUG ACTION_ID --code CODE [--json]
           bin/flightdeck mission close SLUG [--json]
 
-        doctor, status, hub snapshot, hub operations-snapshot, work list, work open, operation detail, setup plan, route plan, repo plan, bridge plan, mission list, mission client-snapshot, mission show,
-        mission validate, mission status, mission authoring-catalog, mission
-        authoring-plan, mission authoring-operation, operation authoring-catalog, operation
-        authoring-plan, operation authoring-operation, mission objective-plan, mission objective-snapshot, mission sync-plan, mission
-        outbox, and mission next-actions are read-only.
+        doctor, status, hub snapshot, hub operations-snapshot, work list, work open, work lifecycle-open,
+        work dispatch-plan, operation detail, setup plan, route plan, repo plan,
+        bridge plan, mission list, mission client-snapshot, mission show, mission validate, mission status, mission operation,
+        mission skill-telemetry, mission authoring-catalog, mission
+        authoring-plan, mission authoring-operation, mission objective-plan, mission objective-snapshot,
+        mission sync-plan, mission outbox, mission next-actions, operation authoring-catalog,
+        operation authoring-plan, operation authoring-operation, operation execution-open, and
+        operation execution-start-open are read-only.
         status --write, setup connect, repo onboard, bridge install, task new,
         task transition, mission authoring-create, mission objective-create, and other mission mutations use
         explicit state-changing names and write only their documented scope.
@@ -935,18 +1018,28 @@ module Flightdeck
         current plan identity, generation, digest, token, and one opaque operation ID.
         Never retry an unknown authoring-create result; query authoring-operation
         with the original operation ID.
-        Operation authoring creates a durable planned Operation only. It never
-        dispatches tasks or claims task, skill, file, or work success. Never retry
-        an unknown authoring-launch result; query operation authoring-operation
-        with the original operation ID.
+        Operation authoring uses server-authored Operation IDs and exact catalog target identities.
+        It creates a durable planned Operation only; it never dispatches a task or claims task, skill,
+        or work success. Never retry an unknown authoring-launch result; query
+        operation authoring-operation with the original operation ID.
+        Operation execution is a separate post-confirmation runtime-neutral boundary. execution-plan
+        revalidates the exact launched Work proposal and current dispatch authorization; execution-bind
+        binds stable Flightdeck agents to opaque adapter sessions; execution-observe accepts only signed,
+        bounded, renderer-safe observations. These commands never replace the Codex conversation adapter.
+        Pre-bind failures use execution-start-report; execution-start-open recovers the bounded audit ledger;
+        only execution-retry-bind may consume the exact producer-issued retry generation.
         Work stores selected-Hub display metadata and normalized event links only. It never stores
         prompts, responses, commands, tool payloads, paths, or renderer-visible runtime project/task IDs.
         work create is the ordinary runtime handoff and requires no classification or extra model turn.
         work adapter-bind returns a native-only secret that must never cross renderer IPC. work coordinate
         accepts only an HMAC-authenticated exact Hub/Work/session/resume-bound adapter observation; logical
         project keys are re-resolved against the exact current Hub catalog and produce a review-only proposal.
-        work launch requires the exact stored Operation plan confirmation. Unknown launch outcomes are
-        recovered through work open and are never blindly resubmitted. work guidance requires the exact
+        work launch and work decline require the exact stored Operation plan confirmation. A decline is
+        durable and never dispatches. Unknown launch outcomes are recovered through work lifecycle-open and
+        are never blindly resubmitted. work dispatch-plan authorizes exact targets only after launch and
+        requires independent targets to be dispatched concurrently by an independently authorized native
+        owner; it does not dispatch. work dispatch-report persists exact deduplicated receipts and partial
+        failures. work guidance requires the exact
         active nonterminal Operation ID; an ordinary follow-up is never inferred to be guidance.
         Mission mode defaults to dispatch_only; only watch_only and supervised accept explicit sync.
         watch_only and supervised require explicit --success-criterion and --authorized-target-json.

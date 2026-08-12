@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://flightdeck.dev/schemas/omp-operation-execution-plan-request.schema.json",
+  "title": "Flightdeck OMP Operation execution plan request", "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "work_id", "operation_id", "confirmation", "dispatch_generation", "dispatch_plan_digest", "idempotency_key", "agents"],
+  "properties": {
+    "schema_version": {"const": "flightdeck.omp-operation.execution-plan-request/v1"},
+    "work_id": {"$ref": "omp-operation-types.schema.json#/$defs/workId"}, "operation_id": {"$ref": "omp-operation-types.schema.json#/$defs/operationId"},
+    "confirmation": {"$ref": "omp-operation-types.schema.json#/$defs/confirmation"}, "dispatch_generation": {"type": "string", "pattern": "^dispatch-generation-[0-9a-f]{48}$"},
+    "dispatch_plan_digest": {"$ref": "omp-operation-types.schema.json#/$defs/sha256"}, "idempotency_key": {"$ref": "omp-operation-types.schema.json#/$defs/requestKey"},
+    "agents": {"type": "array", "minItems": 1, "maxItems": 50, "items": {"type": "object", "additionalProperties": false, "required": ["node_id", "authorized_task", "requested_model", "reasoning_effort", "tool_policy"], "properties": {"node_id": {"$ref": "omp-operation-types.schema.json#/$defs/identifier"}, "authorized_task": {"type": "string", "minLength": 1, "maxLength": 8192}, "requested_model": {"$ref": "omp-operation-types.schema.json#/$defs/model"}, "reasoning_effort": {"$ref": "omp-operation-types.schema.json#/$defs/reasoningEffort"}, "tool_policy": {"$ref": "omp-operation-types.schema.json#/$defs/toolPolicy"}}}}
+  }
+}

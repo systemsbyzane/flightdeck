@@ -83,6 +83,8 @@ module Flightdeck
           "Read every applicable owning-repository AGENTS.md before the Hub bridge.",
           "Read and verify the route plan's bridge_handoff before the installed bridge and its required Hub documents.",
           "In a Codex Worktree where an ignored reference or materialized bridge is absent, read the verified bridge artifacts from bridge_handoff.original_checkout_path; do not copy them into the Worktree.",
+          "State the lead Flightdeck skill and any currently applicable companion skills explicitly; choose them from the requested outcome, not from the owning workload or bridge profile.",
+          "Re-evaluate skill applicability when new evidence crosses domains. Read the newly applicable skill before domain-specific mutation; do not preload speculative skills or expand authorization.",
           "Follow repository rules for layout, commands, tests, and implementation mechanics.",
           "Apply the stricter security and authorization rule.",
           "Return evidence and authorization state without claiming unverified success."
@@ -107,7 +109,15 @@ module Flightdeck
       store = BridgeStore.new(@config)
       mode = repository.fetch("bridge_mode")
       profile = repository.fetch("bridge_profile")
-      bridge_plan = store.plan(repository_id: repository_id, mode: mode, profile: profile)
+      # The complete recursive instruction inventory is an explicit bridge-plan
+      # projection. Routing consumes only bridge integrity and handoff evidence,
+      # so do not scan every nested AGENTS file on this latency-critical path.
+      bridge_plan = store.plan(
+        repository_id: repository_id,
+        mode: mode,
+        profile: profile,
+        include_instruction_files: false
+      )
       unless bridge_plan["desired_state"] == "valid" && bridge_plan.fetch("blockers").empty?
         details = bridge_plan.fetch("blockers")
         details = ["bridge is not installed"] if details.empty?

@@ -6,6 +6,7 @@ require "json"
 require "openssl"
 require "securerandom"
 require_relative "operation_authoring"
+require_relative "route_planner"
 
 module Flightdeck
   # Durable, display-safe Work metadata and the private adapter seam. Work
@@ -13,6 +14,7 @@ module Flightdeck
   # or evidence body. Exact target identity remains inside OperationAuthoring.
   class WorkStore
     CAPABILITY = "flightdeck.command.work-control.v1"
+    LIFECYCLE_CAPABILITY = "flightdeck.command.work-operation-lifecycle.v1"
     CREATE_REQUEST = "flightdeck.work.create-request/v1"
     CREATE_RESULT = "flightdeck.work.create-result/v1"
     ADAPTER_BIND_REQUEST = "flightdeck.work.adapter-bind-request/v1"
@@ -23,11 +25,20 @@ module Flightdeck
     OPEN_RESULT = "flightdeck.work.open-result/v1"
     LAUNCH_REQUEST = "flightdeck.work.launch-request/v1"
     LAUNCH_RESULT = "flightdeck.work.launch-result/v1"
+    DECLINE_REQUEST = "flightdeck.work.decline-request/v1"
+    DECLINE_RESULT = "flightdeck.work.decline-result/v1"
+    LIFECYCLE_OPEN_REQUEST = "flightdeck.work.lifecycle-open-request/v1"
+    LIFECYCLE_OPEN_RESULT = "flightdeck.work.lifecycle-open-result/v1"
+    DISPATCH_PLAN_REQUEST = "flightdeck.work.dispatch-plan-request/v1"
+    DISPATCH_PLAN_RESULT = "flightdeck.work.dispatch-plan-result/v1"
+    DISPATCH_REPORT_REQUEST = "flightdeck.work.dispatch-report-request/v1"
+    DISPATCH_REPORT_RESULT = "flightdeck.work.dispatch-report-result/v1"
     GUIDANCE_REQUEST = "flightdeck.work.guidance-request/v1"
     GUIDANCE_RESULT = "flightdeck.work.guidance-result/v1"
     LIST_RESULT = "flightdeck.work.list/v1"
     ERROR_RESULT = "flightdeck.work.error-result/v1"
-    RECORD_VERSION = "flightdeck.work.record/v1"
+    RECORD_VERSION = "flightdeck.work.record/v2"
+    LEGACY_RECORD_VERSION = "flightdeck.work.record/v1"
     RECOMMENDATION_VERSION = "flightdeck.runtime.work-recommendation/v1"
     OBSERVATION_VERSION = "flightdeck.runtime.work-observation/v1"
     STRUCTURED_CHANNEL = "flightdeck.runtime.work-recommendation/v1"
@@ -36,6 +47,7 @@ module Flightdeck
     MAX_RECORD_BYTES = 262_144
     MAX_EVENTS = 200
     MAX_OPERATIONS = 50
+    MAX_DISPATCH_REPORTS = 200
     DEFAULT_LIMIT = 50
     MAX_LIMIT = 100
     WORK_ID = /\Awork-[0-9a-f]{24}\z/
@@ -47,6 +59,8 @@ module Flightdeck
     TERMINAL_STATES = %w[review_ready failed_validation runtime_failure cancelled complete].freeze
     RESULT_STATES = %w[review_ready complete].freeze
     FAILURE_STATES = %w[failed_validation runtime_failure cancelled].freeze
+    PROPOSAL_STATES = %w[not_started declined launched launch_unknown].freeze
+    DISPATCH_STATES = %w[pending dispatch_pending running unknown_outcome failed].freeze
     SCHEMAS = %w[
       work-types.schema.json work-create-request.schema.json work-create-result.schema.json
       work-adapter-bind-request.schema.json work-adapter-bind-result.schema.json
@@ -55,6 +69,12 @@ module Flightdeck
       work-launch-request.schema.json work-launch-result.schema.json
       work-guidance-request.schema.json work-guidance-result.schema.json
       work-list.schema.json work-error-result.schema.json
+    ].freeze
+    LIFECYCLE_SCHEMAS = %w[
+      work-decline-request.schema.json work-decline-result.schema.json
+      work-lifecycle-open-request.schema.json work-lifecycle-open-result.schema.json
+      work-dispatch-plan-request.schema.json work-dispatch-plan-result.schema.json
+      work-dispatch-report-request.schema.json work-dispatch-report-result.schema.json
     ].freeze
 
     class ContractError < ValidationError
@@ -134,6 +154,7 @@ module Flightdeck
           "status" => "open",
           "runtime_binding" => runtime_binding(work_id, now),
           "proposals" => [],
+          "dispatch_reports" => [],
           "operation_ids" => [],
           "active_operation_id" => nil,
           "events" => [event(work_id, "work_created", "completed", now, nil, request_key_digest)],
@@ -265,7 +286,13 @@ module Flightdeck
           "plan_digest" => planned.fetch("plan_digest"),
           "plan_token" => planned.fetch("plan_token"),
           "catalog_generation" => planned.fetch("catalog_generation"),
-          "targets" => display_targets
+          "targets" => display_targets,
+          "lifecycle_state" => "not_started",
+          "state_observed_at" => observation.fetch("observed_at"),
+          "decline_digest" => nil,
+          "declined_at" => nil,
+          "launched_at" => nil,
+          "dispatches" => []
         )
         append_proposal!(record, item)
         add_operation_id!(record, item.fetch("operation_id"))
@@ -288,16 +315,26 @@ module Flightdeck
 
       with_lock(File::LOCK_EX) do
         record = find_record!(work_id)
-        item = record["proposals"].find { |candidate| candidate["kind"] == "operation_proposal" && candidate["operation_id"] == operation_id }
-        raise ContractError.new("operation_not_found", "Work has no exact matching Operation proposal") unless item
-        if record["status"] == "unknown_outcome" && record["active_operation_id"] == operation_id
+        item = operation_proposal_record!(record, operation_id)
+        validate_confirmation!(item, confirmation)
+        case item.fetch("lifecycle_state")
+        when "declined"
+          raise ContractError.new("proposal_declined", "declined Operation proposals cannot be launched")
+        when "launch_unknown"
           raise ContractError.new("unknown_outcome", "launch outcome is unknown; recover only by opening the original Work")
         end
-
-        expected = confirmation_fields.to_h { |field| [field, item.fetch(field)] }
-        unless secure_equal_json?(confirmation, expected)
-          raise ContractError.new("stale_or_mismatched_plan", "launch confirmation does not match the stored Hub-authored plan")
+        reconciled = reconcile_proposal_state!(record, item)
+        case item.fetch("lifecycle_state")
+        when "declined"
+          raise ContractError.new("proposal_declined", "declined Operation proposals cannot be launched")
+        when "launch_unknown"
+          raise ContractError.new("unknown_outcome", "launch outcome is unknown; recover only by opening the original Work")
+        when "launched"
+          write_record!(record) if reconciled
+          return work_launch_result(record, item, replayed: true)
         end
+        reject_conflicting_active_operation!(record, operation_id)
+
         proposal = rebuild_operation_proposal!(item)
         result = @authoring.launch(
           "schema_version" => OperationAuthoring::LAUNCH_REQUEST,
@@ -306,26 +343,157 @@ module Flightdeck
           "proposal" => proposal
         )
         now = timestamp
+        item["lifecycle_state"] = "launched"
+        item["state_observed_at"] = now
+        item["launched_at"] ||= now
+        ensure_dispatch_entries!(item, operation_id)
         record["active_operation_id"] = operation_id
         record["status"] = "operation_active"
-        append_event!(record, event(work_id, "operation_launched", "completed", now, operation_id, result.fetch("plan_digest")))
+        append_event!(record, event(work_id, "operation_launched", "completed", item.fetch("launched_at"), operation_id, result.fetch("plan_digest")))
         write_record!(record)
-        {
-          "schema_version" => LAUNCH_RESULT,
-          "schema" => "hub/schemas/work-launch-result.schema.json",
-          "ok" => true,
-          "work" => work_summary(record),
-          "operation" => safe_launch_result(result),
-          "resume" => resume_metadata(record)
-        }
+        work_launch_result(record, item, result: result, replayed: result.fetch("replayed"))
       rescue OperationAuthoring::ContractError => e
         if e.code == "unknown_outcome"
           append_event!(record, event(work_id, "operation_launch_unknown", "unknown_outcome", timestamp, operation_id, item.fetch("plan_digest")))
+          item["lifecycle_state"] = "launch_unknown"
+          item["state_observed_at"] = timestamp
           record["active_operation_id"] = operation_id
           record["status"] = "unknown_outcome"
           write_record!(record)
         end
         raise translate_authoring_error(e)
+      end
+    end
+
+    def decline(request)
+      verify_lifecycle_capability!
+      expect_object!(request, %w[schema_version work_id operation_id confirmation], "Work decline request")
+      expect_version!(request, DECLINE_REQUEST)
+      work_id = validate_work_id!(request.fetch("work_id"))
+      operation_id = validate_operation_id!(request.fetch("operation_id"))
+      confirmation = request.fetch("confirmation")
+      expect_object!(confirmation, OperationAuthoring::CONFIRMATION_FIELDS, "Work decline confirmation")
+
+      with_lock(File::LOCK_EX) do
+        record = find_record!(work_id)
+        item = operation_proposal_record!(record, operation_id)
+        validate_confirmation!(item, confirmation)
+        if %w[launched launch_unknown].include?(item.fetch("lifecycle_state"))
+          raise ContractError.new("conflicting_operation", "an Operation proposal cannot be declined after launch begins")
+        end
+        reconciled = reconcile_proposal_state!(record, item)
+        case item.fetch("lifecycle_state")
+        when "declined"
+          return decline_result(record, item, replayed: true)
+        when "launched", "launch_unknown"
+          write_record!(record) if reconciled
+          raise ContractError.new("conflicting_operation", "an Operation proposal cannot be declined after launch begins")
+        end
+
+        now = timestamp
+        item["lifecycle_state"] = "declined"
+        item["state_observed_at"] = now
+        item["declined_at"] = now
+        item["decline_digest"] = Digest::SHA256.hexdigest(canonical_json(confirmation))
+        append_event!(record, event(work_id, "operation_declined", "completed", now, operation_id, item.fetch("decline_digest")))
+        record["status"] = "open" if record["active_operation_id"].nil?
+        write_record!(record)
+        decline_result(record, item, replayed: false)
+      end
+    end
+
+    def lifecycle_open(request)
+      verify_lifecycle_capability!
+      expect_object!(request, %w[schema_version work_id], "Work lifecycle open request")
+      expect_version!(request, LIFECYCLE_OPEN_REQUEST)
+      work_id = validate_work_id!(request.fetch("work_id"))
+      with_lock(File::LOCK_EX) do
+        record = find_record!(work_id)
+        changed = reconcile_proposal_states!(record)
+        write_record!(record) if changed
+        lifecycle_open_result(record)
+      end
+    end
+
+    def dispatch_plan(request)
+      verify_lifecycle_capability!
+      expect_object!(request, %w[schema_version work_id operation_id], "Work dispatch plan request")
+      expect_version!(request, DISPATCH_PLAN_REQUEST)
+      work_id = validate_work_id!(request.fetch("work_id"))
+      operation_id = validate_operation_id!(request.fetch("operation_id"))
+      with_lock(File::LOCK_EX) do
+        record = find_record!(work_id)
+        item = operation_proposal_record!(record, operation_id)
+        changed = reconcile_proposal_state!(record, item)
+        unless item["lifecycle_state"] == "launched" && record["active_operation_id"] == operation_id
+          raise ContractError.new("not_created", "dispatch planning requires the exact launched Operation")
+        end
+        changed = ensure_dispatch_entries!(item, operation_id) || changed
+        write_record!(record) if changed
+        dispatch_plan_result(record, item)
+      end
+    end
+
+    def dispatch_report(request)
+      verify_lifecycle_capability!
+      expect_object!(request, %w[schema_version work_id operation_id dispatch_generation dispatch_plan_digest report_id results], "Work dispatch report request")
+      expect_version!(request, DISPATCH_REPORT_REQUEST)
+      work_id = validate_work_id!(request.fetch("work_id"))
+      operation_id = validate_operation_id!(request.fetch("operation_id"))
+      report_id = bounded_id!(request.fetch("report_id"), REQUEST_KEY, "report_id")
+
+      with_lock(File::LOCK_EX) do
+        record = find_record!(work_id)
+        item = operation_proposal_record!(record, operation_id)
+        changed = reconcile_proposal_state!(record, item)
+        write_record!(record) if changed
+        plan = dispatch_plan_result(record, item)
+        unless secure_equal_json?(
+          request.slice("dispatch_generation", "dispatch_plan_digest"),
+          plan.slice("dispatch_generation", "dispatch_plan_digest")
+        )
+          raise ContractError.new("stale_or_mismatched_plan", "dispatch report does not match the current exact dispatch plan")
+        end
+        report_key_digest = Digest::SHA256.hexdigest(report_id)
+        report_digest = Digest::SHA256.hexdigest(canonical_json(request.reject { |key, _| key == "report_id" }))
+        replay = record.fetch("dispatch_reports").find { |candidate| candidate["report_key_digest"] == report_key_digest }
+        applying = record.fetch("dispatch_reports").find { |candidate| candidate["state"] == "applying" }
+        if applying && applying["report_key_digest"] != report_key_digest
+          raise ContractError.new("unknown_outcome", "an interrupted dispatch report must be replayed with its exact original report identity")
+        end
+        if replay
+          unless replay["report_digest"] == report_digest
+            raise ContractError.new("duplicate_request_conflict", "report_id is already bound to different dispatch results")
+          end
+          return dispatch_report_result(record, item, replayed: true) if replay["state"] == "complete"
+          if replay["state"] == "rejected"
+            raise ContractError.new(replay.fetch("error_code"), "dispatch report was rejected; use a new report identity for remaining retryable targets")
+          end
+
+          normalized = normalize_dispatch_results!(
+            record, item, plan, request.fetch("results"), allow_applied: true
+          )
+          complete_dispatch_report!(record, item, normalized, replay)
+          return dispatch_report_result(record, item, replayed: true)
+        end
+        raise ContractError.new("event_limit_exceeded", "Work dispatch report limit is exhausted") if record.fetch("dispatch_reports").length >= MAX_DISPATCH_REPORTS
+
+        normalized = normalize_dispatch_results!(
+          record, item, plan, request.fetch("results"), allow_applied: false
+        )
+        now = timestamp
+        report = {
+          "report_key_digest" => report_key_digest,
+          "report_digest" => report_digest,
+          "operation_id" => operation_id,
+          "state" => "applying",
+          "error_code" => nil,
+          "observed_at" => now
+        }
+        record["dispatch_reports"] << report
+        write_record!(record)
+        complete_dispatch_report!(record, item, normalized, report)
+        dispatch_report_result(record, item, replayed: false)
       end
     end
 
@@ -374,6 +542,7 @@ module Flightdeck
       work_id = validate_work_id!(request.fetch("work_id"))
       with_lock(File::LOCK_EX) do
         record = find_record!(work_id)
+        write_record!(record) if reconcile_proposal_states!(record)
         result = open_result(record)
         derived = result.dig("work", "status")
         if record["status"] != derived && %w[operation_active result_ready failed unknown_outcome].include?(derived)
@@ -451,6 +620,31 @@ module Flightdeck
       end
     rescue SystemCallError, ValidationError
       raise ContractError.new("unsupported_hub_contract", "Selected Hub does not declare the Work control v1 contract")
+    end
+
+    def verify_lifecycle_capability!
+      verify_capability!
+      compatibility_path = File.join(@config.root, "hub", "compatibility.json")
+      paths = LIFECYCLE_SCHEMAS.map { |name| File.join(@config.root, "hub", "schemas", name) }
+      unless paths.all? { |path| File.file?(path) && !File.symlink?(path) }
+        raise ContractError.new("unsupported_hub_contract", "Selected Hub does not declare the Work Operation lifecycle v1 contract")
+      end
+      compatibility = Support.load_data(compatibility_path)
+      capability = compatibility.dig("capabilities", LIFECYCLE_CAPABILITY)
+      managed = ["lib/flightdeck/work_store.rb"] + LIFECYCLE_SCHEMAS.map { |name| "hub/schemas/#{name}" }
+      unless capability.is_a?(Hash) && capability["kind"] == "command" &&
+             capability.dig("probe", "help_contains") == "bin/flightdeck work lifecycle-open " &&
+             managed.all? { |path| Array(capability["managed_paths"]).include?(path) }
+        raise ContractError.new("unsupported_hub_contract", "Selected Hub does not declare the Work Operation lifecycle v1 contract")
+      end
+      LIFECYCLE_SCHEMAS.each do |name|
+        schema = Support.load_data(File.join(@config.root, "hub", "schemas", name))
+        unless schema["$id"] == "https://flightdeck.dev/schemas/#{name}"
+          raise ContractError.new("unsupported_hub_contract", "Selected Hub does not declare the Work Operation lifecycle v1 contract")
+        end
+      end
+    rescue SystemCallError, ValidationError
+      raise ContractError.new("unsupported_hub_contract", "Selected Hub does not declare the Work Operation lifecycle v1 contract")
     end
 
     def runtime_projection
@@ -632,6 +826,438 @@ module Flightdeck
       proposal
     end
 
+    def operation_proposal_record!(record, operation_id)
+      item = record.fetch("proposals").find do |candidate|
+        candidate["kind"] == "operation_proposal" && candidate["operation_id"] == operation_id
+      end
+      item || raise(ContractError.new("operation_not_found", "Work has no exact matching Operation proposal"))
+    end
+
+    def validate_confirmation!(item, confirmation)
+      expected = OperationAuthoring::CONFIRMATION_FIELDS.to_h { |field| [field, item.fetch(field)] }
+      return if secure_equal_json?(confirmation, expected)
+
+      raise ContractError.new("stale_or_mismatched_plan", "confirmation does not match the stored Hub-authored proposal")
+    end
+
+    def reconcile_proposal_states!(record)
+      changed = false
+      record.fetch("proposals").select { |item| item["kind"] == "operation_proposal" }.each do |item|
+        changed = reconcile_proposal_state!(record, item) || changed
+      end
+      changed
+    end
+
+    def reconcile_proposal_state!(record, item)
+      recovery = @authoring.operation(
+        "schema_version" => OperationAuthoring::OPERATION_REQUEST,
+        "operation_id" => item.fetch("operation_id")
+      )
+      if item["lifecycle_state"] == "declined"
+        if recovery["outcome"] == "created"
+          raise ContractError.new("operation_identity_conflict", "declined proposal conflicts with a persisted Operation")
+        end
+        return false
+      end
+      unless recovery["outcome"] == "created"
+        if item["lifecycle_state"] == "launched"
+          raise ContractError.new("operation_identity_conflict", "launched proposal has no authoritative persisted Operation")
+        end
+        return false
+      end
+      return ensure_dispatch_entries!(item, item.fetch("operation_id")) if item["lifecycle_state"] == "launched"
+      if record["active_operation_id"] && record["active_operation_id"] != item["operation_id"]
+        raise ContractError.new("operation_identity_conflict", "recovered Operation conflicts with the active Work linkage")
+      end
+
+      now = timestamp
+      item["lifecycle_state"] = "launched"
+      item["state_observed_at"] = now
+      item["launched_at"] ||= now
+      ensure_dispatch_entries!(item, item.fetch("operation_id"))
+      record["active_operation_id"] = item.fetch("operation_id")
+      record["status"] = "operation_active"
+      append_event!(record, event(record.fetch("work_id"), "operation_launched", "completed", item.fetch("launched_at"),
+                                  item.fetch("operation_id"), item.fetch("plan_digest")))
+      true
+    rescue OperationAuthoring::ContractError => e
+      raise translate_authoring_error(e)
+    end
+
+    def reject_conflicting_active_operation!(record, operation_id)
+      active_id = record["active_operation_id"]
+      return if active_id.nil? || active_id == operation_id
+
+      active = operation_links(record).find { |link| link["operation_id"] == active_id }
+      return if active && %w[available failed not_created].include?(active["result_state"])
+
+      raise ContractError.new("conflicting_operation", "Work already has a nonterminal active Operation")
+    end
+
+    def ensure_dispatch_entries!(item, operation_id)
+      return false unless item.fetch("dispatches").empty?
+
+      mission = MissionStore.new(@config, clock: @clock).snapshot(operation_id)
+      observed_at = item["launched_at"] || item.fetch("state_observed_at")
+      item["dispatches"] = mission.dig("spec", "graph", "nodes").map do |node|
+        identity = Digest::SHA256.hexdigest(canonical_json([operation_id, node.fetch("id"), item.fetch("plan_digest")]))
+        {
+          "dispatch_id" => "dispatch-#{identity[0, 24]}",
+          "node_id" => node.fetch("id"),
+          "logical_project_key" => node.fetch("logical_project_key"),
+          "state" => "pending",
+          "attempt_digests" => [],
+          "receipt_digest" => nil,
+          "pending_client_id_digest" => nil,
+          "error_code" => nil,
+          "updated_at" => observed_at
+        }
+      end.sort_by { |dispatch| dispatch.fetch("node_id") }
+      true
+    rescue ValidationError, ConfigurationError, SystemCallError, KeyError
+      raise ContractError.new("operation_identity_conflict", "launched Operation dispatch graph is unavailable or malformed")
+    end
+
+    def work_launch_result(record, item, result: nil, replayed:)
+      operation = result ? safe_launch_result(result) : {
+        "operation_id" => item.fetch("operation_id"),
+        "outcome" => "created",
+        "plan_id" => item.fetch("plan_id"),
+        "plan_generation" => item.fetch("plan_generation"),
+        "plan_digest" => item.fetch("plan_digest"),
+        "replayed" => true
+      }
+      operation["replayed"] = replayed
+      {
+        "schema_version" => LAUNCH_RESULT,
+        "schema" => "hub/schemas/work-launch-result.schema.json",
+        "ok" => true,
+        "work" => work_summary(record),
+        "operation" => operation,
+        "resume" => resume_metadata(record)
+      }
+    end
+
+    def decline_result(record, item, replayed:)
+      {
+        "schema_version" => DECLINE_RESULT,
+        "schema" => "hub/schemas/work-decline-result.schema.json",
+        "ok" => true,
+        "capability" => LIFECYCLE_CAPABILITY,
+        "work" => work_summary(record),
+        "operation_id" => item.fetch("operation_id"),
+        "proposal_state" => "declined",
+        "declined_at" => item.fetch("declined_at"),
+        "replayed" => replayed,
+        "resume" => resume_metadata(record)
+      }
+    end
+
+    def lifecycle_open_result(record)
+      links = operation_links(record)
+      {
+        "schema_version" => LIFECYCLE_OPEN_RESULT,
+        "schema" => "hub/schemas/work-lifecycle-open-result.schema.json",
+        "ok" => true,
+        "capability" => LIFECYCLE_CAPABILITY,
+        "work" => work_summary(record),
+        "proposals" => record.fetch("proposals").select { |item| item["kind"] == "operation_proposal" }
+          .map { |item| lifecycle_proposal_projection(item) },
+        "active_operation" => links.find { |link| link["operation_id"] == record["active_operation_id"] },
+        "resume" => resume_metadata(record)
+      }
+    end
+
+    def lifecycle_proposal_projection(item)
+      state = item.fetch("lifecycle_state")
+      {
+        "proposal" => proposal_projection(item),
+        "state" => state,
+        "state_observed_at" => item.fetch("state_observed_at"),
+        "declined_at" => item["declined_at"],
+        "launched_at" => item["launched_at"],
+        "actions" => {
+          "confirm_and_launch" => state == "not_started",
+          "decline" => state == "not_started"
+        },
+        "dispatches" => lifecycle_dispatches(item)
+      }
+    end
+
+    def lifecycle_dispatches(item)
+      persisted = item.fetch("dispatches").to_h { |dispatch| [dispatch.fetch("node_id"), dispatch] }
+      states = if item["lifecycle_state"] == "launched"
+                 mission = MissionStore.new(@config, clock: @clock).status(item.fetch("operation_id"))
+                 mission.dig("spec", "graph", "nodes").to_h { |node| [node.fetch("id"), node.fetch("observed_state")] }
+               else
+                 {}
+               end
+      item.fetch("dispatches").map do |dispatch|
+        {
+          "dispatch_id" => dispatch.fetch("dispatch_id"),
+          "node_id" => dispatch.fetch("node_id"),
+          "logical_project_key" => dispatch.fetch("logical_project_key"),
+          "state" => if dispatch["state"] == "failed"
+                       "failed"
+                     else
+                       states.fetch(dispatch.fetch("node_id"), persisted.fetch(dispatch.fetch("node_id")).fetch("state"))
+                     end,
+          "error_code" => dispatch["error_code"],
+          "updated_at" => dispatch.fetch("updated_at")
+        }
+      end
+    rescue ValidationError, KeyError
+      item.fetch("dispatches").map do |dispatch|
+        dispatch.slice("dispatch_id", "node_id", "logical_project_key", "state", "error_code", "updated_at")
+      end
+    end
+
+    def dispatch_plan_result(record, item)
+      unless item["lifecycle_state"] == "launched" && record["active_operation_id"] == item["operation_id"]
+        raise ContractError.new("not_created", "dispatch planning requires the exact launched Operation")
+      end
+      ensure_dispatch_entries!(item, item.fetch("operation_id"))
+      mission = MissionStore.new(@config, clock: @clock).snapshot(item.fetch("operation_id"))
+      nodes = mission.dig("spec", "graph", "nodes")
+      targets = nodes.map { |node| dispatch_target(item, node) }.sort_by { |target| target.fetch("node_id") }
+      policy = {
+        "strategy" => "parallel_independent",
+        "max_concurrency" => [targets.length, 8].min,
+        "requires_all_receipts" => true,
+        "retry_known_failures_only" => true
+      }
+      canonical = {
+        "capability" => LIFECYCLE_CAPABILITY,
+        "work_id" => record.fetch("work_id"),
+        "operation_id" => item.fetch("operation_id"),
+        "plan_id" => item.fetch("plan_id"),
+        "plan_generation" => item.fetch("plan_generation"),
+        "plan_digest" => item.fetch("plan_digest"),
+        "targets" => targets,
+        "policy" => policy
+      }
+      digest = Digest::SHA256.hexdigest(canonical_json(canonical))
+      {
+        "schema_version" => DISPATCH_PLAN_RESULT,
+        "schema" => "hub/schemas/work-dispatch-plan-result.schema.json",
+        "ok" => true,
+        "capability" => LIFECYCLE_CAPABILITY,
+        "work_id" => record.fetch("work_id"),
+        "operation_id" => item.fetch("operation_id"),
+        "dispatch_generation" => "dispatch-generation-#{digest[0, 48]}",
+        "dispatch_plan_digest" => digest,
+        "policy" => policy,
+        "targets" => targets
+      }
+    rescue ValidationError, KeyError
+      raise ContractError.new("operation_identity_conflict", "authoritative Operation dispatch plan is unavailable or malformed")
+    end
+
+    def dispatch_target(item, node)
+      logical_key = node.fetch("logical_project_key")
+      declaration = @config.repository_declarations.find { |candidate| candidate.dig("codex_project", "logical_key") == logical_key }
+      repository_id = declaration&.fetch("id", nil)
+      workload_name = if repository_id
+                        Array(@config.repository(repository_id).fetch("workloads")).first
+                      else
+                        @config.workloads.find { |_name, workload| workload["default_project_key"] == logical_key }&.first || "development"
+                      end
+      work_type = node.fetch("work_type")
+      route = RoutePlanner.new(@config).plan(
+        workload_name: workload_name,
+        work_type: work_type,
+        repository_id: repository_id,
+        project_key: repository_id ? nil : logical_key
+      )
+      route_path_digest = Digest::SHA256.hexdigest(File.realpath(route.fetch("project_path")))
+      exact = route["dispatch_ready"] == true && route.dig("project_verification", "status") == "verified" &&
+        route["project_key"] == logical_key && route["runtime_project_id"] == node["runtime_project_id"] &&
+        route_path_digest == node["project_path_digest"] && route["mode"] == node["execution_mode"] &&
+        (!repository_id || route.dig("bridge_handoff", "status") == "verified")
+      raise ContractError.new("operation_identity_conflict", "dispatch route does not match the exact authored Operation target") unless exact
+
+      dispatch = item.fetch("dispatches").find { |candidate| candidate["node_id"] == node["id"] }
+      {
+        "dispatch_id" => dispatch.fetch("dispatch_id"),
+        "node_id" => node.fetch("id"),
+        "logical_project_key" => logical_key,
+        "runtime_project_id" => node.fetch("runtime_project_id"),
+        "project_path_digest" => node.fetch("project_path_digest"),
+        "host_id" => node.fetch("host_id"),
+        "authorization_boundary" => node.fetch("authorization_boundary"),
+        "execution_mode" => node.fetch("execution_mode"),
+        "access_mode" => node.fetch("access_mode"),
+        "work_type" => work_type,
+        "route" => {
+          "repository_id" => repository_id,
+          "project_key" => route.fetch("project_key"),
+          "runtime_project_id" => route.fetch("runtime_project_id"),
+          "project_path" => route.fetch("project_path"),
+          "mode" => route.fetch("mode"),
+          "authorization_boundary" => route.fetch("authorization_boundary"),
+          "bridge_handoff" => route["bridge_handoff"]
+        }
+      }
+    end
+
+    def normalize_dispatch_results!(record, item, plan, raw_results, allow_applied:)
+      unless raw_results.is_a?(Array) && raw_results.length.between?(1, item.fetch("dispatches").length)
+        raise ContractError.new("malformed_request", "dispatch results are outside the bounded target set")
+      end
+      plan_targets = plan.fetch("targets").to_h { |target| [target.fetch("dispatch_id"), target] }
+      normalized = raw_results.map do |result|
+        normalize_dispatch_result!(item, plan_targets, result, allow_applied: allow_applied)
+      end
+      ids = normalized.map { |entry| entry.fetch(:result).fetch("dispatch_id") }
+      raise ContractError.new("malformed_request", "dispatch results must name unique targets") unless ids.uniq == ids
+      pending = normalized.reject { |entry| entry.fetch(:already_applied) }
+      if record.fetch("events").length + pending.length > MAX_EVENTS
+        raise ContractError.new("event_limit_exceeded", "Work event limit is exhausted")
+      end
+      normalized
+    end
+
+    def apply_dispatch_results!(record, item, normalized)
+      normalized.each do |entry|
+        next if entry.fetch(:already_applied)
+
+        result = entry.fetch(:result)
+        target = entry.fetch(:target)
+        dispatch = entry.fetch(:dispatch)
+        outcome = result.fetch("outcome")
+        mission = MissionStore.new(@config, clock: @clock)
+        common = {
+          slug: item.fetch("operation_id"), node_id: result.fetch("node_id"),
+          runtime_project_id: result.fetch("runtime_project_id"), host_id: result.fetch("host_id"),
+          project_path_digest: result.fetch("project_path_digest")
+        }
+        case outcome
+        when "created"
+          mission.record_dispatch(**common, task_id: result.fetch("task_id"), pending_client_id: result["pending_client_id"])
+          next_state = "running"
+        when "pending"
+          mission.record_dispatch(**common, pending_client_id: result.fetch("pending_client_id"))
+          next_state = "dispatch_pending"
+        when "unknown_outcome"
+          mission.record_dispatch(**common, pending_client_id: result["pending_client_id"], dispatch_unknown: true)
+          next_state = "unknown_outcome"
+        else
+          next_state = "failed"
+        end
+        receipt_digest = Digest::SHA256.hexdigest(canonical_json(result.reject { |key, _| key == "attempt_key" }))
+        dispatch["state"] = next_state
+        dispatch["attempt_digests"] << Digest::SHA256.hexdigest(result.fetch("attempt_key"))
+        dispatch["receipt_digest"] = receipt_digest
+        dispatch["pending_client_id_digest"] = result["pending_client_id"] && Digest::SHA256.hexdigest(result.fetch("pending_client_id"))
+        dispatch["error_code"] = result["error_code"]
+        dispatch["updated_at"] = timestamp
+        type = { "running" => "operation_dispatch_started", "dispatch_pending" => "operation_dispatch_pending",
+                 "unknown_outcome" => "operation_dispatch_unknown", "failed" => "operation_dispatch_failed" }.fetch(next_state)
+        status = { "running" => "in_progress", "dispatch_pending" => "started",
+                   "unknown_outcome" => "unknown_outcome", "failed" => "failed" }.fetch(next_state)
+        append_event!(record, event(record.fetch("work_id"), type, status, dispatch.fetch("updated_at"),
+                                    item.fetch("operation_id"), receipt_digest))
+        yield
+      end
+    rescue ContractError
+      raise
+    rescue UsageError, ValidationError => e
+      raise ContractError.new("operation_identity_conflict", "dispatch receipt was rejected by the authoritative Operation: #{e.message}")
+    rescue SystemCallError, IOError
+      raise ContractError.new("unknown_outcome", "dispatch receipt persistence was interrupted; replay the exact original report")
+    end
+
+    def complete_dispatch_report!(record, item, normalized, report)
+      apply_dispatch_results!(record, item, normalized) { write_record!(record) }
+      report["state"] = "complete"
+      report["error_code"] = nil
+      report["observed_at"] = timestamp
+      persist_dispatch_report_transition!(record)
+    rescue ContractError => e
+      raise if e.code == "unknown_outcome"
+
+      report["state"] = "rejected"
+      report["error_code"] = e.code
+      report["observed_at"] = timestamp
+      persist_dispatch_report_transition!(record)
+      raise
+    end
+
+    def persist_dispatch_report_transition!(record)
+      write_record!(record)
+    rescue SystemCallError, IOError
+      raise ContractError.new("unknown_outcome", "dispatch report persistence was interrupted; replay the exact original report")
+    end
+
+    def normalize_dispatch_result!(item, plan_targets, raw, allow_applied:)
+      fields = %w[dispatch_id node_id attempt_key outcome runtime_project_id host_id project_path_digest task_id pending_client_id error_code]
+      expect_object!(raw, fields, "Work dispatch result")
+      result = Support.stringify(raw)
+      bounded_id!(result.fetch("dispatch_id"), /\Adispatch-[0-9a-f]{24}\z/, "dispatch_id")
+      bounded_id!(result.fetch("node_id"), Support::IDENTIFIER, "node_id")
+      bounded_id!(result.fetch("attempt_key"), REQUEST_KEY, "attempt_key")
+      target = plan_targets[result.fetch("dispatch_id")]
+      unless target && target["node_id"] == result["node_id"] &&
+             result.slice("runtime_project_id", "host_id", "project_path_digest") == target.slice("runtime_project_id", "host_id", "project_path_digest")
+        raise ContractError.new("operation_identity_conflict", "dispatch result does not match an exact current target")
+      end
+      dispatch = item.fetch("dispatches").find { |candidate| candidate["dispatch_id"] == result["dispatch_id"] }
+      attempt_digest = Digest::SHA256.hexdigest(result.fetch("attempt_key"))
+      receipt_digest = Digest::SHA256.hexdigest(canonical_json(result.reject { |key, _| key == "attempt_key" }))
+      if dispatch.fetch("attempt_digests").include?(attempt_digest)
+        if allow_applied && dispatch["receipt_digest"] == receipt_digest
+          return { result: result, target: target, dispatch: dispatch, already_applied: true }
+        end
+        raise ContractError.new("duplicate_request_conflict", "dispatch attempt key is already consumed")
+      end
+      unless %w[pending failed dispatch_pending].include?(dispatch.fetch("state"))
+        raise ContractError.new("conflicting_operation", "dispatch target is not retryable from its current state")
+      end
+      outcome = result.fetch("outcome")
+      unless %w[created pending unknown_outcome failed].include?(outcome)
+        raise ContractError.new("malformed_request", "dispatch outcome is invalid")
+      end
+      bounded_id!(result.fetch("runtime_project_id"), OPAQUE_RUNTIME_ID, "runtime_project_id")
+      bounded_id!(result.fetch("host_id"), Support::IDENTIFIER, "host_id")
+      unless SHA256.match?(result.fetch("project_path_digest").to_s)
+        raise ContractError.new("malformed_request", "project_path_digest is invalid")
+      end
+      task = result["task_id"]
+      pending = result["pending_client_id"]
+      error = result["error_code"]
+      bounded_id!(task, OPAQUE_RUNTIME_ID, "task_id") if task
+      bounded_id!(pending, OPAQUE_RUNTIME_ID, "pending_client_id") if pending
+      bounded_id!(error, Support::IDENTIFIER, "error_code") if error
+      valid_shape = case outcome
+                    when "created" then task && error.nil?
+                    when "pending" then task.nil? && pending && error.nil?
+                    when "unknown_outcome" then task.nil? && error.nil?
+                    when "failed" then task.nil? && pending.nil? && !error.nil?
+                    end
+      raise ContractError.new("malformed_request", "dispatch result fields do not match its outcome") unless valid_shape
+      if dispatch["state"] == "dispatch_pending"
+        unless %w[created unknown_outcome].include?(outcome) && pending &&
+               Digest::SHA256.hexdigest(pending) == dispatch["pending_client_id_digest"]
+          raise ContractError.new("operation_identity_conflict", "pending dispatch must reconcile the exact client identity")
+        end
+      end
+      { result: result, target: target, dispatch: dispatch, already_applied: false }
+    end
+
+    def dispatch_report_result(record, item, replayed:)
+      {
+        "schema_version" => DISPATCH_REPORT_RESULT,
+        "schema" => "hub/schemas/work-dispatch-report-result.schema.json",
+        "ok" => true,
+        "capability" => LIFECYCLE_CAPABILITY,
+        "work" => work_summary(record),
+        "operation_id" => item.fetch("operation_id"),
+        "dispatches" => lifecycle_dispatches(item),
+        "replayed" => replayed,
+        "resume" => resume_metadata(record)
+      }
+    end
+
     def adapter_bind_result(record, replayed:)
       binding = record.fetch("runtime_binding")
       {
@@ -744,6 +1370,9 @@ module Flightdeck
 
     def operation_links(record)
       record.fetch("operation_ids").map do |operation_id|
+        proposal = record.fetch("proposals").find do |item|
+          item["kind"] == "operation_proposal" && item["operation_id"] == operation_id
+        end
         recovery = @authoring.operation("schema_version" => OperationAuthoring::OPERATION_REQUEST, "operation_id" => operation_id)
         state = updated_at = nil
         if recovery["outcome"] == "created"
@@ -753,6 +1382,8 @@ module Flightdeck
         end
         relation = if record["active_operation_id"] == operation_id
                      "active"
+                   elsif proposal && proposal["lifecycle_state"] == "declined"
+                     "historical"
                    elsif recovery["outcome"] == "created"
                      "historical"
                    else
@@ -808,7 +1439,7 @@ module Flightdeck
       return "failed" if active && active["result_state"] == "failed"
       return "unknown_outcome" if links.any? { |link| link["result_state"] == "unknown_outcome" }
       return "operation_active" if active
-      return "operation_proposed" unless links.empty?
+      return "operation_proposed" if links.any? { |link| link["relation"] == "proposed" }
 
       record.fetch("status")
     end
@@ -906,6 +1537,7 @@ module Flightdeck
           raise ContractError.new("work_store_invalid", "Work record boundary is invalid")
         end
         record = Support.load_data(path)
+        normalize_legacy_record!(record)
         validate_record!(record)
         unless entry == "#{Digest::SHA256.hexdigest(record.fetch('work_id'))}.json"
           raise ContractError.new("work_store_invalid", "Work record filename binding is invalid")
@@ -927,7 +1559,7 @@ module Flightdeck
     end
 
     def validate_record!(record)
-      fields = %w[schema_version work_id request_key_digest request_digest title status runtime_binding proposals operation_ids active_operation_id events created_at updated_at]
+      fields = %w[schema_version work_id request_key_digest request_digest title status runtime_binding proposals dispatch_reports operation_ids active_operation_id events created_at updated_at]
       expect_object!(record, fields, "Work record")
       unless record["schema_version"] == RECORD_VERSION && WORK_ID.match?(record["work_id"].to_s) &&
              SHA256.match?(record["request_key_digest"].to_s) && SHA256.match?(record["request_digest"].to_s) &&
@@ -959,6 +1591,7 @@ module Flightdeck
         raise ContractError.new("work_store_invalid", "unbound Work runtime binding contains private session state")
       end
       unless record["proposals"].is_a?(Array) && record["proposals"].length <= MAX_EVENTS &&
+             record["dispatch_reports"].is_a?(Array) && record["dispatch_reports"].length <= MAX_DISPATCH_REPORTS &&
              record["operation_ids"].is_a?(Array) && record["operation_ids"].length <= MAX_OPERATIONS && record["operation_ids"].uniq == record["operation_ids"] &&
              record["operation_ids"].all? { |id| OPERATION_ID.match?(id.to_s) } &&
              (record["active_operation_id"].nil? || record["operation_ids"].include?(record["active_operation_id"])) &&
@@ -966,6 +1599,22 @@ module Flightdeck
         raise ContractError.new("work_store_invalid", "Work record collections are invalid")
       end
       record["proposals"].each { |item| validate_proposal_record!(item) }
+      active_proposal = record["proposals"].find do |item|
+        item["kind"] == "operation_proposal" && item["operation_id"] == record["active_operation_id"]
+      end
+      if record["active_operation_id"] &&
+         (!active_proposal || !%w[launched launch_unknown].include?(active_proposal["lifecycle_state"]))
+        raise ContractError.new("work_store_invalid", "active Work Operation linkage is inconsistent")
+      end
+      record["dispatch_reports"].each { |item| validate_dispatch_report_record!(item) }
+      report_keys = record["dispatch_reports"].map { |item| item["report_key_digest"] }
+      raise ContractError.new("work_store_invalid", "Work dispatch report identities conflict") unless report_keys.uniq == report_keys
+      if record["dispatch_reports"].count { |item| item["state"] == "applying" } > 1
+        raise ContractError.new("work_store_invalid", "Work has conflicting interrupted dispatch reports")
+      end
+      unless record["dispatch_reports"].all? { |item| record["operation_ids"].include?(item["operation_id"]) }
+        raise ContractError.new("work_store_invalid", "Work dispatch report Operation linkage is invalid")
+      end
       record["events"].each { |item| validate_event!(item) }
       ids = record["events"].map { |item| item["event_id"] }
       raise ContractError.new("work_store_invalid", "Work event identities conflict") unless ids.uniq.length == ids.length
@@ -982,7 +1631,7 @@ module Flightdeck
       provenance = %w[observation_key_digest observation_digest binding_id session_generation resume_generation observed_at]
       recommendation = %w[recommendation_key_digest recommendation_digest]
       fields = if item["kind"] == "operation_proposal"
-                 provenance + recommendation + %w[kind recommendation operation_id plan_id plan_generation plan_digest plan_token catalog_generation targets]
+                 provenance + recommendation + %w[kind recommendation operation_id plan_id plan_generation plan_digest plan_token catalog_generation targets lifecycle_state state_observed_at decline_digest declined_at launched_at dispatches]
                else
                  provenance + %w[kind runtime_available]
                end
@@ -1014,6 +1663,89 @@ module Flightdeck
              end
         raise ContractError.new("work_store_invalid", "Work proposal identity is invalid")
       end
+      unless PROPOSAL_STATES.include?(item["lifecycle_state"])
+        raise ContractError.new("work_store_invalid", "Work proposal lifecycle state is invalid")
+      end
+      parse_time!(item["state_observed_at"], "proposal.state_observed_at")
+      case item["lifecycle_state"]
+      when "not_started"
+        unless item["decline_digest"].nil? && item["declined_at"].nil? && item["launched_at"].nil? && item["dispatches"] == []
+          raise ContractError.new("work_store_invalid", "not-started Work proposal contains execution state")
+        end
+      when "declined"
+        unless SHA256.match?(item["decline_digest"].to_s) && item["launched_at"].nil? && item["dispatches"] == []
+          raise ContractError.new("work_store_invalid", "declined Work proposal is invalid")
+        end
+        parse_time!(item["declined_at"], "proposal.declined_at")
+      when "launched"
+        unless item["decline_digest"].nil? && item["declined_at"].nil? && item["launched_at"]
+          raise ContractError.new("work_store_invalid", "launched Work proposal is invalid")
+        end
+        parse_time!(item["launched_at"], "proposal.launched_at")
+      when "launch_unknown"
+        unless item["decline_digest"].nil? && item["declined_at"].nil?
+          raise ContractError.new("work_store_invalid", "unknown Work proposal launch is invalid")
+        end
+      end
+      unless item["dispatches"].is_a?(Array) && item["dispatches"].length <= OperationAuthoring::MAX_ITEMS
+        raise ContractError.new("work_store_invalid", "Work proposal dispatch state is invalid")
+      end
+      item["dispatches"].each { |dispatch| validate_dispatch_record!(dispatch) }
+      dispatch_ids = item["dispatches"].map { |dispatch| dispatch["dispatch_id"] }
+      node_ids = item["dispatches"].map { |dispatch| dispatch["node_id"] }
+      unless dispatch_ids.uniq == dispatch_ids && node_ids.uniq == node_ids
+        raise ContractError.new("work_store_invalid", "Work proposal dispatch identities conflict")
+      end
+    end
+
+    def normalize_legacy_record!(record)
+      return unless record.is_a?(Hash) && record["schema_version"] == LEGACY_RECORD_VERSION
+
+      record["schema_version"] = RECORD_VERSION
+      record["dispatch_reports"] = []
+      Array(record["proposals"]).each do |item|
+        next unless item.is_a?(Hash) && item["kind"] == "operation_proposal"
+
+        active = record["active_operation_id"] == item["operation_id"]
+        item["lifecycle_state"] = if active && record["status"] == "unknown_outcome"
+                                      "launch_unknown"
+                                    elsif active
+                                      "launched"
+                                    else
+                                      "not_started"
+                                    end
+        item["state_observed_at"] = record["updated_at"] || item["observed_at"]
+        item["decline_digest"] = nil
+        item["declined_at"] = nil
+        item["launched_at"] = active && record["status"] != "unknown_outcome" ? record["updated_at"] : nil
+        item["dispatches"] = []
+      end
+    end
+
+    def validate_dispatch_record!(item)
+      fields = %w[dispatch_id node_id logical_project_key state attempt_digests receipt_digest pending_client_id_digest error_code updated_at]
+      expect_object!(item, fields, "Work dispatch record")
+      unless item["dispatch_id"].to_s.match?(/\Adispatch-[0-9a-f]{24}\z/) && Support::IDENTIFIER.match?(item["node_id"].to_s) &&
+             Support::IDENTIFIER.match?(item["logical_project_key"].to_s) && DISPATCH_STATES.include?(item["state"]) &&
+             item["attempt_digests"].is_a?(Array) && item["attempt_digests"].length <= MAX_EVENTS &&
+             item["attempt_digests"].uniq == item["attempt_digests"] && item["attempt_digests"].all? { |digest| SHA256.match?(digest.to_s) } &&
+             (item["receipt_digest"].nil? || SHA256.match?(item["receipt_digest"].to_s)) &&
+             (item["pending_client_id_digest"].nil? || SHA256.match?(item["pending_client_id_digest"].to_s)) &&
+             (item["error_code"].nil? || Support::IDENTIFIER.match?(item["error_code"].to_s))
+        raise ContractError.new("work_store_invalid", "Work dispatch record is invalid")
+      end
+      parse_time!(item["updated_at"], "dispatch.updated_at")
+    end
+
+    def validate_dispatch_report_record!(item)
+      expect_object!(item, %w[report_key_digest report_digest operation_id state error_code observed_at], "Work dispatch report record")
+      unless SHA256.match?(item["report_key_digest"].to_s) && SHA256.match?(item["report_digest"].to_s) &&
+             OPERATION_ID.match?(item["operation_id"].to_s) && %w[applying complete rejected].include?(item["state"]) &&
+             (item["error_code"].nil? || Support::IDENTIFIER.match?(item["error_code"].to_s)) &&
+             (item["state"] == "rejected" ? !item["error_code"].nil? : item["error_code"].nil?)
+        raise ContractError.new("work_store_invalid", "Work dispatch report record is invalid")
+      end
+      parse_time!(item["observed_at"], "dispatch report observed_at")
     end
 
     def validate_event!(item)

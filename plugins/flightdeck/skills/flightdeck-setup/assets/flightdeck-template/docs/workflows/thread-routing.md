@@ -51,8 +51,8 @@ product repo that owns the tag or digest instead.
 
 ## Default Routing
 
-- **Hub thread**: intake, ownership resolution, cross-repo design, sequencing,
-  approvals, and final synthesis.
+- **Hub thread**: intake, ownership resolution, right-sized coordination
+  planning, cross-repo design, sequencing, approvals, and final synthesis.
 - **Repo project on Mac**: code edits, tests, diffs, commits, PR preparation, and
   repo-specific review; also read-only repo audits when that repo owns the work.
 - **Codex Worktree mode**: parallel feature work or review fixes inside one Git
