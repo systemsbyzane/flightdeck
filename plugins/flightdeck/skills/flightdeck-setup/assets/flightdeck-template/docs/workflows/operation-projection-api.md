@@ -47,6 +47,20 @@ authenticated durable observation; and typed validation, approval, artifact,
 evidence, and result summaries. Missing producers use explicit `unavailable`
 envelopes.
 
+When `flightdeck.command.operation-agent-telemetry.v1` is declared, each v2
+Flightdeck agent also carries `runtime_agents`. These are dynamic authenticated
+runtime reports, not a built-in name catalog. The projection retains at most
+64 runtime agents per owning Flightdeck agent, matching the authenticated
+observation boundary. It includes operation-bound identity, honest
+available/correlated/unavailable parent state, reported
+name/role/source, exact project scope, lifecycle, summarized activity, typed
+events, structured yield, validations, error, and terminal result. Raw agent,
+session, and parent tool-call references are represented only by digests. Raw
+reasoning is prohibited. Missing OMP parent evidence is explicitly unavailable;
+a reported tool-call correlation is correlated. Missing plugin provenance,
+skill events, or typed approval semantics remain unknown or absent rather than
+inferred.
+
 An unbound execution agent is `queued`; a bound agent without an accepted
 observation is `starting`. Only a signed, sequence-exact accepted observation
 can produce working, waiting, approval-required, review-ready, failed, or

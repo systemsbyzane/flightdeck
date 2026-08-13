@@ -117,8 +117,21 @@ status, timestamps, route scope, and proven Mission/task children, but must
 not derive activity, changed files, validations, artifacts, or skills from a
 title, outcome, prompt, expected skill list, repository, or agent prose.
 Those optional fields are shown only when their typed durable Hub observation
-exists. No current authenticated skill-invocation producer exists, so skills
-remain the typed unavailable/empty state.
+exists. Legacy Mission children without authenticated skill telemetry retain
+the typed unavailable/empty state.
+
+Template 1.12 adds authenticated runtime-agent telemetry for adapter-backed
+Operations. Flightdeck durably projects whatever task agents and subagents the
+runtime actually reports, including custom names and sources, without a
+hardcoded agent catalog. Each owning Flightdeck agent retains at most 64
+runtime agents so observation, recovery, and detail projections share one
+fail-closed bound. Only typed authenticated tool, skill, file, change,
+approval, yield, validation, error, and terminal-result claims are shown. Raw
+reasoning and runtime/session references are never stored. Where OMP provides
+only a parent tool-call correlation, parent identity remains explicitly
+correlated rather than invented. Where OMP provides no parent evidence,
+parentage is explicitly unavailable and no owning-agent relationship is
+synthesized.
 
 An Operations snapshot card retains its `mission:` or `task:` `operation_id`
 as source identity. Detail navigation is separately typed under `detail` and

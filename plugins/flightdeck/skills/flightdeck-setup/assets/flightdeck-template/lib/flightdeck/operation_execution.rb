@@ -16,14 +16,19 @@ module Flightdeck
     EXECUTION_CAPABILITY = "flightdeck.command.operation-execution.v1"
     OBSERVATION_CAPABILITY = "flightdeck.command.operation-observation.v1"
     START_RECOVERY_CAPABILITY = "flightdeck.command.operation-start-recovery.v1"
+    AGENT_TELEMETRY_CAPABILITY = "flightdeck.command.operation-agent-telemetry.v1"
     PLAN_REQUEST = "flightdeck.operation-execution.execution-plan-request/v1"
     PLAN_RESULT = "flightdeck.operation-execution.execution-plan-result/v1"
     BIND_REQUEST = "flightdeck.operation-execution.bind-request/v1"
     BIND_RESULT = "flightdeck.operation-execution.bind-result/v1"
     OBSERVE_REQUEST = "flightdeck.operation-execution.observe-request/v1"
     OBSERVE_RESULT = "flightdeck.operation-execution.observe-result/v1"
+    OBSERVE_V2_REQUEST = "flightdeck.operation-execution.observe-request/v2"
+    OBSERVE_V2_RESULT = "flightdeck.operation-execution.observe-result/v2"
     OPEN_REQUEST = "flightdeck.operation-execution.open-request/v1"
     OPEN_RESULT = "flightdeck.operation-execution.open-result/v1"
+    OPEN_V2_REQUEST = "flightdeck.operation-execution.open-request/v2"
+    OPEN_V2_RESULT = "flightdeck.operation-execution.open-result/v2"
     ERROR_RESULT = "flightdeck.operation-execution.error-result/v1"
     START_REPORT_REQUEST = "flightdeck.operation-execution.start-report-request/v1"
     START_REPORT_RESULT = "flightdeck.operation-execution.start-report-result/v1"
@@ -31,7 +36,8 @@ module Flightdeck
     START_OPEN_RESULT = "flightdeck.operation-execution.start-open-result/v1"
     RETRY_BIND_REQUEST = "flightdeck.operation-execution.retry-bind-request/v1"
     RETRY_BIND_RESULT = "flightdeck.operation-execution.retry-bind-result/v1"
-    RECORD_VERSION = "flightdeck.operation-execution.record/v2"
+    RECORD_VERSION = "flightdeck.operation-execution.record/v3"
+    PREVIOUS_RECORD_VERSION = "flightdeck.operation-execution.record/v2"
     LEGACY_RECORD_VERSION = "flightdeck.operation-execution.record/v1"
     ADAPTER_CONFIGURATIONS = {
       "omp" => "flightdeck.adapter.omp.configuration/v1",
@@ -46,6 +52,10 @@ module Flightdeck
     MAX_OBSERVATIONS = 200
     MAX_START_FAILURES = 8
     MAX_AGENTS = 50
+    MAX_RUNTIME_AGENTS = 64
+    MAX_RUNTIME_AGENT_UPDATES = 64
+    MAX_RUNTIME_AGENT_EVENTS = 200
+    MAX_VALIDATIONS = 50
     MAX_TASK_BYTES = 8_192
     MAX_SUMMARY_BYTES = 2_048
     MAX_ACTION_BYTES = 512
@@ -54,6 +64,7 @@ module Flightdeck
     EXECUTION_ID = /\Aoperation-execution-[0-9a-f]{24}\z/
     EXECUTION_GENERATION = /\Aoperation-execution-generation-[0-9a-f]{48}\z/
     AGENT_ID = /\Aflightdeck-agent-[0-9a-f]{48}\z/
+    RUNTIME_AGENT_ID = /\Aoperation-runtime-agent-[0-9a-f]{48}\z/
     BINDING_GENERATION = /\Aoperation-execution-binding-generation-[0-9a-f]{48}\z/
     RETRY_GENERATION = /\Aoperation-execution-retry-generation-[0-9a-f]{48}\z/
     OPERATION_ID = /\Aoperation-[0-9a-f]{24}\z/
@@ -72,9 +83,18 @@ module Flightdeck
     TOOL_KINDS = %w[filesystem shell lsp subagent network other].freeze
     TOOL_STATUSES = %w[queued running succeeded failed blocked].freeze
     TOOL_PROFILES = %w[read_only workspace_write].freeze
+    RUNTIME_AGENT_KINDS = %w[task_agent subagent].freeze
+    RUNTIME_AGENT_SOURCES = %w[bundled user project plugin unknown].freeze
+    RUNTIME_EVENT_KINDS = %w[activity tool skill file change approval].freeze
+    RUNTIME_EVENT_STATUSES = %w[queued running succeeded failed blocked requested granted denied].freeze
+    FILE_ACTIONS = %w[read created modified deleted renamed].freeze
+    CHANGE_ACTIONS = %w[created modified deleted renamed].freeze
+    APPROVAL_STATES = %w[requested granted denied cancelled].freeze
+    VALIDATION_STATES = %w[queued running passed failed blocked skipped].freeze
     REASONING_EFFORTS = %w[low medium high xhigh].freeze
     SCHEMAS = %w[
       operation-execution-types.schema.json
+      operation-agent-telemetry-types.schema.json
       operation-execution-plan-request.schema.json
       operation-execution-plan-result.schema.json
       operation-execution-bind-request.schema.json
@@ -87,8 +107,12 @@ module Flightdeck
       operation-execution-retry-bind-result.schema.json
       operation-execution-observe-request.schema.json
       operation-execution-observe-result.schema.json
+      operation-execution-observe-v2-request.schema.json
+      operation-execution-observe-v2-result.schema.json
       operation-execution-open-request.schema.json
       operation-execution-open-result.schema.json
+      operation-execution-open-v2-request.schema.json
+      operation-execution-open-v2-result.schema.json
       operation-execution-error-result.schema.json
     ].freeze
 
@@ -271,6 +295,7 @@ module Flightdeck
                 "idempotency_key_digest" => nil, "request_digest" => nil, "bound_at" => nil
               },
               "start" => empty_start_record,
+              "runtime_agents" => [],
               "observations" => []
             )
           end,
@@ -506,13 +531,15 @@ module Flightdeck
 
     def observe(request)
       adapter = verify_capabilities!
+      v2 = request["schema_version"] == OBSERVE_V2_REQUEST
       fields = %w[
         schema_version adapter work_id operation_id execution_id execution_generation execution_digest
         agent_id binding_generation observation_id sequence lifecycle action_summary tool subagents
         attention error_code observed_at final_result adapter_session_ref signature
       ]
+      fields << "runtime_agent_updates" if v2
       expect_object!(request, fields, "Operation execution observation request")
-      expect_version!(request, OBSERVE_REQUEST)
+      expect_version!(request, v2 ? OBSERVE_V2_REQUEST : OBSERVE_REQUEST)
       verify_adapter!(request.fetch("adapter"), adapter)
       operation_id = bounded_id!(request.fetch("operation_id"), OPERATION_ID, "operation_id")
 
@@ -527,14 +554,17 @@ module Flightdeck
         end
         authenticate_observation!(binding, request)
         observation = normalize_observation!(request)
+        runtime_updates = v2 ? normalize_runtime_agent_updates!(request.fetch("runtime_agent_updates")) : []
         key_digest = Digest::SHA256.hexdigest(observation.fetch("observation_id"))
-        content_digest = Digest::SHA256.hexdigest(canonical_json(observation))
+        content_digest = Digest::SHA256.hexdigest(canonical_json(
+          observation.merge("runtime_agent_updates" => runtime_updates)
+        ))
         replay = agent.fetch("observations").find { |item| item["observation_id_digest"] == key_digest }
         if replay
           unless replay["content_digest"] == content_digest
             raise ContractError.new("duplicate_request_conflict", "observation_id is already bound to different content")
           end
-          return observe_result(record, agent, replayed: true)
+          return observe_result(record, agent, replayed: true, v2: v2)
         end
         observations = agent.fetch("observations")
         if observations.any? && TERMINAL_LIFECYCLES.include?(observations.last.fetch("lifecycle"))
@@ -549,6 +579,12 @@ module Flightdeck
           raise ContractError.new("out_of_order_observation", "observation time precedes the accepted observation")
         end
 
+        if v2
+          agent["runtime_agents"] = apply_runtime_agent_updates!(
+            record, agent, runtime_updates, observation.fetch("observed_at")
+          )
+        end
+
         observations << observation.merge(
           "observation_id_digest" => key_digest,
           "content_digest" => content_digest
@@ -557,7 +593,7 @@ module Flightdeck
         record["updated_at"] = [now, observation.fetch("observed_at")].max_by { |value| Time.iso8601(value) }
         record["state"] = derive_execution_state(record)
         write_record!(record)
-        observe_result(record, agent, replayed: false)
+        observe_result(record, agent, replayed: false, v2: v2)
       end
     end
 
@@ -565,7 +601,8 @@ module Flightdeck
       adapter = verify_capabilities!
       fields = %w[schema_version adapter work_id operation_id execution_id]
       expect_object!(request, fields, "Operation execution open request")
-      expect_version!(request, OPEN_REQUEST)
+      v2 = request["schema_version"] == OPEN_V2_REQUEST
+      expect_version!(request, v2 ? OPEN_V2_REQUEST : OPEN_REQUEST)
       verify_adapter!(request.fetch("adapter"), adapter)
       operation_id = bounded_id!(request.fetch("operation_id"), OPERATION_ID, "operation_id")
       with_existing_lock(File::LOCK_SH) do
@@ -573,7 +610,7 @@ module Flightdeck
         unless record["work_id"] == request.fetch("work_id") && record["execution_id"] == request.fetch("execution_id")
           raise ContractError.new("operation_identity_conflict", "recovery identity does not match the durable execution")
         end
-        open_result(record)
+        open_result(record, v2: v2)
       end
     end
 
@@ -581,10 +618,11 @@ module Flightdeck
     # no adapter session reference, binding secret, native project identity,
     # task text, prompt, or raw adapter payload.
     def mission_projection(operation_id)
-      mission_status_projection(operation_id).transform_values { |projection| projection.fetch("execution") }
+      mission_status_projection(operation_id, include_runtime_agents: false)
+        .transform_values { |projection| projection.fetch("execution") }
     end
 
-    def mission_status_projection(operation_id)
+    def mission_status_projection(operation_id, include_runtime_agents: false)
       return {} unless OPERATION_ID.match?(operation_id.to_s)
       return {} unless File.file?(record_path(operation_id))
 
@@ -593,7 +631,7 @@ module Flightdeck
         record = read_record(operation_id)
         record.fetch("agents").to_h do |agent|
           [agent.fetch("node_id"), {
-            "execution" => safe_agent_projection(agent),
+            "execution" => safe_agent_projection(agent, include_runtime_agents: include_runtime_agents),
             "start" => safe_start_projection(agent)
           }]
         end
@@ -606,7 +644,7 @@ module Flightdeck
 
     def apply_to_mission!(mission)
       operation_id = mission.dig("metadata", "id")
-      projections = mission_status_projection(operation_id)
+      projections = mission_status_projection(operation_id, include_runtime_agents: true)
       return mission if projections.empty?
 
       Array(mission.dig("spec", "graph", "nodes")).each do |node|
@@ -681,22 +719,24 @@ module Flightdeck
       execution = compatibility.dig("capabilities", EXECUTION_CAPABILITY)
       observation = compatibility.dig("capabilities", OBSERVATION_CAPABILITY)
       start_recovery = compatibility.dig("capabilities", START_RECOVERY_CAPABILITY)
+      agent_telemetry = compatibility.dig("capabilities", AGENT_TELEMETRY_CAPABILITY)
       runtime = compatibility["runtime_capabilities"]
       self.class.runtime_capabilities_projection!(runtime)
       managed = Array(execution&.fetch("managed_paths", [])) + Array(observation&.fetch("managed_paths", [])) +
-        Array(start_recovery&.fetch("managed_paths", []))
+        Array(start_recovery&.fetch("managed_paths", [])) + Array(agent_telemetry&.fetch("managed_paths", []))
       required = ["lib/flightdeck/operation_execution.rb", *SCHEMAS.map { |name| "hub/schemas/#{name}" }]
       selected_id = runtime.dig("operation_execution", "selected_adapter")
       selected = runtime.dig("adapters", selected_id)
 
       valid = compatibility["schema_version"] == "flightdeck.hub-compatibility/v1" &&
-        compatibility["product"] == "flightdeck" && compatibility["template_version"] == "1.11.0" &&
-        execution.is_a?(Hash) && observation.is_a?(Hash) && start_recovery.is_a?(Hash) &&
-        execution["kind"] == "command" && observation["kind"] == "command" && start_recovery["kind"] == "command" &&
-        execution["declaration_required"] == true && observation["declaration_required"] == true && start_recovery["declaration_required"] == true &&
+        compatibility["product"] == "flightdeck" && compatibility["template_version"] == "1.12.0" &&
+        execution.is_a?(Hash) && observation.is_a?(Hash) && start_recovery.is_a?(Hash) && agent_telemetry.is_a?(Hash) &&
+        execution["kind"] == "command" && observation["kind"] == "command" && start_recovery["kind"] == "command" && agent_telemetry["kind"] == "command" &&
+        execution["declaration_required"] == true && observation["declaration_required"] == true && start_recovery["declaration_required"] == true && agent_telemetry["declaration_required"] == true &&
         execution.dig("probe", "help_contains") == "bin/flightdeck operation execution-plan " &&
         observation.dig("probe", "help_contains") == "bin/flightdeck operation execution-open " &&
         start_recovery.dig("probe", "help_contains") == "bin/flightdeck operation execution-start-open " &&
+        agent_telemetry.dig("probe", "help_contains") == "bin/flightdeck operation execution-open " &&
         selected.is_a?(Hash) && selected["configuration_schema"] == ADAPTER_CONFIGURATIONS.fetch(selected_id) &&
         selected["execution_capability"] == EXECUTION_CAPABILITY &&
         selected["observation_capability"] == OBSERVATION_CAPABILITY &&
@@ -890,6 +930,389 @@ module Flightdeck
         "observed_at" => observed_at,
         "final_result" => final
       }
+    end
+
+    def normalize_runtime_agent_updates!(value)
+      unless value.is_a?(Array) && value.length <= MAX_RUNTIME_AGENT_UPDATES
+        raise ContractError.new("malformed_request", "runtime agent updates exceed their bounded contract")
+      end
+      updates = value.map do |raw|
+        fields = %w[
+          runtime_agent_ref parent_runtime_agent_ref parent_tool_call_ref runtime_session_ref agent_kind reported_name reported_role
+          source project_scope lifecycle activity_summary event structured_yield validations error terminal_result
+        ]
+        expect_object!(raw, fields, "runtime agent update")
+        runtime_ref = bounded_id!(raw.fetch("runtime_agent_ref"), OPAQUE_SESSION, "runtime_agent_ref")
+        parent_ref = raw["parent_runtime_agent_ref"]
+        bounded_id!(parent_ref, OPAQUE_SESSION, "parent_runtime_agent_ref") if parent_ref
+        parent_tool_call_ref = raw["parent_tool_call_ref"]
+        bounded_id!(parent_tool_call_ref, OPAQUE_SESSION, "parent_tool_call_ref") if parent_tool_call_ref
+        session_ref = raw["runtime_session_ref"]
+        bounded_id!(session_ref, OPAQUE_SESSION, "runtime_session_ref") if session_ref
+        kind = raw.fetch("agent_kind")
+        source = raw.fetch("source")
+        lifecycle = raw.fetch("lifecycle")
+        unless RUNTIME_AGENT_KINDS.include?(kind) && RUNTIME_AGENT_SOURCES.include?(source) && LIFECYCLES.include?(lifecycle)
+          raise ContractError.new("malformed_request", "runtime agent classification or lifecycle is unsupported")
+        end
+        if kind == "task_agent" && (parent_ref || parent_tool_call_ref)
+          raise ContractError.new("inconsistent_agent_identity", "runtime task agents cannot name a runtime parent")
+        elsif kind == "subagent" && [parent_ref, parent_tool_call_ref].compact.length > 1
+          raise ContractError.new("inconsistent_agent_identity", "runtime subagents cannot name conflicting parent evidence")
+        end
+        raise ContractError.new("inconsistent_agent_identity", "runtime agent cannot parent itself") if parent_ref == runtime_ref
+        scope = raw.fetch("project_scope")
+        expect_object!(scope, %w[node_id logical_project_key], "runtime agent project scope")
+        node_id = bounded_id!(scope.fetch("node_id"), Support::IDENTIFIER, "project_scope.node_id")
+        project_key = bounded_id!(scope.fetch("logical_project_key"), Support::IDENTIFIER, "project_scope.logical_project_key")
+        event = normalize_runtime_event!(raw["event"])
+        structured_yield = normalize_runtime_yield!(raw["structured_yield"])
+        validations = normalize_runtime_validations!(raw.fetch("validations"))
+        error = normalize_runtime_error!(raw["error"])
+        terminal_result = normalize_runtime_terminal_result!(raw["terminal_result"], lifecycle)
+        if lifecycle == "runtime_failure" && error.nil?
+          raise ContractError.new("malformed_request", "runtime failure requires a bounded error")
+        end
+        if lifecycle == "needs_approval" && !(event && event["kind"] == "approval" && event.dig("detail", "state") == "requested")
+          raise ContractError.new("malformed_request", "approval lifecycle requires a requested approval event")
+        end
+        {
+          "runtime_agent_ref" => runtime_ref,
+          "parent_runtime_agent_ref" => parent_ref,
+          "parent_tool_call_ref" => parent_tool_call_ref,
+          "runtime_session_ref" => session_ref,
+          "agent_kind" => kind,
+          "reported_name" => safe_text!(raw.fetch("reported_name"), "reported_name", 128),
+          "reported_role" => safe_text!(raw.fetch("reported_role"), "reported_role", 128),
+          "source" => source,
+          "project_scope" => { "node_id" => node_id, "logical_project_key" => project_key },
+          "lifecycle" => lifecycle,
+          "activity_summary" => raw["activity_summary"] && safe_text!(raw["activity_summary"], "activity_summary", MAX_ACTION_BYTES),
+          "event" => event,
+          "structured_yield" => structured_yield,
+          "validations" => validations,
+          "error" => error,
+          "terminal_result" => terminal_result
+        }
+      end
+      refs = updates.map { |update| update.fetch("runtime_agent_ref") }
+      unless refs.uniq.length == refs.length
+        raise ContractError.new("duplicate_agent_identity", "runtime agent update contains duplicate identities")
+      end
+      updates
+    end
+
+    def normalize_runtime_event!(value)
+      return nil if value.nil?
+
+      expect_object!(value, %w[event_id sequence kind status summary occurred_at detail], "runtime agent event")
+      event_id = bounded_id!(value.fetch("event_id"), REQUEST_KEY, "runtime event_id")
+      sequence = value.fetch("sequence")
+      kind = value.fetch("kind")
+      status = value.fetch("status")
+      unless sequence.is_a?(Integer) && sequence.between?(1, MAX_SEQUENCE) &&
+             RUNTIME_EVENT_KINDS.include?(kind) && RUNTIME_EVENT_STATUSES.include?(status)
+        raise ContractError.new("malformed_request", "runtime agent event is outside its bounded contract")
+      end
+      detail = normalize_runtime_event_detail!(kind, value["detail"])
+      {
+        "event_id" => event_id,
+        "sequence" => sequence,
+        "kind" => kind,
+        "status" => status,
+        "summary" => safe_text!(value.fetch("summary"), "runtime event summary", MAX_ACTION_BYTES),
+        "occurred_at" => canonical_time!(value.fetch("occurred_at"), "runtime event occurred_at"),
+        "detail" => detail
+      }
+    end
+
+    def normalize_runtime_event_detail!(kind, value)
+      case kind
+      when "activity"
+        raise ContractError.new("malformed_request", "activity event detail must be null") unless value.nil?
+        nil
+      when "tool"
+        expect_object!(value, %w[name kind], "runtime tool event detail")
+        tool_kind = value.fetch("kind")
+        raise ContractError.new("malformed_request", "runtime tool kind is unsupported") unless TOOL_KINDS.include?(tool_kind)
+        {
+          "name" => safe_text!(value.fetch("name"), "tool name", 128),
+          "kind" => tool_kind
+        }
+      when "skill"
+        expect_object!(value, %w[skill_id source], "runtime skill event detail")
+        source = value.fetch("source")
+        raise ContractError.new("malformed_request", "skill source is unsupported") unless RUNTIME_AGENT_SOURCES.include?(source)
+        {
+          "skill_id" => bounded_id!(value.fetch("skill_id"), Support::IDENTIFIER, "skill_id"),
+          "source" => source
+        }
+      when "file"
+        expect_object!(value, %w[path action], "runtime file event detail")
+        action = value.fetch("action")
+        raise ContractError.new("malformed_request", "file action is unsupported") unless FILE_ACTIONS.include?(action)
+        { "path" => safe_relative_path!(value.fetch("path")), "action" => action }
+      when "change"
+        expect_object!(value, %w[path action additions deletions evidence_ref], "runtime change event detail")
+        action = value.fetch("action")
+        additions = value.fetch("additions")
+        deletions = value.fetch("deletions")
+        evidence_ref = value["evidence_ref"]
+        unless CHANGE_ACTIONS.include?(action) && additions.is_a?(Integer) && additions.between?(0, 1_000_000) &&
+               deletions.is_a?(Integer) && deletions.between?(0, 1_000_000)
+          raise ContractError.new("malformed_request", "change event detail is invalid")
+        end
+        bounded_id!(evidence_ref, EVIDENCE_REF, "change evidence_ref") if evidence_ref
+        {
+          "path" => safe_relative_path!(value.fetch("path")), "action" => action,
+          "additions" => additions, "deletions" => deletions, "evidence_ref" => evidence_ref
+        }
+      when "approval"
+        expect_object!(value, %w[approval_id state], "runtime approval event detail")
+        state = value.fetch("state")
+        raise ContractError.new("malformed_request", "approval state is unsupported") unless APPROVAL_STATES.include?(state)
+        { "approval_id" => bounded_id!(value.fetch("approval_id"), REQUEST_KEY, "approval_id"), "state" => state }
+      end
+    end
+
+    def normalize_runtime_yield!(value)
+      return nil if value.nil?
+
+      expect_object!(value, %w[summary evidence_refs], "runtime agent structured yield")
+      {
+        "summary" => safe_text!(value.fetch("summary"), "structured yield summary", MAX_SUMMARY_BYTES),
+        "evidence_refs" => normalize_evidence_refs!(value.fetch("evidence_refs"), minimum: 0)
+      }
+    end
+
+    def normalize_runtime_validations!(value)
+      unless value.is_a?(Array) && value.length <= MAX_VALIDATIONS
+        raise ContractError.new("malformed_request", "runtime validations exceed their bounded contract")
+      end
+      items = value.map do |item|
+        expect_object!(item, %w[validation_id name status summary evidence_refs], "runtime validation")
+        status = item.fetch("status")
+        raise ContractError.new("malformed_request", "runtime validation status is unsupported") unless VALIDATION_STATES.include?(status)
+        {
+          "validation_id" => bounded_id!(item.fetch("validation_id"), REQUEST_KEY, "validation_id"),
+          "name" => safe_text!(item.fetch("name"), "validation name", 128),
+          "status" => status,
+          "summary" => item["summary"] && safe_text!(item["summary"], "validation summary", MAX_ACTION_BYTES),
+          "evidence_refs" => normalize_evidence_refs!(item.fetch("evidence_refs"), minimum: 0)
+        }
+      end
+      unless items.map { |item| item.fetch("validation_id") }.uniq.length == items.length
+        raise ContractError.new("duplicate_runtime_event", "runtime validation identities are duplicated")
+      end
+      items.sort_by { |item| item.fetch("validation_id") }
+    end
+
+    def normalize_runtime_error!(value)
+      return nil if value.nil?
+
+      expect_object!(value, %w[code summary retryable], "runtime agent error")
+      retryable = value.fetch("retryable")
+      raise ContractError.new("malformed_request", "runtime error retryable must be boolean") unless [true, false].include?(retryable)
+      {
+        "code" => bounded_id!(value.fetch("code"), Support::IDENTIFIER, "runtime error code"),
+        "summary" => safe_text!(value.fetch("summary"), "runtime error summary", MAX_ACTION_BYTES),
+        "retryable" => retryable
+      }
+    end
+
+    def normalize_runtime_terminal_result!(value, lifecycle)
+      terminal = TERMINAL_LIFECYCLES.include?(lifecycle)
+      if value.nil?
+        raise ContractError.new("malformed_request", "terminal runtime agents require terminal_result") if terminal
+        return nil
+      end
+      raise ContractError.new("malformed_request", "nonterminal runtime agents cannot include terminal_result") unless terminal
+
+      expect_object!(value, %w[status summary evidence_refs], "runtime agent terminal result")
+      status = value.fetch("status")
+      expected = {
+        "review_ready" => "succeeded", "failed_validation" => "failed", "runtime_failure" => "failed",
+        "cancelled" => "cancelled", "unknown_outcome" => "unknown"
+      }.fetch(lifecycle)
+      raise ContractError.new("inconsistent_agent_identity", "terminal result conflicts with lifecycle") unless status == expected
+      {
+        "status" => status,
+        "summary" => safe_text!(value.fetch("summary"), "terminal result summary", MAX_SUMMARY_BYTES),
+        "evidence_refs" => normalize_evidence_refs!(value.fetch("evidence_refs"), minimum: lifecycle == "review_ready" ? 1 : 0)
+      }
+    end
+
+    def normalize_evidence_refs!(value, minimum:)
+      unless value.is_a?(Array) && value.length.between?(minimum, 50) && value.uniq == value &&
+             value.all? { |reference| EVIDENCE_REF.match?(reference.to_s) }
+        raise ContractError.new("malformed_request", "evidence references are outside their bounded contract")
+      end
+      value.sort
+    end
+
+    def safe_relative_path!(value)
+      unless value.is_a?(String) && value.bytesize.between?(1, 1024) && !value.start_with?("/", "~") &&
+             !value.split("/").any? { |segment| segment.empty? || %w[. ..].include?(segment) } &&
+             !value.match?(/[\u0000-\u001f\u007f]/)
+        raise ContractError.new("untrusted_payload", "runtime file path must be a bounded relative path")
+      end
+      value
+    end
+
+    def apply_runtime_agent_updates!(record, owner, updates, observed_at)
+      existing = Marshal.load(Marshal.dump(Array(owner["runtime_agents"])))
+
+      existing_by_ref = existing.to_h { |item| [item.fetch("runtime_ref_digest"), item] }
+      update_by_ref = updates.to_h { |item| [Digest::SHA256.hexdigest(item.fetch("runtime_agent_ref")), item] }
+      new_count = update_by_ref.keys.count { |digest| !existing_by_ref.key?(digest) }
+      if existing.length + new_count > MAX_RUNTIME_AGENTS
+        raise ContractError.new("runtime_agent_limit_exceeded", "runtime agent history is full")
+      end
+      all_ids = existing_by_ref.transform_values { |item| item.fetch("agent_id") }
+      update_by_ref.each_key do |digest|
+        identity = Digest::SHA256.hexdigest(canonical_json([record.fetch("operation_id"), owner.fetch("agent_id"), digest]))
+        all_ids[digest] ||= "operation-runtime-agent-#{identity[0, 48]}"
+      end
+
+      updates.each do |update|
+        ref_digest = Digest::SHA256.hexdigest(update.fetch("runtime_agent_ref"))
+        parent_digest = update["parent_runtime_agent_ref"] && Digest::SHA256.hexdigest(update.fetch("parent_runtime_agent_ref"))
+        parent_tool_digest = update["parent_tool_call_ref"] && Digest::SHA256.hexdigest(update.fetch("parent_tool_call_ref"))
+        parent_id = parent_digest && all_ids[parent_digest]
+        if parent_digest && !parent_id
+          raise ContractError.new("foreign_parent_identity", "runtime subagent parent is foreign to this Operation agent")
+        end
+        expected_scope = { "node_id" => owner.fetch("node_id"), "logical_project_key" => owner.fetch("logical_project_key") }
+        unless secure_equal_json?(update.fetch("project_scope"), expected_scope)
+          raise ContractError.new("foreign_project_scope", "runtime agent project scope exceeds its authorized Operation node")
+        end
+        metadata = {
+          "agent_id" => all_ids.fetch(ref_digest),
+          "parent" => if parent_digest
+            { "availability" => "available", "agent_id" => parent_id, "tool_call_ref_digest" => nil }
+          elsif parent_tool_digest
+            { "availability" => "correlated", "agent_id" => nil, "tool_call_ref_digest" => parent_tool_digest }
+          else
+            { "availability" => "unavailable", "agent_id" => nil, "tool_call_ref_digest" => nil }
+          end,
+          "runtime_ref_digest" => ref_digest,
+          "agent_kind" => update.fetch("agent_kind"),
+          "reported_name" => update.fetch("reported_name"),
+          "reported_role" => update.fetch("reported_role"),
+          "source" => update.fetch("source"),
+          "project_scope" => expected_scope
+        }
+        item = existing_by_ref[ref_digest]
+        if item
+          unless secure_equal_json?(item.slice(*metadata.keys), metadata)
+            raise ContractError.new("inconsistent_agent_identity", "runtime agent immutable identity metadata changed")
+          end
+          if TERMINAL_LIFECYCLES.include?(item.fetch("lifecycle"))
+            raise ContractError.new("out_of_order_observation", "terminal runtime agent cannot accept another update")
+          end
+          if Time.iso8601(observed_at) < Time.iso8601(item.fetch("updated_at"))
+            raise ContractError.new("out_of_order_observation", "runtime agent update precedes its accepted state")
+          end
+        else
+          item = metadata.merge(
+            "session_ref_digest" => nil, "lifecycle" => "queued", "activity_summary" => nil,
+            "events" => [], "structured_yield" => nil, "validations" => [], "error" => nil,
+            "terminal_result" => nil, "created_at" => observed_at, "updated_at" => observed_at
+          )
+          existing << item
+          existing_by_ref[ref_digest] = item
+        end
+
+        session_digest = update["runtime_session_ref"] && Digest::SHA256.hexdigest(update.fetch("runtime_session_ref"))
+        if item["session_ref_digest"] && session_digest != item["session_ref_digest"]
+          raise ContractError.new("inconsistent_agent_identity", "runtime agent session identity changed")
+        end
+        item["session_ref_digest"] ||= session_digest
+        event = update["event"]
+        if event
+          validate_runtime_event_authorization!(owner, event)
+          events = item.fetch("events")
+          raise ContractError.new("runtime_event_limit_exceeded", "runtime agent event history is full") if events.length >= MAX_RUNTIME_AGENT_EVENTS
+          expected_sequence = events.empty? ? 1 : events.last.fetch("sequence") + 1
+          unless event.fetch("sequence") == expected_sequence
+            raise ContractError.new("out_of_order_observation", "runtime agent event sequence is not the exact next sequence")
+          end
+          if Time.iso8601(event.fetch("occurred_at")) > Time.iso8601(observed_at) ||
+             (events.any? && Time.iso8601(event.fetch("occurred_at")) < Time.iso8601(events.last.fetch("occurred_at")))
+            raise ContractError.new("out_of_order_observation", "runtime agent event time is outside the accepted sequence")
+          end
+          event_id_digest = Digest::SHA256.hexdigest(event.fetch("event_id"))
+          if existing.any? { |candidate| candidate.fetch("events").any? { |accepted| accepted["event_id_digest"] == event_id_digest } }
+            raise ContractError.new("duplicate_runtime_event", "runtime event identity is already accepted")
+          end
+          events << event.merge("event_id_digest" => event_id_digest).reject { |key, _| key == "event_id" }
+        end
+        item.merge!(
+          "lifecycle" => update.fetch("lifecycle"),
+          "activity_summary" => update["activity_summary"],
+          "structured_yield" => update["structured_yield"],
+          "validations" => update.fetch("validations"),
+          "error" => update["error"],
+          "terminal_result" => update["terminal_result"],
+          "updated_at" => observed_at
+        )
+      end
+
+      validate_runtime_agent_graph!(existing, owner.fetch("agent_id"))
+      existing.sort_by { |item| [runtime_agent_depth(item, existing, owner.fetch("agent_id")), item.fetch("agent_id")] }
+    end
+
+    def validate_runtime_event_authorization!(owner, event)
+      access_mode = owner.dig("native_authorization", "access_mode")
+      if event["kind"] == "change" || (event["kind"] == "file" && event.dig("detail", "action") != "read")
+        raise ContractError.new("authorization_conflict", "runtime agent change exceeds a read-only Operation target") if access_mode == "read_only"
+      end
+      if event["kind"] == "tool"
+        allowed = Array(owner.dig("adapter_configuration", "tool_policy", "allowed_tool_kinds"))
+        unless allowed.include?(event.dig("detail", "kind"))
+          raise ContractError.new("authorization_conflict", "runtime agent tool exceeds the authorized tool policy")
+        end
+      end
+    end
+
+    def validate_runtime_agent_graph!(items, owner_agent_id)
+      ids = items.map { |item| item.fetch("agent_id") }
+      unless ids.uniq.length == ids.length && items.map { |item| item.fetch("runtime_ref_digest") }.uniq.length == items.length
+        raise ContractError.new("duplicate_agent_identity", "runtime agent identities are not unique")
+      end
+      by_id = items.to_h { |item| [item.fetch("agent_id"), item] }
+      by_id.each do |id, item|
+        next unless item.dig("parent", "availability") == "available"
+
+        parent = item.dig("parent", "agent_id")
+        raise ContractError.new("foreign_parent_identity", "runtime agent parent is foreign") unless parent == owner_agent_id || by_id.key?(parent)
+        seen = { id => true }
+        cursor = parent
+        until cursor == owner_agent_id
+          raise ContractError.new("inconsistent_agent_identity", "runtime agent hierarchy is cyclic") if seen[cursor]
+          seen[cursor] = true
+          ancestor = by_id[cursor]
+          raise ContractError.new("foreign_parent_identity", "runtime agent parent is foreign") unless ancestor
+          break unless ancestor.dig("parent", "availability") == "available"
+
+          cursor = ancestor.dig("parent", "agent_id")
+          raise ContractError.new("foreign_parent_identity", "runtime agent parent is foreign") unless cursor
+        end
+      end
+    end
+
+    def runtime_agent_depth(item, items, owner_agent_id)
+      by_id = items.to_h { |candidate| [candidate.fetch("agent_id"), candidate] }
+      depth = 1
+      cursor = item
+      while cursor.dig("parent", "availability") == "available"
+        parent_id = cursor.dig("parent", "agent_id")
+        depth += 1
+        break if parent_id == owner_agent_id
+
+        cursor = by_id.fetch(parent_id)
+      end
+      depth
     end
 
     def normalize_start_failure!(value)
@@ -1098,27 +1521,27 @@ module Flightdeck
       entry.slice("sequence", "failure_code", "summary", "retryable", "failed_at")
     end
 
-    def observe_result(record, agent, replayed:)
+    def observe_result(record, agent, replayed:, v2: false)
       {
-        "schema_version" => OBSERVE_RESULT,
-        "schema" => "hub/schemas/operation-execution-observe-result.schema.json",
+        "schema_version" => v2 ? OBSERVE_V2_RESULT : OBSERVE_RESULT,
+        "schema" => v2 ? "hub/schemas/operation-execution-observe-v2-result.schema.json" : "hub/schemas/operation-execution-observe-result.schema.json",
         "ok" => true,
-        "capability" => OBSERVATION_CAPABILITY,
+        "capability" => v2 ? AGENT_TELEMETRY_CAPABILITY : OBSERVATION_CAPABILITY,
         "adapter" => record.fetch("adapter"),
         "operation_id" => record.fetch("operation_id"),
         "execution_id" => record.fetch("execution_id"),
         "execution_state" => record.fetch("state"),
-        "agent" => safe_agent_projection(agent),
+        "agent" => safe_agent_projection(agent, include_runtime_agents: v2),
         "replayed" => replayed
       }
     end
 
-    def open_result(record)
+    def open_result(record, v2: false)
       {
-        "schema_version" => OPEN_RESULT,
-        "schema" => "hub/schemas/operation-execution-open-result.schema.json",
+        "schema_version" => v2 ? OPEN_V2_RESULT : OPEN_RESULT,
+        "schema" => v2 ? "hub/schemas/operation-execution-open-v2-result.schema.json" : "hub/schemas/operation-execution-open-result.schema.json",
         "ok" => true,
-        "capability" => OBSERVATION_CAPABILITY,
+        "capability" => v2 ? AGENT_TELEMETRY_CAPABILITY : OBSERVATION_CAPABILITY,
         "adapter" => record.fetch("adapter"),
         "work_id" => record.fetch("work_id"),
         "operation_id" => record.fetch("operation_id"),
@@ -1126,7 +1549,7 @@ module Flightdeck
         "authorization" => authorization_projection(record),
         "runtime_boundary" => runtime_boundary(record),
         "progress" => progress_projection(record),
-        "agents" => record.fetch("agents").map { |agent| safe_agent_projection(agent) }
+        "agents" => record.fetch("agents").map { |agent| safe_agent_projection(agent, include_runtime_agents: v2) }
       }
     end
 
@@ -1157,10 +1580,10 @@ module Flightdeck
       ).merge("binding_state" => agent.dig("binding", "state"))
     end
 
-    def safe_agent_projection(agent)
+    def safe_agent_projection(agent, include_runtime_agents: false)
       latest = agent.fetch("observations").last
       observation = latest&.reject { |key, _| %w[observation_id_digest content_digest].include?(key) }
-      {
+      projection = {
         "agent_id" => agent.fetch("agent_id"),
         "node_id" => agent.fetch("node_id"),
         "logical_project_key" => agent.fetch("logical_project_key"),
@@ -1169,6 +1592,36 @@ module Flightdeck
         "adapter" => record_adapter_for(agent),
         "binding_state" => agent.dig("binding", "state"),
         "observation" => observation
+      }
+      projection["runtime_agents"] = Array(agent["runtime_agents"]).map { |item| runtime_agent_projection(item) } if include_runtime_agents
+      projection
+    end
+
+    def runtime_agent_projection(agent)
+      {
+        "agent_id" => agent.fetch("agent_id"),
+        "parent" => agent.fetch("parent"),
+        "agent_kind" => agent.fetch("agent_kind"),
+        "reported_name" => agent.fetch("reported_name"),
+        "reported_role" => agent.fetch("reported_role"),
+        "source" => agent.fetch("source"),
+        "runtime" => {
+          "agent_ref_digest" => agent.fetch("runtime_ref_digest"),
+          "session_ref_digest" => agent["session_ref_digest"]
+        },
+        "project_scope" => agent.fetch("project_scope"),
+        "lifecycle" => agent.fetch("lifecycle"),
+        "activity_summary" => agent["activity_summary"],
+        "events" => agent.fetch("events").map do |event|
+          event.reject { |key, _| key == "event_id_digest" }
+            .merge("event_id" => "operation-runtime-event-#{event.fetch('event_id_digest')[0, 48]}")
+        end,
+        "structured_yield" => agent["structured_yield"],
+        "validations" => agent.fetch("validations"),
+        "error" => agent["error"],
+        "terminal_result" => agent["terminal_result"],
+        "created_at" => agent.fetch("created_at"),
+        "updated_at" => agent.fetch("updated_at")
       }
     end
 
@@ -1249,7 +1702,7 @@ module Flightdeck
         idempotency_key_digest request_digest authoring dispatch agents created_at updated_at record_digest
       ]
       expect_object!(record, fields, "Operation execution record", code: "execution_store_invalid")
-      valid = [RECORD_VERSION, LEGACY_RECORD_VERSION].include?(record["schema_version"]) && WORK_ID.match?(record["work_id"].to_s) &&
+      valid = [RECORD_VERSION, PREVIOUS_RECORD_VERSION, LEGACY_RECORD_VERSION].include?(record["schema_version"]) && WORK_ID.match?(record["work_id"].to_s) &&
         OPERATION_ID.match?(record["operation_id"].to_s) && (!expected_operation_id || record["operation_id"] == expected_operation_id) &&
         EXECUTION_ID.match?(record["execution_id"].to_s) && EXECUTION_GENERATION.match?(record["execution_generation"].to_s) &&
         SHA256.match?(record["execution_digest"].to_s) && valid_adapter_descriptor?(record["adapter"]) &&
@@ -1275,6 +1728,10 @@ module Flightdeck
       unless record.fetch("agents").map { |agent| agent.fetch("agent_id") }.uniq.length == record.fetch("agents").length &&
              record.fetch("agents").map { |agent| agent.fetch("node_id") }.uniq.length == record.fetch("agents").length
         raise ContractError.new("execution_store_invalid", "Operation execution agent identities are not unique")
+      end
+      runtime_ids = record.fetch("agents").flat_map { |agent| Array(agent["runtime_agents"]).map { |item| item.fetch("agent_id") } }
+      unless runtime_ids.uniq.length == runtime_ids.length
+        raise ContractError.new("execution_store_invalid", "runtime agent identities are not unique across the Operation")
       end
       scan_safe!(record)
       record
@@ -1317,7 +1774,8 @@ module Flightdeck
         agent_id node_id logical_project_key dependencies execution_order authorized_task
         adapter_configuration native_authorization binding observations
       ]
-      fields << "start" if record_version == RECORD_VERSION
+      fields << "start" if [RECORD_VERSION, PREVIOUS_RECORD_VERSION].include?(record_version)
+      fields << "runtime_agents" if record_version == RECORD_VERSION
       expect_object!(agent, fields, "Operation execution agent record", code: "execution_store_invalid")
       unless AGENT_ID.match?(agent["agent_id"].to_s) && Support::IDENTIFIER.match?(agent["node_id"].to_s) &&
              Support::IDENTIFIER.match?(agent["logical_project_key"].to_s) && agent["dependencies"].is_a?(Array) &&
@@ -1352,7 +1810,7 @@ module Flightdeck
         raise ContractError.new("execution_store_invalid", "observation sequence is invalid")
       end
       agent.fetch("observations").each { |observation| validate_persisted_observation!(observation) }
-      if record_version == RECORD_VERSION
+      if [RECORD_VERSION, PREVIOUS_RECORD_VERSION].include?(record_version)
         start = agent.fetch("start")
         validate_start_record!(start)
         if (binding["state"] == "bound") != (start["state"] == "bound")
@@ -1363,6 +1821,14 @@ module Flightdeck
            (start["state"] != latest["resulting_state"] || start["retry_generation"] != latest["resulting_retry_generation"])
           raise ContractError.new("execution_store_invalid", "Operation execution start recovery state is stale")
         end
+      end
+      if record_version == RECORD_VERSION
+        runtime_agents = agent.fetch("runtime_agents")
+        unless runtime_agents.is_a?(Array) && runtime_agents.length <= MAX_RUNTIME_AGENTS
+          raise ContractError.new("execution_store_invalid", "runtime agent history exceeds its bounded contract")
+        end
+        runtime_agents.each { |item| validate_persisted_runtime_agent!(item, agent) }
+        validate_runtime_agent_graph!(runtime_agents, agent.fetch("agent_id"))
       end
     end
 
@@ -1453,6 +1919,61 @@ module Flightdeck
       raise ContractError.new("execution_store_invalid", "persisted Operation observation is invalid")
     end
 
+    def validate_persisted_runtime_agent!(agent, owner)
+      fields = %w[
+        agent_id parent runtime_ref_digest session_ref_digest agent_kind reported_name reported_role source
+        project_scope lifecycle activity_summary events structured_yield validations error terminal_result created_at updated_at
+      ]
+      expect_object!(agent, fields, "persisted runtime agent", code: "execution_store_invalid")
+      parent = agent.fetch("parent")
+      expect_object!(parent, %w[availability agent_id tool_call_ref_digest], "persisted runtime parent", code: "execution_store_invalid")
+      parent_valid = if parent["availability"] == "available"
+                       parent["tool_call_ref_digest"].nil? &&
+                         (parent["agent_id"] == owner.fetch("agent_id") || RUNTIME_AGENT_ID.match?(parent["agent_id"].to_s))
+                     elsif parent["availability"] == "correlated"
+                       parent["agent_id"].nil? && SHA256.match?(parent["tool_call_ref_digest"].to_s)
+                     elsif parent["availability"] == "unavailable"
+                       parent["agent_id"].nil? && parent["tool_call_ref_digest"].nil?
+                     else
+                       false
+                     end
+      scope = agent.fetch("project_scope")
+      expect_object!(scope, %w[node_id logical_project_key], "persisted runtime project scope", code: "execution_store_invalid")
+      valid = RUNTIME_AGENT_ID.match?(agent["agent_id"].to_s) && SHA256.match?(agent["runtime_ref_digest"].to_s) &&
+        (agent["session_ref_digest"].nil? || SHA256.match?(agent["session_ref_digest"].to_s)) && parent_valid &&
+        RUNTIME_AGENT_KINDS.include?(agent["agent_kind"]) && RUNTIME_AGENT_SOURCES.include?(agent["source"]) &&
+        scope == { "node_id" => owner.fetch("node_id"), "logical_project_key" => owner.fetch("logical_project_key") } &&
+        LIFECYCLES.include?(agent["lifecycle"]) && agent["events"].is_a?(Array) &&
+        agent["events"].length <= MAX_RUNTIME_AGENT_EVENTS
+      raise ContractError.new("execution_store_invalid", "persisted runtime agent identity is invalid") unless valid
+      safe_text!(agent["reported_name"], "reported_name", 128)
+      safe_text!(agent["reported_role"], "reported_role", 128)
+      safe_text!(agent["activity_summary"], "activity_summary", MAX_ACTION_BYTES) if agent["activity_summary"]
+      canonical_time!(agent["created_at"], "runtime agent created_at", code: "execution_store_invalid")
+      canonical_time!(agent["updated_at"], "runtime agent updated_at", code: "execution_store_invalid")
+      sequences = agent.fetch("events").map { |event| event["sequence"] }
+      unless sequences == (1..sequences.length).to_a &&
+             agent.fetch("events").map { |event| event["event_id_digest"] }.uniq.length == agent.fetch("events").length
+        raise ContractError.new("execution_store_invalid", "persisted runtime agent event history is invalid")
+      end
+      agent.fetch("events").each_with_index do |event, index|
+        expect_object!(event, %w[sequence kind status summary occurred_at detail event_id_digest], "persisted runtime event", code: "execution_store_invalid")
+        raise ContractError.new("execution_store_invalid", "persisted runtime event identity is invalid") unless SHA256.match?(event["event_id_digest"].to_s)
+        normalize_runtime_event!(event.reject { |key, _| key == "event_id_digest" }.merge("event_id" => "persisted-event-#{index + 1}"))
+      end
+      normalize_runtime_yield!(agent["structured_yield"])
+      normalize_runtime_validations!(agent.fetch("validations"))
+      normalize_runtime_error!(agent["error"])
+      normalize_runtime_terminal_result!(agent["terminal_result"], agent.fetch("lifecycle"))
+      if agent["lifecycle"] == "runtime_failure" && agent["error"].nil?
+        raise ContractError.new("execution_store_invalid", "persisted runtime failure has no error")
+      end
+    rescue ContractError => error
+      raise error if error.code == "execution_store_invalid"
+
+      raise ContractError.new("execution_store_invalid", "persisted runtime agent is invalid")
+    end
+
     def write_record!(record)
       upgrade_record!(record)
       record["record_digest"] = nil
@@ -1475,11 +1996,13 @@ module Flightdeck
     end
 
     def upgrade_record!(record)
-      return record if record["schema_version"] == RECORD_VERSION && record.fetch("agents").all? { |agent| agent.key?("start") }
+      return record if record["schema_version"] == RECORD_VERSION &&
+                       record.fetch("agents").all? { |agent| agent.key?("start") && agent.key?("runtime_agents") }
 
       record["schema_version"] = RECORD_VERSION
       record.fetch("agents").each do |agent|
         agent["start"] ||= empty_start_record(state: agent.dig("binding", "state") == "bound" ? "bound" : "initial")
+        agent["runtime_agents"] ||= []
       end
       record
     end

@@ -6,6 +6,7 @@ declaration-required capabilities:
 - `flightdeck.command.operation-execution.v1`
 - `flightdeck.command.operation-observation.v1`
 - `flightdeck.command.operation-start-recovery.v1` (template 1.11 and later)
+- `flightdeck.command.operation-agent-telemetry.v1` (template 1.12 and later)
 
 Work conversation runtime remains `codex`. An Operation independently selects
 the exact adapter declared by `runtime_capabilities.operation_execution`.
@@ -66,9 +67,45 @@ project IDs, raw prompts or reasoning, provider metadata, credentials, tool
 schemas, environment variables, and raw protocol payloads. Control Center only
 reads these durable projections.
 
-State is stored under `hub/state/operation-execution`. Template 1.11 writes
-record v2 and reads record v1, upgrading v1 atomically only on a later authorized
-write. Rollback requires restoring the complete pre-1.11 managed control-plane
-set and compatibility file together. A Hub rolled back to 1.10 must not open a
-record already upgraded to v2; preserve it for forward recovery instead of
-rewriting or discarding its audit history.
+## Runtime-agent telemetry
+
+Template 1.12 adds additive v2 `execution-observe` and `execution-open`
+contracts. The v1 requests and renderer projections remain unchanged. A v2
+authenticated observation may carry bounded updates for runtime-reported task
+agents and subagents without restricting their names to a built-in catalog.
+Each observation and each owning Flightdeck agent's durable runtime roster are
+bounded to 64 agents; attempting to accumulate a 65th agent fails without
+changing the accepted record.
+Core derives each public `operation-runtime-agent-*` identity from the exact
+Operation, owning Flightdeck agent, and runtime reference digest. Raw runtime
+agent, session, and tool-call references are never persisted or projected.
+
+Immutable reported name, role, source, kind, and exact authored project scope
+are bound on first sight. Later identity drift, duplicated runtime/event
+identity, foreign project scope, unauthorized write/tool activity, cycles,
+out-of-order events, or post-terminal updates fail closed. Typed events cover
+activity, tools, skills, files, changes, and approvals; agents also expose a
+bounded structured yield, validations, error, and terminal result. These are
+authenticated runtime claims, not inferences from prose.
+
+OMP RPC currently reports `parentToolCallId` rather than a parent agent ID.
+When only that correlation exists, Flightdeck persists its digest and projects
+`parent.availability: correlated` with no invented `agent_id`. A runtime-proven
+parent projects `available`. When neither form of parent evidence is present,
+Flightdeck projects `parent.availability: unavailable` with no agent or
+tool-call identity; it never substitutes the owning Flightdeck agent.
+Similarly, unsupported plugin provenance, skill use, or approval semantics
+remain `unknown` or absent; generic messages and confirm/select UI frames are
+not promoted into typed evidence. Advisor is not part of this contract.
+
+Flightdeck retains accepted terminal subagent history even when the runtime no
+longer returns that subagent in a current snapshot or loses it after session
+switch/restart. This durable history is the recovery source for Operations and
+Control Center.
+
+State is stored under `hub/state/operation-execution`. Template 1.12 writes
+record v3 and reads records v1 and v2, adding empty runtime-agent history only
+on a later authorized write. Rollback requires restoring the complete managed
+control-plane set and compatibility file together. A Hub rolled back below
+1.12 must not open a record already upgraded to v3; preserve it for forward
+recovery instead of rewriting or discarding its audit history.

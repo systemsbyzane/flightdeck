@@ -2,7 +2,7 @@
   "schema_version": "flightdeck.hub-compatibility/v1",
   "schema": "hub/schemas/hub-compatibility.schema.json",
   "product": "flightdeck",
-  "template_version": "1.11.0",
+  "template_version": "1.12.0",
   "runtime_capabilities": {
     "primary_runtime": "codex",
     "conversation": {
@@ -719,6 +719,35 @@
         "hub/schemas/operation-detail-v2-result.schema.json",
         "hub/schemas/operation.schema.json",
         "hub/schemas/operations-snapshot.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.command.operation-agent-telemetry.v1": {
+      "kind": "command",
+      "declaration_required": true,
+      "description": "Authenticated durable runtime-agent and subagent hierarchy with operation-bound identity, honest parent correlation, bounded typed events, and renderer-safe recovery.",
+      "probe": {
+        "help_contains": "bin/flightdeck operation execution-open "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/operation-execution-api.md",
+        "docs/workflows/operation-projection-api.md",
+        "docs/workflows/operations.md",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/operation_detail.rb",
+        "lib/flightdeck/operation_execution.rb",
+        "lib/flightdeck/mission_store.rb",
+        "hub/schemas/operation-execution-types.schema.json",
+        "hub/schemas/operation-agent-telemetry-types.schema.json",
+        "hub/schemas/operation-execution-observe-v2-request.schema.json",
+        "hub/schemas/operation-execution-observe-v2-result.schema.json",
+        "hub/schemas/operation-execution-open-v2-request.schema.json",
+        "hub/schemas/operation-execution-open-v2-result.schema.json",
+        "hub/schemas/operation-detail-v2-result.schema.json",
+        "hub/schemas/hub-compatibility.schema.json"
       ],
       "fallback": {
         "mode": "stop_and_plan_migration"

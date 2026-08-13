@@ -146,6 +146,14 @@ v2 and reads record v1. Apply implementation, six new schemas, shared types,
 error schema, docs, tests, and compatibility last; rollback must preserve any
 v2 execution records for a forward restore.
 
+Template `1.12.0` adds
+`flightdeck.command.operation-agent-telemetry.v1`: an additive authenticated
+v2 observe/open boundary for dynamic runtime task agents and subagents. It
+stores record v3 while continuing to read v1 and v2. Apply the producer,
+runtime-agent schemas, detail projection, docs, tests, and compatibility
+declaration as one reviewed set. Rollback must preserve v3 execution records
+for forward recovery; older templates must not reinterpret or rewrite them.
+
 For a preserved Hub that needs these desktop surfaces, the later separately
 authorized migration must compare the exact managed paths returned by the
 compatibility checker for every required capability, plus
