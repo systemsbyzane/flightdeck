@@ -6,9 +6,9 @@
 conversation metadata boundary. It does not execute a runtime, store a
 transcript, inspect global Codex recents, or expose a runtime binding. The Hub
 owns each display-safe Work ID, title, timestamp, status, normalized event, and
-exact Operation association. Codex is the current private adapter; OMP is an
-unavailable declared adapter and can be added later without changing these
-Work envelopes.
+exact Operation association. OMP is the current native private adapter; Codex
+remains a declared alternative for a future explicit runtime selection without
+changing these Work envelopes.
 
 An older Hub that does not declare this exact capability is unsupported. The
 client must stop and surface the compatibility result; it must not scrape
@@ -86,7 +86,9 @@ unknown_outcome | result_ready | failed
 
 ## Native adapter binding
 
-`work adapter-bind` is native-adapter-only. It binds the exact selected Hub,
+`work adapter-bind` is native-adapter-only. The default conversation adapter is
+OMP; Codex remains a declared alternative for a future explicit runtime
+selection. The command binds the exact selected Hub,
 Hub-authored Work ID, current public resume generation, private persistent
 runtime session ID, adapter, stable binding request ID, and
 `flightdeck.runtime.work-recommendation/v1` structured channel. The Hub hashes
@@ -129,8 +131,10 @@ do not change it. Cross-Hub, cross-Work, cross-session, stale, malformed, unsign
 or differently signed evidence fails closed.
 
 A managed Operation recommendation may name only unique logical project keys plus a
-closed access/execution mode, normalized title and work intent, success
-criteria, and non-goals. The Hub resolves every logical key against the current
+closed access/execution mode, a closed `standard | independent` review mode,
+normalized title and work intent, success criteria, and non-goals. `independent`
+authors one required fan-in review node after every project node; it never runs
+before those dependencies produce their typed Operation results. The Hub resolves every logical key against the current
 exact Operation-authoring catalog and selects the full target identity itself.
 An unknown or unavailable key fails closed. The runtime and client cannot mint
 a target or Operation ID. Prompt text alone never creates a proposal.

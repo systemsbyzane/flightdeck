@@ -72,6 +72,7 @@
         "target_project_keys": {"type": "array", "minItems": 1, "maxItems": 50, "uniqueItems": true, "items": {"$ref": "#/$defs/logicalProjectKey"}},
         "access_mode": {"enum": ["read_only", "write"]},
         "execution_mode": {"enum": ["local", "worktree"]},
+        "review_mode": {"enum": ["standard", "independent"]},
         "success_criteria": {"type": "array", "minItems": 1, "maxItems": 50, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 1024}},
         "non_goals": {"type": "array", "minItems": 1, "maxItems": 50, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 1024}}
       }
@@ -129,7 +130,7 @@
     },
     "proposal": {
       "type": "object", "additionalProperties": false,
-      "required": ["operation_id", "plan_id", "plan_generation", "plan_digest", "plan_token", "title", "mode", "targets", "authorization"],
+      "required": ["operation_id", "plan_id", "plan_generation", "plan_digest", "plan_token", "title", "mode", "review_mode", "targets", "authorization"],
       "properties": {
         "operation_id": {"$ref": "#/$defs/operationId"},
         "plan_id": {"type": "string", "pattern": "^plan-[0-9a-f]{48}$"},
@@ -138,6 +139,7 @@
         "plan_token": {"$ref": "#/$defs/sha256"},
         "title": {"type": "string", "minLength": 1, "maxLength": 256},
         "mode": {"const": "supervised"},
+        "review_mode": {"enum": ["standard", "independent"]},
         "targets": {"type": "array", "minItems": 1, "maxItems": 50, "uniqueItems": true, "items": {"$ref": "#/$defs/target"}},
         "authorization": {
           "type": "object", "additionalProperties": false,

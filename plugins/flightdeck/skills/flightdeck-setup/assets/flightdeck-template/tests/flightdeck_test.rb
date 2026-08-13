@@ -312,7 +312,7 @@ class FlightdeckTest < Minitest::Test
       assert_equal "repository_routing_hint", repository["destination"]
       assert_equal "healthy", repository["bridge_health"]
       assert_equal ["model", "reasoning_effort"], snapshot.dig("runtime_capabilities", "adapters", "codex", "optional_controls")
-      assert_equal "codex", snapshot.dig("runtime_capabilities", "conversation", "adapter")
+      assert_equal "omp", snapshot.dig("runtime_capabilities", "conversation", "adapter")
       assert_equal "omp", snapshot.dig("runtime_capabilities", "operation_execution", "selected_adapter")
       assert_equal true, snapshot.dig("runtime_capabilities", "adapters", "omp", "available")
 
@@ -402,7 +402,7 @@ class FlightdeckTest < Minitest::Test
       assert_equal "flightdeck.operations-snapshot/v1", snapshot["api_version"]
       assert_equal "OperationsSnapshot", snapshot["kind"]
       assert_equal true, snapshot.dig("runtime_capabilities", "adapters", "omp", "available")
-      assert_equal "codex", snapshot.dig("runtime_capabilities", "conversation", "adapter")
+      assert_equal "omp", snapshot.dig("runtime_capabilities", "conversation", "adapter")
       assert_equal "omp", snapshot.dig("runtime_capabilities", "operation_execution", "selected_adapter")
       operation = snapshot.fetch("operations").fetch(0)
       assert_equal "mission:operations-mission", operation["operation_id"]
@@ -1318,7 +1318,7 @@ class FlightdeckTest < Minitest::Test
     assert_includes schema.dig("$defs", "error", "properties", "error", "properties", "code", "enum"), "identity_unresolved"
 
     compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
-    assert_equal "1.12.0", compatibility["template_version"]
+    assert_equal "1.13.0", compatibility["template_version"]
     capability = compatibility.dig("capabilities", "flightdeck.command.mission-client-snapshot.v1")
     assert_equal "command", capability["kind"]
     assert_includes capability["managed_paths"], "hub/schemas/mission-client-snapshot.schema.json"
@@ -1352,7 +1352,7 @@ class FlightdeckTest < Minitest::Test
         "active_operation_id" => nil
       )
       assert_equal "runtime_delegate", ordinary["disposition"]
-      assert_equal "codex", ordinary.dig("runtime", "adapter")
+      assert_equal "omp", ordinary.dig("runtime", "adapter")
       assert_equal true, ordinary.dig("runtime", "available")
       assert_nil ordinary["proposal"]
       refute Dir.exist?(config.mission_dir)
@@ -1463,7 +1463,7 @@ class FlightdeckTest < Minitest::Test
     compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
     detail = compatibility.dig("capabilities", Flightdeck::OperationDetail::V2_CAPABILITY)
     separation = compatibility.dig("capabilities", "flightdeck.command.mission-operation-separation.v1")
-    assert_equal "1.12.0", compatibility["template_version"]
+    assert_equal "1.13.0", compatibility["template_version"]
     assert_equal true, detail["declaration_required"]
     assert_equal true, separation["declaration_required"]
     assert_equal({ "mode" => "stop_and_plan_migration" }, detail["fallback"])
@@ -1694,12 +1694,12 @@ class FlightdeckTest < Minitest::Test
     }
   end
 
-  def bind_work_adapter(store, created, session_id: "codex-thread-session-0001", request_id: "adapter-binding-request-0001")
+  def bind_work_adapter(store, created, session_id: "omp-conversation-session-0001", request_id: "adapter-binding-request-0001")
     store.bind_adapter(
       "schema_version" => Flightdeck::WorkStore::ADAPTER_BIND_REQUEST,
       "work_id" => created.dig("work", "work_id"),
       "resume_generation" => created.dig("resume", "generation"),
-      "adapter" => "codex",
+      "adapter" => "omp",
       "adapter_session_id" => session_id,
       "binding_request_id" => request_id,
       "structured_channel" => Flightdeck::WorkStore::STRUCTURED_CHANNEL
@@ -2054,6 +2054,7 @@ class FlightdeckTest < Minitest::Test
         "target_project_keys" => %w[flightdeck-client flightdeck-plugin],
         "access_mode" => "read_only",
         "execution_mode" => "worktree",
+        "review_mode" => "independent",
         "success_criteria" => ["The declared contract is validated in every exact owner."],
         "non_goals" => ["Do not commit, push, publish, deploy, or communicate externally."]
       }
@@ -2068,6 +2069,7 @@ class FlightdeckTest < Minitest::Test
         "observation" => observation
       )
       assert_equal "operation_proposal", proposal_result["disposition"]
+      assert_equal "independent", proposal_result.dig("proposal", "review_mode")
       assert_equal %w[flightdeck-client flightdeck-plugin], proposal_result.dig("proposal", "targets").map { |target| target.fetch("logical_project_key") }
       refute Dir.exist?(config.mission_dir), "a Work proposal must not launch"
       rendered = JSON.generate(proposal_result)
@@ -2150,18 +2152,43 @@ class FlightdeckTest < Minitest::Test
       assert_equal "duplicate_request_conflict", error.code
 
       mission = Flightdeck::MissionStore.new(config).snapshot(proposal.fetch("operation_id"))
-      mission.dig("spec", "graph", "nodes").each do |node|
+      nodes = mission.dig("spec", "graph", "nodes")
+      project_nodes = nodes.reject { |node| node["work_type"] == "review" }
+      reviewer = nodes.find { |node| node["work_type"] == "review" }
+      assert_equal %w[research research review], nodes.map { |node| node.fetch("work_type") }
+      assert_equal project_nodes.map { |node| node.fetch("id") }, reviewer.fetch("dependencies")
+      assert_equal ["operation_result"], reviewer.fetch("accepted_input_types")
+
+      project_nodes.each do |node|
         Flightdeck::MissionStore.new(config).record_dispatch(
           slug: proposal.fetch("operation_id"), node_id: node.fetch("id"),
           runtime_project_id: node.fetch("runtime_project_id"), host_id: node.fetch("host_id"),
           task_id: "task-#{node.fetch('id')}"
         )
       end
-      observations = mission.dig("spec", "graph", "nodes").each_with_index.map do |node, index|
+      observations = project_nodes.each_with_index.map do |node, index|
         mission_observation(config, slug: proposal.fetch("operation_id"), node_id: node.fetch("id"), state: "review_ready", revision: index + 1)
       end
-      path = write_mission_observations(root, proposal.fetch("operation_id"), observations, name: "work-operation-final.json")
+      path = write_mission_observations(root, proposal.fetch("operation_id"), observations, name: "work-operation-projects.json")
       apply_mission_sync(Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)), slug: proposal.fetch("operation_id"), observations_path: path)
+
+      store_after_projects = Flightdeck::MissionStore.new(config)
+      handoff = store_after_projects.next_actions(proposal.fetch("operation_id")).find do |action|
+        action["type"] == "dependency_handoff" && action.dig("payload", "node_id") == reviewer.fetch("id")
+      end
+      refute_nil handoff
+      store_after_projects.prepare_action(slug: proposal.fetch("operation_id"), action_id: handoff.fetch("id"))
+      store_after_projects.record_dispatch(
+        slug: proposal.fetch("operation_id"), node_id: reviewer.fetch("id"),
+        runtime_project_id: reviewer.fetch("runtime_project_id"), host_id: reviewer.fetch("host_id"),
+        task_id: "task-#{reviewer.fetch('id')}"
+      )
+      store_after_projects.acknowledge_action(slug: proposal.fetch("operation_id"), action_id: handoff.fetch("id"))
+      review_observation = mission_observation(
+        config, slug: proposal.fetch("operation_id"), node_id: reviewer.fetch("id"), state: "review_ready", revision: 3
+      )
+      review_path = write_mission_observations(root, proposal.fetch("operation_id"), [review_observation], name: "work-operation-review.json")
+      apply_mission_sync(Flightdeck::MissionSync.new(store_after_projects), slug: proposal.fetch("operation_id"), observations_path: review_path)
 
       completed = Flightdeck::WorkStore.new(config, clock: clock).open(
         "schema_version" => Flightdeck::WorkStore::OPEN_REQUEST,
@@ -2184,7 +2211,7 @@ class FlightdeckTest < Minitest::Test
     with_hub do |root, config|
       compatibility_path = File.join(root, "hub", "compatibility.json")
       compatibility = JSON.parse(File.read(compatibility_path))
-      compatibility.dig("runtime_capabilities", "adapters", "codex")["available"] = false
+      compatibility.dig("runtime_capabilities", "adapters", "omp")["available"] = false
       Flightdeck::Support.atomic_write(compatibility_path, "#{JSON.pretty_generate(compatibility)}\n")
       store = Flightdeck::WorkStore.new(config, random_hex: ->(_bytes) { "c" * 24 })
       created = store.create(
@@ -2351,7 +2378,7 @@ class FlightdeckTest < Minitest::Test
         "hub_binding_id" => "hub-binding-#{'0' * 24}",
         "work_id" => first.dig("work", "work_id"),
         "binding_id" => "adapter-binding-#{'0' * 24}",
-        "adapter" => "codex",
+        "adapter" => "omp",
         "adapter_session_id" => "codex-thread-unbound-0001",
         "session_generation" => "adapter-session-#{'0' * 48}",
         "resume_generation" => first.dig("resume", "generation"),
@@ -2377,7 +2404,7 @@ class FlightdeckTest < Minitest::Test
         "schema_version" => Flightdeck::WorkStore::ADAPTER_BIND_REQUEST,
         "work_id" => first.dig("work", "work_id"),
         "resume_generation" => first.dig("resume", "generation"),
-        "adapter" => "codex",
+        "adapter" => "omp",
         "adapter_session_id" => "codex-thread-stale-0001",
         "binding_request_id" => "adapter-binding-stale-0001",
         "structured_channel" => Flightdeck::WorkStore::STRUCTURED_CHANNEL
@@ -2876,9 +2903,9 @@ class FlightdeckTest < Minitest::Test
           "schema_version" => Flightdeck::WorkStore::ADAPTER_BIND_REQUEST,
           "work_id" => fixture.dig("work", "work", "work_id"),
           "resume_generation" => fixture.dig("binding", "binding", "resume_generation"),
-          "adapter" => "omp",
-          "adapter_session_id" => "omp-conversation-substitution-0001",
-          "binding_request_id" => "omp-conversation-substitution-0001",
+          "adapter" => "codex",
+          "adapter_session_id" => "codex-conversation-substitution-0001",
+          "binding_request_id" => "codex-conversation-substitution-0001",
           "structured_channel" => Flightdeck::WorkStore::STRUCTURED_CHANNEL
         )
       end
@@ -2888,7 +2915,7 @@ class FlightdeckTest < Minitest::Test
 
       plan = execution.plan(request)
       assert_equal Flightdeck::OperationExecution::EXECUTION_CAPABILITY, plan["capability"]
-      assert_equal({ "conversation" => { "adapter" => "codex" }, "operation_execution" => operation_execution_adapter }, plan["runtime_boundary"])
+      assert_equal({ "conversation" => { "adapter" => "omp" }, "operation_execution" => operation_execution_adapter }, plan["runtime_boundary"])
       assert_equal operation_execution_adapter, plan["adapter"]
       assert_equal "confirmed", plan.dig("authorization", "state")
       assert_equal fixture.dig("confirmation", "plan_digest"), plan.dig("authorization", "plan_digest")
@@ -3807,8 +3834,8 @@ class FlightdeckTest < Minitest::Test
 
   def test_omp_operation_contract_schemas_cli_and_runtime_compatibility_are_closed
     compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
-    assert_equal "1.12.0", compatibility["template_version"]
-    assert_equal "codex", compatibility.dig("runtime_capabilities", "conversation", "adapter")
+    assert_equal "1.13.0", compatibility["template_version"]
+    assert_equal "omp", compatibility.dig("runtime_capabilities", "conversation", "adapter")
     assert_equal "omp", compatibility.dig("runtime_capabilities", "operation_execution", "selected_adapter")
     assert_equal true, compatibility.dig("runtime_capabilities", "adapters", "omp", "available")
     assert_equal false, compatibility.dig("runtime_capabilities", "adapters", "codex_app_server", "available")
@@ -4003,7 +4030,7 @@ class FlightdeckTest < Minitest::Test
     compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
     capability = compatibility.dig("capabilities", Flightdeck::WorkStore::CAPABILITY)
     lifecycle = compatibility.dig("capabilities", Flightdeck::WorkStore::LIFECYCLE_CAPABILITY)
-    assert_equal "1.12.0", compatibility["template_version"]
+    assert_equal "1.13.0", compatibility["template_version"]
     assert_equal({ "mode" => "stop_and_plan_migration" }, capability["fallback"])
     assert_includes capability["managed_paths"], "lib/flightdeck/work_store.rb"
     assert_equal "bin/flightdeck work lifecycle-open ", lifecycle.dig("probe", "help_contains")
@@ -4046,7 +4073,7 @@ class FlightdeckTest < Minitest::Test
         "schema_version" => Flightdeck::WorkStore::ADAPTER_BIND_REQUEST,
         "work_id" => created.dig("work", "work_id"),
         "resume_generation" => created.dig("resume", "generation"),
-        "adapter" => "codex",
+        "adapter" => "omp",
         "adapter_session_id" => "codex-thread-cli-work-0001",
         "binding_request_id" => "adapter-binding-cli-work-0001",
         "structured_channel" => Flightdeck::WorkStore::STRUCTURED_CHANNEL

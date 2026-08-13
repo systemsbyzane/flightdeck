@@ -44,6 +44,7 @@
         "success_criteria": {"type": "array", "minItems": 1, "maxItems": 50, "uniqueItems": true, "items": {"$ref": "#/$defs/boundedText"}},
         "non_goals": {"type": "array", "minItems": 1, "maxItems": 50, "uniqueItems": true, "items": {"$ref": "#/$defs/boundedText"}},
         "mode": {"enum": ["dispatch_only", "watch_only", "supervised"]},
+        "review_mode": {"enum": ["standard", "independent"]},
         "selected_targets": {"type": "array", "minItems": 1, "maxItems": 50, "uniqueItems": true, "items": {"$ref": "#/$defs/selectedTarget"}}
       }
     },

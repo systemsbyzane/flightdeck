@@ -8,8 +8,10 @@ declaration-required capabilities:
 - `flightdeck.command.operation-start-recovery.v1` (template 1.11 and later)
 - `flightdeck.command.operation-agent-telemetry.v1` (template 1.12 and later)
 
-Work conversation runtime remains `codex`. An Operation independently selects
-the exact adapter declared by `runtime_capabilities.operation_execution`.
+Work conversation runtime is independently selected as `omp`. An Operation
+continues to select the exact adapter declared by
+`runtime_capabilities.operation_execution`; changing the conversation adapter
+does not change launch authorization, execution, observation, or recovery.
 Template 1.9 selects `omp`; `codex_app_server` is declared unavailable and is
 rejected with `adapter_unavailable`. Unknown adapters return
 `unsupported_adapter`, and a request for a known but non-selected adapter
@@ -38,6 +40,16 @@ dispatch generation/digest, idempotency key, bounded authorized task text, and
 exact agent/project graph. It creates generic `operation-execution-*` durable
 identity only after launch. Exact replay returns the same identity; conflicting
 content fails closed. It creates no repository tasks.
+
+Template `1.12.0` authors read-only work as one isolated `research` agent per
+selected project. Write work is an explicit two-stage graph: an
+`implementation` agent owns the managed Worktree and its dependent `review`
+agent receives read-only access to that exact target only after implementation
+reaches its terminal handoff. The reviewer has a distinct Flightdeck identity
+and adapter session, may inspect the complete uncommitted change set, and may
+not edit it. Dependencies, access modes, and work types are authenticated parts
+of the dispatch and execution plans; clients must reject graph drift or a
+reviewer allocated to a different target.
 
 `execution-bind` attaches one opaque `adapter_session_ref` to one stable
 Flightdeck agent. Only its digest is persisted. `execution-observe` requires

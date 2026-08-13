@@ -656,10 +656,10 @@ module Flightdeck
       runtime = compatibility.fetch("runtime_capabilities")
       adapter = runtime.fetch("primary_runtime").to_s
       details = runtime.fetch("adapters").fetch(adapter)
-      controls = Array(details["optional_controls"])
+      controls = Array(details["optional_controls"]).select { |item| %w[model reasoning_effort].include?(item) }
       channels = Array(details["structured_channels"])
-      unless %w[codex omp].include?(adapter) && [true, false].include?(details["available"]) && controls.uniq == controls &&
-             controls.all? { |item| %w[model reasoning_effort].include?(item) } && channels.uniq == channels &&
+      unless %w[codex omp].include?(adapter) && adapter == runtime.dig("conversation", "adapter") &&
+             [true, false].include?(details["available"]) && controls.uniq == controls && channels.uniq == channels &&
              (!details["available"] || channels.include?(STRUCTURED_CHANNEL))
         raise ContractError.new("unsupported_hub_contract", "Selected Hub runtime adapter metadata is invalid")
       end
@@ -693,6 +693,7 @@ module Flightdeck
       base = %w[schema_version recommendation_id disposition observed_at]
       disposition = recommendation["disposition"]
       fields = base + %w[title work_intent target_project_keys access_mode execution_mode success_criteria non_goals]
+      fields << "review_mode" if recommendation.key?("review_mode")
       expect_object!(recommendation, fields, "runtime recommendation")
       unless recommendation["schema_version"] == RECOMMENDATION_VERSION && disposition == "operation"
         raise ContractError.new("malformed_request", "runtime recommendation is incompatible")
@@ -705,6 +706,9 @@ module Flightdeck
       recommendation["non_goals"] = safe_text_list!(recommendation["non_goals"], "non_goals", min: 1)
       unless %w[read_only write].include?(recommendation["access_mode"]) && %w[local worktree].include?(recommendation["execution_mode"])
         raise ContractError.new("malformed_request", "runtime recommendation has an invalid target mode")
+      end
+      if recommendation.key?("review_mode") && !%w[standard independent].include?(recommendation["review_mode"])
+        raise ContractError.new("malformed_request", "runtime recommendation has an invalid review mode")
       end
       keys = recommendation["target_project_keys"]
       unless keys.is_a?(Array) && keys.length.between?(1, OperationAuthoring::MAX_ITEMS) && keys.uniq == keys &&
@@ -804,7 +808,7 @@ module Flightdeck
     end
 
     def operation_proposal(recommendation, selected)
-      {
+      proposal = {
         "title" => recommendation.fetch("title"),
         "work_intent" => recommendation.fetch("work_intent"),
         "success_criteria" => recommendation.fetch("success_criteria"),
@@ -812,6 +816,8 @@ module Flightdeck
         "mode" => "supervised",
         "selected_targets" => selected.map { |target| target.reject { |key, _| key == "display_label" } }
       }
+      proposal["review_mode"] = recommendation.fetch("review_mode") if recommendation.key?("review_mode")
+      proposal
     end
 
     def rebuild_operation_proposal!(item)
@@ -1321,6 +1327,7 @@ module Flightdeck
         "plan_token" => item.fetch("plan_token"),
         "title" => item.dig("recommendation", "title"),
         "mode" => "supervised",
+        "review_mode" => item.dig("recommendation", "review_mode") || "standard",
         "targets" => item.fetch("targets"),
         "authorization" => {
           "access_mode" => item.dig("recommendation", "access_mode"),
