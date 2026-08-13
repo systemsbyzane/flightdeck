@@ -219,6 +219,24 @@
         "mode": "stop_and_plan_migration"
       }
     },
+    "flightdeck.command.operations-snapshot-archive-view.v1": {
+      "kind": "command",
+      "description": "Explicit active or archived visibility for the read-only Operations snapshot without weakening the base v1 snapshot contract.",
+      "probe": {
+        "help_contains": "--archive-view active|archived"
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/operations.md",
+        "hub/schemas/operations-snapshot.schema.json",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/operation_lifecycle.rb",
+        "lib/flightdeck/operations_snapshot.rb"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
     "flightdeck.command.operations-snapshot-detail-identity.v1": {
       "kind": "command",
       "description": "Fail-closed Operations snapshot detail identity copied only from an exactly reconciled persisted Operation-authoring record.",

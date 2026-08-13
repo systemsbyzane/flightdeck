@@ -13,6 +13,7 @@ module Flightdeck
     API_VERSION = "flightdeck.operations-snapshot/v1"
     SCHEMA = "hub/schemas/operations-snapshot.schema.json"
     CAPABILITY = "flightdeck.command.operations-snapshot.v1"
+    ARCHIVE_VIEW_CAPABILITY = "flightdeck.command.operations-snapshot-archive-view.v1"
     DETAIL_IDENTITY_CAPABILITY = "flightdeck.command.operations-snapshot-detail-identity.v1"
     MAX_OPERATIONS = 1_000
     MAX_ALERTS = 100
@@ -79,6 +80,7 @@ module Flightdeck
       end
       value = Support.load_data(paths.first)
       capability = value.dig("capabilities", CAPABILITY)
+      archive_capability = value.dig("capabilities", ARCHIVE_VIEW_CAPABILITY)
       detail_capability = value.dig("capabilities", DETAIL_IDENTITY_CAPABILITY)
       authoring_capability = value.dig("capabilities", OperationAuthoring::CAPABILITY)
       managed = Array(capability&.fetch("managed_paths", []))
@@ -90,6 +92,12 @@ module Flightdeck
                "lib/flightdeck/mission_store.rb", "lib/flightdeck/operation_execution.rb",
                "lib/flightdeck/operations_snapshot.rb", "hub/schemas/operation-execution-types.schema.json", SCHEMA
              ].all? { |path| managed.include?(path) } &&
+             archive_capability.is_a?(Hash) && archive_capability["kind"] == "command" &&
+             archive_capability.dig("probe", "help_contains") == "--archive-view active|archived" &&
+             [
+               "lib/flightdeck/cli.rb", "lib/flightdeck/operation_lifecycle.rb",
+               "lib/flightdeck/operations_snapshot.rb", SCHEMA
+             ].all? { |path| Array(archive_capability["managed_paths"]).include?(path) } &&
              detail_capability.is_a?(Hash) && detail_capability["kind"] == "command" &&
              detail_capability.dig("probe", "help_contains") == "bin/flightdeck hub operations-snapshot " &&
              [
