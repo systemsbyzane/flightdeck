@@ -10,6 +10,7 @@ require_relative "mission_objectives"
 require_relative "skill_telemetry"
 require_relative "operation_authoring"
 require_relative "operation_detail"
+require_relative "operation_lifecycle"
 require_relative "mission_sync"
 require_relative "repo_planner"
 require_relative "repository_store"
@@ -104,9 +105,10 @@ module Flightdeck
     end
 
     def hub_operations_snapshot(argv)
-      options = {}
+      options = { archive_view: "active" }
       OptionParser.new do |parser|
         parser.on("--hub-root PATH") { |value| options[:hub_root] = value }
+        parser.on("--archive-view VIEW") { |value| options[:archive_view] = value }
         parser.on("--json") { options[:json] = true }
       end.parse!(argv)
       empty!(argv)
@@ -118,7 +120,10 @@ module Flightdeck
       unless config.data["api_version"] == "flightdeck.dev/v1alpha1" && config.data["kind"] == "FlightdeckRegistry" && config.data["schema"] == "hub/schemas/flightdeck.schema.json"
         raise OperationsSnapshot::SnapshotError.new("invalid_hub_root", "Selected Hub root is not a Flightdeck Hub.")
       end
-      json(OperationsSnapshot.new(config).snapshot)
+      unless %w[active archived].include?(options[:archive_view])
+        raise OperationsSnapshot::SnapshotError.new("invalid_request", "Operations archive view is invalid.")
+      end
+      json(OperationsSnapshot.new(config).snapshot(archive_view: options[:archive_view]))
       0
     rescue OperationsSnapshot::SnapshotError => e
       emit_operations_snapshot_error(e.code, e.message)
@@ -753,7 +758,7 @@ module Flightdeck
       subcommand = argv.shift
       request = nil
       names = %w[
-        authoring-catalog authoring-plan authoring-launch authoring-guidance authoring-operation detail
+        authoring-catalog authoring-plan authoring-launch authoring-guidance authoring-operation detail lifecycle
         execution-plan execution-bind execution-start-report execution-start-open execution-retry-bind
         execution-observe execution-open
       ]
@@ -770,6 +775,12 @@ module Flightdeck
       if subcommand == "detail"
         request = OperationDetail.load_request(options.fetch(:request_path))
         json(OperationDetail.new(config).detail(request))
+        return 0
+      end
+
+      if subcommand == "lifecycle"
+        request = OperationLifecycle.load_request(options.fetch(:request_path))
+        json(OperationLifecycle.new(config).apply(request))
         return 0
       end
 
@@ -796,6 +807,8 @@ module Flightdeck
     rescue UsageError, ValidationError => e
       if subcommand == "detail"
         json(OperationDetail.error_result(e, request: request))
+      elsif subcommand == "lifecycle"
+        json(OperationLifecycle.error_result(e))
       elsif subcommand.to_s.start_with?("execution-")
         json(OperationExecution.error_result(subcommand, e))
       else
@@ -805,6 +818,10 @@ module Flightdeck
     rescue StandardError
       if subcommand == "detail"
         json(OperationDetail.error_result(OperationDetail::ContractError.new("internal_error", "Operation detail failed closed"), request: request))
+        return 1
+      end
+      if subcommand == "lifecycle"
+        json(OperationLifecycle.error_result(OperationLifecycle::ContractError.new("internal_error", "Operation lifecycle action failed closed")))
         return 1
       end
       if subcommand.to_s.start_with?("execution-")
@@ -937,7 +954,7 @@ module Flightdeck
           bin/flightdeck doctor [--json] [--strict]
           bin/flightdeck status [--json] [--write]
           bin/flightdeck hub snapshot --hub-root ABSOLUTE_PATH [--json]
-          bin/flightdeck hub operations-snapshot --hub-root ABSOLUTE_PATH [--json]
+          bin/flightdeck hub operations-snapshot --hub-root ABSOLUTE_PATH [--archive-view active|archived] [--json]
           bin/flightdeck work list --hub-root ABSOLUTE_PATH [--limit 1..100] [--cursor CURSOR] [--json]
           bin/flightdeck work create --request FILE [--json]
           bin/flightdeck work adapter-bind --request FILE [--json]
@@ -950,6 +967,7 @@ module Flightdeck
           bin/flightdeck work dispatch-report --request FILE [--json]
           bin/flightdeck work guidance --request FILE [--json]
           bin/flightdeck operation detail --request FILE [--json]
+          bin/flightdeck operation lifecycle --request FILE [--json]
           bin/flightdeck mission objective-plan --request FILE [--json]
           bin/flightdeck mission objective-create --request FILE [--json]
           bin/flightdeck mission objective-snapshot --request FILE [--json]
@@ -1013,6 +1031,9 @@ module Flightdeck
         status --write, setup connect, repo onboard, bridge install, task new,
         task transition, mission authoring-create, mission objective-create, and other mission mutations use
         explicit state-changing names and write only their documented scope.
+        operation lifecycle is an explicit state-changing command. close acknowledges only a
+        review-ready authored Operation; archive hides only completed or terminal Operations;
+        restore returns an archived Operation to the active view without deleting evidence.
         Mission authoring commands accept only their closed versioned JSON request
         schemas and always emit a closed JSON result. Create requires the exact
         current plan identity, generation, digest, token, and one opaque operation ID.

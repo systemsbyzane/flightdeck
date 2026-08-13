@@ -181,11 +181,57 @@
         "docs/architecture/hub-first.md",
         "docs/workflows/operations.md",
         "lib/flightdeck/cli.rb",
+        "lib/flightdeck/operation_lifecycle.rb",
         "lib/flightdeck/operations_snapshot.rb",
+        "hub/.operation-lifecycle.lock",
+        "hub/schemas/operation-lifecycle-request.schema.json",
+        "hub/schemas/operation-lifecycle-result.schema.json",
+        "hub/schemas/operation-lifecycle-error.schema.json",
         "hub/schemas/operations-snapshot.schema.json",
         "lib/flightdeck/mission_store.rb",
         "lib/flightdeck/operation_execution.rb",
         "hub/schemas/operation-execution-types.schema.json"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.command.operation-lifecycle.v1": {
+      "kind": "command",
+      "description": "Typed explicit acknowledgement, reversible archive visibility, and exact replay-safe recovery for authored Operations.",
+      "probe": {
+        "help_contains": "bin/flightdeck operation lifecycle "
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/operations.md",
+        "hub/.operation-lifecycle.lock",
+        "hub/schemas/operation-lifecycle-request.schema.json",
+        "hub/schemas/operation-lifecycle-result.schema.json",
+        "hub/schemas/operation-lifecycle-error.schema.json",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/mission_store.rb",
+        "lib/flightdeck/operation_authoring.rb",
+        "lib/flightdeck/operation_lifecycle.rb",
+        "lib/flightdeck/operations_snapshot.rb"
+      ],
+      "fallback": {
+        "mode": "stop_and_plan_migration"
+      }
+    },
+    "flightdeck.command.operations-snapshot-archive-view.v1": {
+      "kind": "command",
+      "description": "Explicit active or archived visibility for the read-only Operations snapshot without weakening the base v1 snapshot contract.",
+      "probe": {
+        "help_contains": "--archive-view active|archived"
+      },
+      "managed_paths": [
+        "bin/flightdeck",
+        "docs/workflows/operations.md",
+        "hub/schemas/operations-snapshot.schema.json",
+        "lib/flightdeck/cli.rb",
+        "lib/flightdeck/operation_lifecycle.rb",
+        "lib/flightdeck/operations_snapshot.rb"
       ],
       "fallback": {
         "mode": "stop_and_plan_migration"

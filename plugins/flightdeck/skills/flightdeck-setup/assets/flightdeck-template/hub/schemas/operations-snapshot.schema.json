@@ -7,7 +7,7 @@
   "$defs": {
     "id": {"type": "string", "maxLength": 128, "pattern": "^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"},
     "label": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\u0000-\\u001f\\u007f\\\\/]+$"},
-    "status": {"enum": ["queued", "working", "waiting", "approval_required", "blocked", "review_ready", "failed_validation", "cancelled", "reconcile_required"]},
+    "status": {"enum": ["queued", "working", "waiting", "approval_required", "blocked", "review_ready", "completed", "failed_validation", "cancelled", "reconcile_required"]},
     "detail": {
       "oneOf": [
         {"type": "object", "additionalProperties": false, "required": ["availability", "operation_id"], "properties": {"availability": {"const": "available"}, "operation_id": {"type": "string", "pattern": "^operation-[0-9a-f]{24}$"}}},
@@ -48,11 +48,12 @@
     },
     "operation": {
       "type": "object", "additionalProperties": false,
-      "required": ["operation_id", "operation_kind", "detail", "display_title", "status", "created_at", "updated_at", "route_scope", "children", "skills"],
+      "required": ["operation_id", "operation_kind", "detail", "display_title", "status", "created_at", "updated_at", "archived", "archived_at", "route_scope", "children", "skills"],
       "properties": {
         "operation_id": {"type": "string", "pattern": "^(?:mission|task):[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"},
         "operation_kind": {"enum": ["mission", "task"]}, "detail": {"$ref": "#/$defs/detail"}, "display_title": {"$ref": "#/$defs/label"}, "status": {"$ref": "#/$defs/status"},
         "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"},
+        "archived": {"type": "boolean"}, "archived_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
         "route_scope": {"type": "object", "additionalProperties": false, "properties": {"mode": {"enum": ["dispatch_only", "watch_only", "supervised"]}, "workload": {"$ref": "#/$defs/id"}, "logical_project_keys": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}}},
         "children": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/child"}}, "validation": {"$ref": "#/$defs/validation"}, "skills": {"$ref": "#/$defs/skills"}
       }
@@ -63,7 +64,7 @@
       "properties": {
         "api_version": {"const": "flightdeck.operations-snapshot/v1"}, "kind": {"const": "OperationsSnapshot"}, "schema": {"const": "hub/schemas/operations-snapshot.schema.json"}, "ok": {"const": true},
         "runtime_capabilities": {"$ref": "#/$defs/runtimeCapabilities"},
-        "summary": {"type": "object", "additionalProperties": false, "required": ["counts", "alerts"], "properties": {"counts": {"type": "object", "additionalProperties": false, "required": ["queued", "working", "waiting", "approval_required", "blocked", "review_ready", "failed_validation", "cancelled", "reconcile_required"], "properties": {"queued": {"type": "integer", "minimum": 0}, "working": {"type": "integer", "minimum": 0}, "waiting": {"type": "integer", "minimum": 0}, "approval_required": {"type": "integer", "minimum": 0}, "blocked": {"type": "integer", "minimum": 0}, "review_ready": {"type": "integer", "minimum": 0}, "failed_validation": {"type": "integer", "minimum": 0}, "cancelled": {"type": "integer", "minimum": 0}, "reconcile_required": {"type": "integer", "minimum": 0}}}, "alerts": {"type": "array", "maxItems": 100, "items": {"type": "object", "additionalProperties": false, "required": ["operation_id", "status", "detail"], "properties": {"operation_id": {"type": "string", "pattern": "^(?:mission|task):[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"}, "status": {"enum": ["approval_required", "blocked", "failed_validation", "reconcile_required"]}, "detail": {"$ref": "#/$defs/detail"}}}}}},
+        "summary": {"type": "object", "additionalProperties": false, "required": ["lifecycle", "counts", "alerts"], "properties": {"lifecycle": {"type": "object", "additionalProperties": false, "required": ["active", "completed", "archived"], "properties": {"active": {"type": "integer", "minimum": 0}, "completed": {"type": "integer", "minimum": 0}, "archived": {"type": "integer", "minimum": 0}}}, "counts": {"type": "object", "additionalProperties": false, "required": ["queued", "working", "waiting", "approval_required", "blocked", "review_ready", "completed", "failed_validation", "cancelled", "reconcile_required"], "properties": {"queued": {"type": "integer", "minimum": 0}, "working": {"type": "integer", "minimum": 0}, "waiting": {"type": "integer", "minimum": 0}, "approval_required": {"type": "integer", "minimum": 0}, "blocked": {"type": "integer", "minimum": 0}, "review_ready": {"type": "integer", "minimum": 0}, "completed": {"type": "integer", "minimum": 0}, "failed_validation": {"type": "integer", "minimum": 0}, "cancelled": {"type": "integer", "minimum": 0}, "reconcile_required": {"type": "integer", "minimum": 0}}}, "alerts": {"type": "array", "maxItems": 100, "items": {"type": "object", "additionalProperties": false, "required": ["operation_id", "status", "detail"], "properties": {"operation_id": {"type": "string", "pattern": "^(?:mission|task):[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"}, "status": {"enum": ["approval_required", "blocked", "failed_validation", "reconcile_required"]}, "detail": {"$ref": "#/$defs/detail"}}}}}},
         "operations": {"type": "array", "maxItems": 2000, "items": {"$ref": "#/$defs/operation"}}
       }
     },
