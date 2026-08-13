@@ -208,8 +208,8 @@ module Flightdeck
       value = Support.load_data(File.join(@config.root, "hub", "compatibility.json")).fetch("runtime_capabilities")
       adapter = value.fetch("primary_runtime").to_s
       available = value.dig("adapters", adapter, "available") == true
-      controls = Array(value.dig("adapters", adapter, "optional_controls"))
-      unless %w[codex omp].include?(adapter) && controls.uniq == controls && controls.all? { |item| %w[model reasoning_effort].include?(item) }
+      controls = Array(value.dig("adapters", adapter, "optional_controls")).select { |item| %w[model reasoning_effort].include?(item) }
+      unless %w[codex omp].include?(adapter) && adapter == value.dig("conversation", "adapter") && controls.uniq == controls
         raise ContractError.new("unsupported_hub_contract", "Selected Hub runtime metadata is invalid")
       end
       { "adapter" => adapter, "available" => available, "optional_controls" => controls }

@@ -78,8 +78,8 @@ def load_contract(path: Path) -> dict[str, Any]:
     selected_adapter = operation_execution.get("selected_adapter") if isinstance(operation_execution, dict) else None
     if (
         set(runtime or {}) != {"primary_runtime", "conversation", "operation_execution", "adapters"}
-        or runtime.get("primary_runtime") != "codex"
-        or conversation != {"adapter": "codex"}
+        or runtime.get("primary_runtime") != "omp"
+        or conversation != {"adapter": "omp"}
         or not isinstance(operation_execution, dict)
         or set(operation_execution) != {"selected_adapter", "execution_capability", "observation_capability"}
         or selected_adapter not in {"omp", "codex_app_server"}
@@ -99,7 +99,7 @@ def load_contract(path: Path) -> dict[str, Any]:
         or omp.get("configuration_schema") != "flightdeck.adapter.omp.configuration/v1"
         or omp.get("execution_capability") != "flightdeck.command.operation-execution.v1"
         or omp.get("observation_capability") != "flightdeck.command.operation-observation.v1"
-        or omp_channels != (["flightdeck.runtime.omp-operation-observation/v1"] if omp.get("available") else [])
+        or omp_channels != (["flightdeck.runtime.work-recommendation/v1", "flightdeck.runtime.omp-operation-observation/v1"] if omp.get("available") else [])
         or omp_controls != ["model", "reasoning_effort", "tool_policy"]
         or not isinstance(codex_app_server, dict)
         or set(codex_app_server) != {"available", "configuration_schema", "execution_capability", "observation_capability", "optional_controls", "structured_channels"}

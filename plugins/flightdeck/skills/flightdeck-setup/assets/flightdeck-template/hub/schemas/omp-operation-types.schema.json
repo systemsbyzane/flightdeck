@@ -63,7 +63,7 @@
     "runtimeBoundary": {
       "type": "object", "additionalProperties": false,
       "required": ["conversation", "operation_execution"],
-      "properties": {"conversation": {"const": "codex"}, "operation_execution": {"const": "omp"}}
+      "properties": {"conversation": {"const": "omp"}, "operation_execution": {"const": "omp"}}
     },
     "toolObservation": {
       "oneOf": [

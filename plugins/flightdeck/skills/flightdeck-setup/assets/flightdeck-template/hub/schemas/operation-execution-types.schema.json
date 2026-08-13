@@ -429,7 +429,7 @@
           ],
           "properties": {
             "adapter": {
-              "const": "codex"
+              "const": "omp"
             }
           }
         },
@@ -767,8 +767,8 @@
       "type": "object", "additionalProperties": false,
       "required": ["primary_runtime", "conversation", "operation_execution", "adapters"],
       "properties": {
-        "primary_runtime": {"const": "codex"},
-        "conversation": {"type": "object", "additionalProperties": false, "required": ["adapter"], "properties": {"adapter": {"const": "codex"}}},
+        "primary_runtime": {"const": "omp"},
+        "conversation": {"type": "object", "additionalProperties": false, "required": ["adapter"], "properties": {"adapter": {"const": "omp"}}},
         "operation_execution": {
           "type": "object", "additionalProperties": false,
           "required": ["selected_adapter", "execution_capability", "observation_capability"],

@@ -47,13 +47,13 @@
       ],
       "properties": {
         "primary_runtime": {
-          "const": "codex"
+          "const": "omp"
         },
         "conversation": {
           "type": "object",
           "additionalProperties": false,
           "required": ["adapter"],
-          "properties": {"adapter": {"const": "codex"}}
+          "properties": {"adapter": {"const": "omp"}}
         },
         "operation_execution": {
           "type": "object",
@@ -105,9 +105,10 @@
                 "observation_capability": {"const": "flightdeck.command.operation-observation.v1"},
                 "structured_channels": {
                   "type": "array",
-                  "maxItems": 1,
-                  "uniqueItems": true,
-                  "items": {"const": "flightdeck.runtime.omp-operation-observation/v1"}
+                  "const": [
+                    "flightdeck.runtime.work-recommendation/v1",
+                    "flightdeck.runtime.omp-operation-observation/v1"
+                  ]
                 },
                 "optional_controls": {
                   "type": "array",
@@ -116,7 +117,7 @@
               },
               "allOf": [{
                 "if": {"properties": {"available": {"const": true}}, "required": ["available"]},
-                "then": {"properties": {"structured_channels": {"const": ["flightdeck.runtime.omp-operation-observation/v1"]}}},
+                "then": {"properties": {"structured_channels": {"const": ["flightdeck.runtime.work-recommendation/v1", "flightdeck.runtime.omp-operation-observation/v1"]}}},
                 "else": {"properties": {"structured_channels": {"maxItems": 0}}}
               }]
             },

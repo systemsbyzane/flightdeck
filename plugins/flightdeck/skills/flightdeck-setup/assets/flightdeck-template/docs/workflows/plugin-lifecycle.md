@@ -146,6 +146,15 @@ v2 and reads record v1. Apply implementation, six new schemas, shared types,
 error schema, docs, tests, and compatibility last; rollback must preserve any
 v2 execution records for a forward restore.
 
+Template `1.12.0` makes managed read-only research executable in an isolated
+Worktree and expands each write target into an implementation agent followed
+by an independent read-only review agent over that same exact managed target.
+The authored graph, dispatch authorization, and Operation detail projection
+carry the dependency and role explicitly. Apply the authoring, dispatch,
+execution, detail, shared-schema, documentation, and compatibility changes as
+one reviewed set; preserve existing Operation and execution records for
+rollback and forward recovery.
+
 Template `1.12.0` adds
 `flightdeck.command.operation-agent-telemetry.v1`: an additive authenticated
 v2 observe/open boundary for dynamic runtime task agents and subagents. It
@@ -153,6 +162,17 @@ stores record v3 while continuing to read v1 and v2. Apply the producer,
 runtime-agent schemas, detail projection, docs, tests, and compatibility
 declaration as one reviewed set. Rollback must preserve v3 execution records
 for forward recovery; older templates must not reinterpret or rewrite them.
+
+Template `1.13.0` makes OMP the primary runtime for ordinary Work
+conversations while leaving the existing OMP Operation execution and
+observation lifecycle unchanged. It adds the typed Work recommendation channel
+to the OMP adapter, retains the Codex adapter as an explicitly available future
+selection, and updates the Work coordinator/store contracts as one managed
+set. Apply the Work control documentation, coordinator/store implementation,
+runtime schemas, tests, and compatibility declaration together with
+`hub/compatibility.json` last. Rollback restores the complete 1.12 managed
+preimage without altering conversations, Operations, execution records, or
+attached repositories.
 
 For a preserved Hub that needs these desktop surfaces, the later separately
 authorized migration must compare the exact managed paths returned by the

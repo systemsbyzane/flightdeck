@@ -112,7 +112,7 @@ module Flightdeck
       mission_id = "operation-#{proposal_digest[0, 24]}"
       store = MissionStore.new(config, clock: @clock)
       authorized_targets = operation_authorized_targets(selected)
-      nodes = operation_nodes(selected, canonical_proposal.fetch("success_criteria"))
+      nodes = operation_nodes(selected, canonical_proposal.fetch("success_criteria"), canonical_proposal.fetch("review_mode", "standard"))
       if authorized_targets.length > MAX_ITEMS || nodes.length > MAX_ITEMS
         raise ContractError.new("malformed_request", "Operation target and agent graph exceeds its bounded contract")
       end
@@ -454,7 +454,10 @@ module Flightdeck
     end
 
     def normalize_proposal!(value)
-      expect_object!(value, %w[title work_intent success_criteria non_goals mode selected_targets], "Operation proposal")
+      fields = %w[title work_intent success_criteria non_goals mode selected_targets]
+      proposal_keys = value.is_a?(Hash) ? value.keys.map(&:to_s) : []
+      fields << "review_mode" if proposal_keys.include?("review_mode")
+      expect_object!(value, fields, "Operation proposal")
       proposal = Support.stringify(value)
       proposal["title"] = bounded_text!(proposal["title"], "title", 256)
       proposal["work_intent"] = bounded_text!(proposal["work_intent"], "work_intent", 2048)
@@ -465,6 +468,9 @@ module Flightdeck
       end
       proposal["mode"] = proposal["mode"].to_s
       proposal["selected_targets"] = bounded_array!(proposal["selected_targets"], "selected_targets", min: 1)
+      if proposal.key?("review_mode") && !%w[standard independent].include?(proposal["review_mode"])
+        raise ContractError.new("malformed_request", "Operation review_mode is invalid")
+      end
       proposal
     end
 
@@ -495,14 +501,28 @@ module Flightdeck
       end.uniq.sort_by { |target| canonical_json(target) }
     end
 
-    def operation_nodes(selected, criteria)
+    def operation_nodes(selected, criteria, review_mode)
       criterion_ids = criteria.each_index.map { |index| format("criterion-%03d", index + 1) }
-      selected.sort_by { |target| target.fetch("target_id") }.each_with_index.flat_map do |target, index|
-        common = {
-          logical_project_key: target.fetch("logical_project_key"), runtime_project_id: target.fetch("runtime_project_id"),
-          project_path_digest: target.fetch("project_path_digest"), host_id: target.fetch("host_id"),
-          execution_mode: target.fetch("execution_mode"), required: true, criterion_ids: criterion_ids
-        }
+      ordered = selected.sort_by { |target| target.fetch("target_id") }
+      if review_mode == "independent"
+        project_nodes = ordered.each_with_index.map do |target, index|
+          work_type = target.fetch("access_mode") == "write" ? "implementation" : "research"
+          common_node(target, criterion_ids).merge(
+            node_id: format("%s-%03d", work_type, index + 1), access_mode: target.fetch("access_mode"), work_type: work_type,
+            dependencies: [], accepted_input_types: [], allowed_output_types: ["operation_result"]
+          )
+        end
+        reviewer_target = ordered.first
+        reviewer = common_node(reviewer_target, criterion_ids).merge(
+          node_id: "review-independent", access_mode: "read_only", work_type: "review",
+          dependencies: project_nodes.map { |node| node.fetch(:node_id) }, accepted_input_types: ["operation_result"],
+          allowed_output_types: ["operation_result"]
+        )
+        return project_nodes + [reviewer]
+      end
+
+      ordered.each_with_index.flat_map do |target, index|
+        common = common_node(target, criterion_ids)
         if target.fetch("access_mode") == "write" && target.fetch("execution_mode") == "worktree"
           implementation_id = format("implementation-%03d", index + 1)
           [
@@ -516,6 +536,14 @@ module Flightdeck
                         dependencies: [], accepted_input_types: [], allowed_output_types: ["operation_result"])]
         end
       end
+    end
+
+    def common_node(target, criterion_ids)
+      {
+        logical_project_key: target.fetch("logical_project_key"), runtime_project_id: target.fetch("runtime_project_id"),
+        project_path_digest: target.fetch("project_path_digest"), host_id: target.fetch("host_id"),
+        execution_mode: target.fetch("execution_mode"), required: true, criterion_ids: criterion_ids
+      }
     end
 
     def planned_operation(mission)

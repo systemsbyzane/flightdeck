@@ -163,7 +163,7 @@ module Flightdeck
 
     def self.runtime_capabilities_projection!(value)
       unless value.is_a?(Hash) && value.keys.sort == %w[adapters conversation operation_execution primary_runtime] &&
-             value["primary_runtime"] == "codex" && value["conversation"] == { "adapter" => "codex" }
+             value["primary_runtime"] == "omp" && value["conversation"] == { "adapter" => "omp" }
         raise ContractError.new("unsupported_hub_contract", "Hub runtime capability metadata is invalid")
       end
       operation = value["operation_execution"]
@@ -175,16 +175,20 @@ module Flightdeck
         raise ContractError.new("unsupported_hub_contract", "Hub runtime capability metadata is invalid")
       end
       codex = adapters["codex"]
-      codex_valid = codex.is_a?(Hash) && codex.keys.sort == %w[available optional_controls structured_channels] &&
+      legacy_codex_valid = codex.is_a?(Hash) && codex.keys.sort == %w[available optional_controls structured_channels] &&
         codex["available"] == true && codex["structured_channels"] == ["flightdeck.runtime.work-recommendation/v1"] &&
         codex["optional_controls"].is_a?(Array) && codex["optional_controls"].uniq == codex["optional_controls"] &&
         codex["optional_controls"].all? { |control| %w[model reasoning_effort].include?(control) }
-      raise ContractError.new("unsupported_hub_contract", "Hub conversation adapter metadata is invalid") unless codex_valid
+      raise ContractError.new("unsupported_hub_contract", "Hub legacy Codex adapter metadata is invalid") unless legacy_codex_valid
 
       ADAPTER_CONFIGURATIONS.each do |id, schema|
         adapter = adapters[id]
         fields = %w[available configuration_schema execution_capability observation_capability optional_controls structured_channels]
-        expected_channels = adapter&.fetch("available", nil) == true ? [ADAPTER_STRUCTURED_CHANNELS.fetch(id)] : []
+        expected_channels = if adapter&.fetch("available", nil) == true
+          id == "omp" ? ["flightdeck.runtime.work-recommendation/v1", ADAPTER_STRUCTURED_CHANNELS.fetch(id)] : [ADAPTER_STRUCTURED_CHANNELS.fetch(id)]
+        else
+          []
+        end
         valid = adapter.is_a?(Hash) && adapter.keys.sort == fields.sort && [true, false].include?(adapter["available"]) &&
           adapter["configuration_schema"] == schema && adapter["execution_capability"] == EXECUTION_CAPABILITY &&
           adapter["observation_capability"] == OBSERVATION_CAPABILITY &&
@@ -198,8 +202,8 @@ module Flightdeck
       raise ContractError.new("adapter_unavailable", "selected Operation execution adapter is unavailable") unless adapters.dig(selected_id, "available") == true
 
       {
-        "primary_runtime" => "codex",
-        "conversation" => { "adapter" => "codex" },
+        "primary_runtime" => "omp",
+        "conversation" => { "adapter" => "omp" },
         "operation_execution" => operation,
         "adapters" => {
           "codex" => codex.slice("available", "optional_controls"),
@@ -733,7 +737,7 @@ module Flightdeck
       selected = runtime.dig("adapters", selected_id)
 
       valid = compatibility["schema_version"] == "flightdeck.hub-compatibility/v1" &&
-        compatibility["product"] == "flightdeck" && compatibility["template_version"] == "1.12.0" &&
+        compatibility["product"] == "flightdeck" && compatibility["template_version"] == "1.13.0" &&
         execution.is_a?(Hash) && observation.is_a?(Hash) && start_recovery.is_a?(Hash) && agent_telemetry.is_a?(Hash) &&
         execution["kind"] == "command" && observation["kind"] == "command" && start_recovery["kind"] == "command" && agent_telemetry["kind"] == "command" &&
         execution["declaration_required"] == true && observation["declaration_required"] == true && start_recovery["declaration_required"] == true && agent_telemetry["declaration_required"] == true &&
@@ -1563,7 +1567,7 @@ module Flightdeck
 
     def runtime_boundary(record)
       {
-        "conversation" => { "adapter" => "codex" },
+        "conversation" => { "adapter" => "omp" },
         "operation_execution" => record.fetch("adapter")
       }
     end

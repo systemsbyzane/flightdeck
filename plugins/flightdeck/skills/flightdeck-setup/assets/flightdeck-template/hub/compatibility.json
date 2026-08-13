@@ -2,11 +2,11 @@
   "schema_version": "flightdeck.hub-compatibility/v1",
   "schema": "hub/schemas/hub-compatibility.schema.json",
   "product": "flightdeck",
-  "template_version": "1.12.0",
+  "template_version": "1.13.0",
   "runtime_capabilities": {
-    "primary_runtime": "codex",
+    "primary_runtime": "omp",
     "conversation": {
-      "adapter": "codex"
+      "adapter": "omp"
     },
     "operation_execution": {
       "selected_adapter": "omp",
@@ -30,6 +30,7 @@
         "execution_capability": "flightdeck.command.operation-execution.v1",
         "observation_capability": "flightdeck.command.operation-observation.v1",
         "structured_channels": [
+          "flightdeck.runtime.work-recommendation/v1",
           "flightdeck.runtime.omp-operation-observation/v1"
         ],
         "optional_controls": [
@@ -697,6 +698,7 @@
         "lib/flightdeck/mission_store.rb",
         "hub/schemas/hub-compatibility.schema.json",
         "hub/schemas/operation-execution-types.schema.json",
+        "hub/schemas/omp-operation-types.schema.json",
         "hub/schemas/operation-execution-plan-request.schema.json",
         "hub/schemas/operation-execution-plan-result.schema.json",
         "hub/schemas/operation-execution-bind-request.schema.json",

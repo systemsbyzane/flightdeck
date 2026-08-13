@@ -355,6 +355,53 @@
         "For a selected preserved Hub, run the read-only compatibility checker for flightdeck.command.mission-list.v1 and flightdeck.command.mission-authoring.v1, then compare only its reported managed paths against a separately generated candidate before any separately authorized migration.",
         "Do not enable managed local dispatch solely because either capability is present; client-side source-path reconciliation, exclusive ownership, lock publication, and ambiguous provider outcomes remain independently fail-closed gates."
       ]
+    },
+    {
+      "version": "0.1.0+codex.20260813201037",
+      "date": "2026-08-13",
+      "summary": "OMP-primary ordinary Work conversations with the Operation lifecycle preserved.",
+      "changes": [
+        {
+          "category": "changed",
+          "text": "Made OMP the primary and selected conversation adapter for ordinary Work chats while retaining the existing OMP Operation execution and observation adapter unchanged."
+        },
+        {
+          "category": "added",
+          "text": "Declared the typed Flightdeck Work recommendation channel on OMP so natural-language chats can still produce authorization-gated Operation proposals."
+        },
+        {
+          "category": "changed",
+          "text": "Retained the Codex adapter as an available dormant future selection without using Codex App Server for the OMP-primary Work path."
+        }
+      ],
+      "breaking_changes": [],
+      "migration": [
+        "Existing generated Hubs and operational state are preserved and are never automatically migrated, regenerated, or edited by plugin upgrade.",
+        "For an existing Hub, compare and back up only the compatibility checker's managed paths before a separately authorized template 1.13.0 migration.",
+        "Apply the Work control documentation, coordinator/store implementation, runtime schemas, tests, and hub/compatibility.json as one reviewed set with compatibility last.",
+        "The Operation execution and observation selection remains OMP and must not be changed during this migration."
+      ]
+    },
+    {
+      "version": "0.1.0+codex.20260813224452",
+      "date": "2026-08-13",
+      "summary": "Typed independent reviewers for Work-authored Operations.",
+      "changes": [
+        {
+          "category": "fixed",
+          "text": "Preserved an explicitly requested independent reviewer as typed proposal state instead of leaving it only in assistant prose."
+        },
+        {
+          "category": "changed",
+          "text": "Independent review now authors one required fan-in review node after every project agent and exposes that reviewer in the review-only proposal projection."
+        }
+      ],
+      "breaking_changes": [],
+      "migration": [
+        "Upgrade the Flightdeck Client and the selected Hub as one reviewed compatibility set before creating new reviewer-aware proposals.",
+        "Existing proposals without review_mode retain their original standard graph and plan identity.",
+        "Proposal creation remains review-only; no Operation launches until the user confirms the exact plan."
+      ]
     }
   ]
 }
