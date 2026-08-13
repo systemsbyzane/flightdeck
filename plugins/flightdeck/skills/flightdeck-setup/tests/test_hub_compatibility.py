@@ -72,7 +72,7 @@ class HubCompatibilityTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("compatible", report["status"])
         self.assertTrue(report["compatible"])
-        self.assertEqual("1.11.0", report["hub"]["identity"]["template_version"])
+        self.assertEqual("1.12.0", report["hub"]["identity"]["template_version"])
         self.assertEqual([], report["requirements"]["missing"])
         contract = json.loads((TEMPLATE / "hub" / "compatibility.json").read_text(encoding="utf-8"))
         self.assertIs(

@@ -225,7 +225,7 @@ module Flightdeck
       {
         "agent_id" => execution&.fetch("agent_id", nil),
         "node_id" => node.fetch("id"),
-        "name" => agent_name(node.fetch("logical_project_key")),
+        "name" => agent_name(node.fetch("logical_project_key"), node["work_type"]),
         "logical_project_key" => node.fetch("logical_project_key"),
         "project" => project_label(node.fetch("logical_project_key")),
         "role" => safe_label(node["work_type"] || "operation", 128),
@@ -240,7 +240,30 @@ module Flightdeck
         "changes" => unavailable_summary,
         "artifacts" => agent_artifacts(node, observation),
         "approvals" => agent_approvals(node, observation, start),
-        "result" => agent_result(observation)
+        "result" => agent_result(observation),
+        "runtime_agents" => Array(execution&.fetch("runtime_agents", [])).map { |agent| safe_runtime_agent(agent) }
+      }
+    end
+
+    def safe_runtime_agent(agent)
+      {
+        "agent_id" => agent.fetch("agent_id"),
+        "parent" => agent.fetch("parent"),
+        "agent_kind" => agent.fetch("agent_kind"),
+        "reported_name" => safe_label(agent.fetch("reported_name"), 128),
+        "reported_role" => safe_label(agent.fetch("reported_role"), 128),
+        "source" => agent.fetch("source"),
+        "runtime" => agent.fetch("runtime"),
+        "project_scope" => agent.fetch("project_scope"),
+        "lifecycle" => agent.fetch("lifecycle"),
+        "activity_summary" => safe_nullable(agent["activity_summary"], 512),
+        "events" => agent.fetch("events"),
+        "structured_yield" => agent["structured_yield"],
+        "validations" => agent.fetch("validations"),
+        "error" => agent["error"],
+        "terminal_result" => agent["terminal_result"],
+        "created_at" => agent.fetch("created_at"),
+        "updated_at" => agent.fetch("updated_at")
       }
     end
 
@@ -284,15 +307,18 @@ module Flightdeck
     end
 
     def project_scope_projection(nodes)
-      nodes.map do |node|
+      nodes.group_by { |node| node.fetch("logical_project_key") }.map do |key, project_nodes|
+        execution_modes = project_nodes.map { |node| node.fetch("execution_mode") }.uniq
+        raise ContractError.new("invalid_hub_state", "Operation project execution modes conflict") unless execution_modes.one?
+        work_types = project_nodes.map { |node| node.fetch("work_type") }.uniq.sort
         {
-          "logical_project_key" => node.fetch("logical_project_key"),
-          "display_name" => project_label(node.fetch("logical_project_key")),
-          "execution_mode" => node.fetch("execution_mode"),
-          "access_mode" => node.fetch("access_mode"),
-          "work_type" => safe_label(node.fetch("work_type"), 128)
+          "logical_project_key" => key,
+          "display_name" => project_label(key),
+          "execution_mode" => execution_modes.first,
+          "access_mode" => project_nodes.any? { |node| node.fetch("access_mode") == "write" } ? "write" : "read_only",
+          "work_type" => work_types.join("_and_")
         }
-      end.uniq.sort_by { |item| item.fetch("logical_project_key") }
+      end.sort_by { |item| item.fetch("logical_project_key") }
     end
 
     def success_criteria_projection(mission, nodes)
@@ -459,13 +485,19 @@ module Flightdeck
       safe_text(declaration&.fetch("name", nil) || declaration&.fetch("id", nil) || project&.fetch("display_name", nil) || key, 256)
     end
 
-    def agent_name(key)
+    def agent_name(key, work_type = nil)
       words = key.to_s.split(/[-_.]+/).reject(&:empty?).map(&:capitalize).join(" ")
-      safe_text("#{words} Agent", 256)
+      suffix = case work_type
+               when "implementation" then "Implementation Agent"
+               when "review" then "Independent Review Agent"
+               when "research" then "Research Agent"
+               else "Agent"
+               end
+      safe_text("#{words} #{suffix}", 256)
     end
 
     def dependency_projection(nodes)
-      labels = nodes.to_h { |node| [node.fetch("id"), agent_name(node.fetch("logical_project_key"))] }
+      labels = nodes.to_h { |node| [node.fetch("id"), agent_name(node.fetch("logical_project_key"), node["work_type"])] }
       nodes.flat_map do |node|
         Array(node["dependencies"]).map do |source|
           { "from_agent" => labels[source] || source, "to_agent" => labels[node.fetch("id")], "state" => map_state(node.fetch("observed_state")) }

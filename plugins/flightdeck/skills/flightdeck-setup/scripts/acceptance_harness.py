@@ -434,7 +434,7 @@ def main() -> int:
                 and compatibility.get("hub", {})
                 .get("identity", {})
                 .get("template_version")
-                == "1.11.0"
+                == "1.12.0"
                 and not compatibility.get("requirements", {}).get("missing")
                 and tree_state(hub) == compatibility_before,
                 compatibility,

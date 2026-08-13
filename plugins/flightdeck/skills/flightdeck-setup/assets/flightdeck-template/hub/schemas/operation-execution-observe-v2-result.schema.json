@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flightdeck.dev/schemas/operation-execution-observe-v2-result.schema.json",
+  "title": "Persisted Operation observation with runtime-agent hierarchy",
+  "$defs": {
+    "safeAgent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agent_id", "node_id", "logical_project_key", "dependencies", "execution_order", "adapter",
+        "binding_state", "observation", "runtime_agents"
+      ],
+      "properties": {
+        "agent_id": {"$ref": "operation-execution-types.schema.json#/$defs/agentId"},
+        "node_id": {"$ref": "operation-execution-types.schema.json#/$defs/identifier"},
+        "logical_project_key": {"$ref": "operation-execution-types.schema.json#/$defs/identifier"},
+        "dependencies": {"type": "array", "maxItems": 50, "uniqueItems": true, "items": {"$ref": "operation-execution-types.schema.json#/$defs/identifier"}},
+        "execution_order": {"type": "integer", "minimum": 0, "maximum": 49},
+        "adapter": {"$ref": "operation-execution-types.schema.json#/$defs/adapterDescriptor"},
+        "binding_state": {"enum": ["unbound", "bound"]},
+        "observation": {"$ref": "operation-execution-types.schema.json#/$defs/observation"},
+        "runtime_agents": {"type": "array", "maxItems": 64, "items": {"$ref": "operation-agent-telemetry-types.schema.json#/$defs/runtimeAgentProjection"}}
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "schema", "ok", "capability", "adapter", "operation_id", "execution_id", "execution_state", "agent", "replayed"],
+  "properties": {
+    "schema_version": {"const": "flightdeck.operation-execution.observe-result/v2"},
+    "schema": {"const": "hub/schemas/operation-execution-observe-v2-result.schema.json"},
+    "ok": {"const": true},
+    "capability": {"const": "flightdeck.command.operation-agent-telemetry.v1"},
+    "adapter": {"$ref": "operation-execution-types.schema.json#/$defs/adapterDescriptor"},
+    "operation_id": {"$ref": "operation-execution-types.schema.json#/$defs/operationId"},
+    "execution_id": {"$ref": "operation-execution-types.schema.json#/$defs/executionId"},
+    "execution_state": {"enum": ["authorized", "running", "attention_required", "failed", "cancelled", "review_ready"]},
+    "agent": {"$ref": "#/$defs/safeAgent"},
+    "replayed": {"type": "boolean"}
+  }
+}

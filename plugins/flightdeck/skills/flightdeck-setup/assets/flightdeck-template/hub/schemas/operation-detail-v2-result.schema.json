@@ -87,7 +87,7 @@
     },
     "agent": {
       "type": "object", "additionalProperties": false,
-      "required": ["agent_id", "node_id", "name", "logical_project_key", "project", "role", "dependencies", "execution_order", "lifecycle", "binding", "current_activity", "last_observation", "validation", "checks", "changes", "artifacts", "approvals", "result"],
+      "required": ["agent_id", "node_id", "name", "logical_project_key", "project", "role", "dependencies", "execution_order", "lifecycle", "binding", "current_activity", "last_observation", "validation", "checks", "changes", "artifacts", "approvals", "result", "runtime_agents"],
       "properties": {
         "agent_id": {"oneOf": [{"$ref": "#/$defs/agentId"}, {"type": "null"}]},
         "node_id": {"$ref": "#/$defs/id"}, "name": {"type": "string", "minLength": 1, "maxLength": 256},
@@ -98,7 +98,8 @@
         "binding": {"type": "object", "additionalProperties": false, "required": ["state"], "properties": {"state": {"enum": ["unavailable", "unbound", "bound"]}}},
         "current_activity": {"$ref": "#/$defs/activity"}, "last_observation": {"$ref": "#/$defs/observation"},
         "validation": {"$ref": "#/$defs/validation"}, "checks": {"$ref": "#/$defs/unavailableItems"}, "changes": {"$ref": "#/$defs/unavailableItems"},
-        "artifacts": {"$ref": "#/$defs/artifacts"}, "approvals": {"$ref": "#/$defs/approvals"}, "result": {"$ref": "#/$defs/result"}
+        "artifacts": {"$ref": "#/$defs/artifacts"}, "approvals": {"$ref": "#/$defs/approvals"}, "result": {"$ref": "#/$defs/result"},
+        "runtime_agents": {"type": "array", "maxItems": 64, "items": {"$ref": "operation-agent-telemetry-types.schema.json#/$defs/runtimeAgentProjection"}}
       }
     },
     "project": {

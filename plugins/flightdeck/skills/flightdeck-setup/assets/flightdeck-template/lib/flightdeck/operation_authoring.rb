@@ -326,6 +326,9 @@ module Flightdeck
     # Read-only source of canonical detail identities for Operations snapshots.
     # A persisted record is necessary but not sufficient: its Mission identity,
     # authoring binding, and immutable fingerprint must still reconcile exactly.
+    # A well-formed but irreconcilable historical record is quarantined from
+    # canonical detail identity without being deleted or repaired. Its Mission
+    # remains eligible for projection with detail explicitly unavailable.
     def snapshot_detail_identities
       verify_capability!
       operation_records.each_with_object({}) do |record, identities|
@@ -333,21 +336,20 @@ module Flightdeck
         state = record.fetch("state")
 
         if state == "not_created"
-          unless result["outcome"] == "not_created" && result["mission_id"].nil? &&
-                 result["reason"] == "no_operation_persisted"
-            raise ContractError.new("operation_identity_conflict", "not-created Operation identity conflicts with persisted Mission state")
-          end
-          next
+          next if result["outcome"] == "not_created" && result["mission_id"].nil? &&
+                  result["reason"] == "no_operation_persisted"
+          next if result["reason"] == "operation_identity_conflict"
+
+          raise ContractError.new("operation_identity_conflict", "not-created Operation identity conflicts with persisted Mission state")
         end
 
         if result["outcome"] == "created"
           operation_id = record.fetch("operation_id")
           mission_id = record.fetch("mission_id")
-          unless operation_id == mission_id && result["operation_id"] == operation_id &&
-                 result["mission_id"] == mission_id && !identities.key?(mission_id)
-            raise ContractError.new("operation_identity_conflict", "persisted Operation detail identity is conflicting or foreign")
+          if operation_id == mission_id && result["operation_id"] == operation_id &&
+             result["mission_id"] == mission_id && !identities.key?(mission_id)
+            identities[mission_id] = operation_id
           end
-          identities[mission_id] = operation_id
           next
         end
 
@@ -355,6 +357,8 @@ module Flightdeck
            result["reason"] == "no_operation_persisted"
           next
         end
+
+        next if result["outcome"] == "unresolved" && result["reason"] == "operation_identity_conflict"
 
         raise ContractError.new("operation_identity_conflict", "persisted Operation detail identity does not reconcile")
       end

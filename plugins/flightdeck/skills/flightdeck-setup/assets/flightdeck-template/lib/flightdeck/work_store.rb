@@ -519,6 +519,10 @@ module Flightdeck
           end
           return guidance_result(record, operation_id, replay_event, replayed: true)
         end
+        terminal_link = operation_links(record).find { |link| link["operation_id"] == operation_id }
+        if terminal_link && %w[available failed].include?(terminal_link["result_state"])
+          raise ContractError.new("terminal_operation", "guidance is not allowed after the Operation has a terminal result")
+        end
 
         result = @authoring.guidance(
           "schema_version" => OperationAuthoring::GUIDANCE_REQUEST,
@@ -1022,7 +1026,7 @@ module Flightdeck
       targets = nodes.map { |node| dispatch_target(item, node) }.sort_by { |target| target.fetch("node_id") }
       policy = {
         "strategy" => "parallel_independent",
-        "max_concurrency" => [targets.length, 8].min,
+        "max_concurrency" => [[targets.count { |target| target.fetch("dependencies").empty? }, 1].max, 8].min,
         "requires_all_receipts" => true,
         "retry_known_failures_only" => true
       }
