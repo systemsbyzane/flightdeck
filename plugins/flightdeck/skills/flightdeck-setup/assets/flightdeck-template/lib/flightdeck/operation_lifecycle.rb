@@ -18,7 +18,9 @@ module Flightdeck
     ERROR = "flightdeck.operation-lifecycle.error/v1"
     RECORD_VERSION = "flightdeck.operation-lifecycle.record/v1"
     ACTIONS = %w[close archive restore].freeze
-    ARCHIVABLE_STATES = %w[complete failed_validation runtime_failure cancelled].freeze
+    ARCHIVABLE_STATES = %w[
+      complete failed_validation runtime_failure cancelled blocked stale dispatch_unknown
+    ].freeze
     REQUEST_ID = /\A[a-zA-Z0-9][a-zA-Z0-9._:-]{7,127}\z/
     OPERATION_ID = /\Aoperation-[0-9a-f]{24}\z/
     MAX_REQUESTS = 100
@@ -95,16 +97,21 @@ module Flightdeck
           unless replay["payload_digest"] == payload_digest
             raise ContractError.new("duplicate_request_conflict", "request_id is already bound to a different lifecycle action")
           end
-          return result(record, mission_state(operation_id), replayed: true)
+          state = record["completed_at"] ? "complete" : projected_state(operation_id)
+          return result(record, state, replayed: true)
         end
         raise ContractError.new("request_limit_exceeded", "Operation lifecycle request limit is exhausted") if record.fetch("requests").length >= MAX_REQUESTS
 
-        state = mission_state(operation_id)
+        store = MissionStore.new(@config, clock: @clock)
+        state = record["completed_at"] ? "complete" : projected_state(operation_id)
         case action
         when "close"
           if state != "complete"
             raise ContractError.new("operation_not_review_ready", "Only a review-ready Operation can be acknowledged as complete") unless state == "review_ready"
-            MissionStore.new(@config, clock: @clock).close(operation_id)
+            # Mission-synced Operations can use the exact durable close gate.
+            # OMP-native Operations retain their authenticated result in the
+            # execution ledger; the operator acknowledgement belongs here.
+            store.close(operation_id) if store.snapshot(operation_id).dig("status", "state") == "review_ready"
             state = "complete"
           end
           record["completed_at"] ||= timestamp
@@ -184,13 +191,13 @@ module Flightdeck
       raise ContractError.new("unsupported_hub_contract", "Selected Hub does not declare Operation lifecycle v1")
     end
 
-    def mission_state(operation_id)
-      # Lifecycle mutations are gated by the durable Mission record. The
-      # read-only status projection may overlay adapter recovery state and must
-      # not replace the exact explicit-close precondition.
-      MissionStore.new(@config, clock: @clock).snapshot(operation_id).dig("status", "state").to_s
-    rescue ValidationError, KeyError
-      raise ContractError.new("operation_unavailable", "Operation durable state is unavailable")
+    def projected_state(operation_id)
+      # The Operations UI and lifecycle gate must evaluate the same authenticated
+      # execution projection. OMP-native acknowledgement remains in this
+      # lifecycle ledger rather than manufacturing MissionSync evidence.
+      MissionStore.new(@config, clock: @clock).status(operation_id).dig("status", "state").to_s
+    rescue ValidationError, OperationExecution::ContractError, KeyError
+      raise ContractError.new("operation_unavailable", "Operation state is unavailable")
     end
 
     def load_record(operation_id)
@@ -243,7 +250,7 @@ module Flightdeck
         "schema" => "hub/schemas/operation-lifecycle-result.schema.json",
         "ok" => true,
         "operation_id" => record.fetch("operation_id"),
-        "state" => state == "complete" ? "completed" : state,
+        "state" => (record["completed_at"] || state == "complete") ? "completed" : state,
         "archived" => !record["archived_at"].nil?,
         "completed_at" => record["completed_at"],
         "archived_at" => record["archived_at"],

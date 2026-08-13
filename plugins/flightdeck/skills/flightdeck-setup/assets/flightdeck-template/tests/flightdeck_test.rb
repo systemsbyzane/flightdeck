@@ -427,6 +427,7 @@ class FlightdeckTest < Minitest::Test
       assert_equal [], snapshot.fetch("operations")
       assert_equal [], snapshot.dig("summary", "alerts")
       assert snapshot.dig("summary", "counts").values.all?(&:zero?)
+      assert_equal({ "active" => 0, "completed" => 0, "archived" => 0 }, snapshot.dig("summary", "lifecycle"))
     end
   end
 
@@ -557,11 +558,19 @@ class FlightdeckTest < Minitest::Test
       refute Flightdeck::OperationsSnapshot.new(config).snapshot.fetch("operations").any? { |item| item.dig("detail", "operation_id") == operation_id }
       archived = Flightdeck::OperationsSnapshot.new(config).snapshot(archive_view: "archived").fetch("operations")
       assert_equal true, archived.find { |item| item.dig("detail", "operation_id") == operation_id }.fetch("archived")
+      assert_equal(
+        { "active" => 0, "completed" => 0, "archived" => 1 },
+        Flightdeck::OperationsSnapshot.new(config).snapshot(archive_view: "archived").dig("summary", "lifecycle")
+      )
 
       restore_request = close_request.merge("request_id" => "lifecycle-restore-0001", "action" => "restore")
       assert_equal false, lifecycle.apply(restore_request).fetch("archived")
       assert Flightdeck::OperationsSnapshot.new(config).snapshot.fetch("operations").any? { |item| item.dig("detail", "operation_id") == operation_id }
       assert_empty Flightdeck::OperationsSnapshot.new(config).snapshot(archive_view: "archived").fetch("operations")
+      assert_equal(
+        { "active" => 0, "completed" => 1, "archived" => 0 },
+        Flightdeck::OperationsSnapshot.new(config).snapshot.dig("summary", "lifecycle")
+      )
 
       conflicting = close_request.merge("action" => "archive")
       error = assert_raises(Flightdeck::OperationLifecycle::ContractError) { lifecycle.apply(conflicting) }
@@ -584,6 +593,24 @@ class FlightdeckTest < Minitest::Test
         )
       end
       assert_equal "operation_not_terminal", error.code
+
+      store = Flightdeck::MissionStore.new(config, clock: -> { Time.iso8601("2026-08-13T12:00:00Z") })
+      node = store.snapshot(operation_id).dig("spec", "graph", "nodes", 0)
+      store.record_dispatch(
+        slug: operation_id, node_id: node.fetch("id"), runtime_project_id: node.fetch("runtime_project_id"),
+        host_id: node.fetch("host_id"), task_id: "task-lifecycle-stale-operation"
+      )
+      stale_lifecycle = Flightdeck::OperationLifecycle.new(
+        config, clock: -> { Time.iso8601("2026-08-13T14:00:00Z") }
+      )
+      archived = stale_lifecycle.apply(
+        "schema_version" => Flightdeck::OperationLifecycle::REQUEST,
+        "request_id" => "lifecycle-archive-stale-0001",
+        "operation_id" => operation_id,
+        "action" => "archive"
+      )
+      assert_equal "stale", archived.fetch("state")
+      assert_equal true, archived.fetch("archived")
     end
 
     compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
@@ -593,6 +620,9 @@ class FlightdeckTest < Minitest::Test
     %w[request result error].each do |name|
       assert_includes capability.fetch("managed_paths"), "hub/schemas/operation-lifecycle-#{name}.schema.json"
     end
+    result_schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "operation-lifecycle-result.schema.json")))
+    assert_includes result_schema.dig("properties", "state", "enum"), "stale"
+    assert_includes result_schema.dig("properties", "state", "enum"), "dispatch_unknown"
   end
 
   def test_task_creation_is_non_destructive_and_transitions_are_gated
@@ -2981,6 +3011,23 @@ class FlightdeckTest < Minitest::Test
       assert_equal "mission:#{plan.fetch('operation_id')}", snapshot_operation.fetch("operation_id")
       assert_equal plan.fetch("operation_id"), snapshot_operation.dig("detail", "operation_id")
       assert_equal "review_ready", snapshot_operation.dig("children", 0, "execution", "observation", "lifecycle")
+
+      mission_store = Flightdeck::MissionStore.new(config, clock: clock)
+      assert_equal "planned", mission_store.snapshot(plan.fetch("operation_id")).dig("status", "state")
+      assert_equal "review_ready", mission_store.status(plan.fetch("operation_id")).dig("status", "state")
+      lifecycle = Flightdeck::OperationLifecycle.new(config, clock: clock)
+      closed = lifecycle.apply(
+        "schema_version" => Flightdeck::OperationLifecycle::REQUEST,
+        "request_id" => "lifecycle-close-runtime-projection-0001",
+        "operation_id" => plan.fetch("operation_id"),
+        "action" => "close"
+      )
+      assert_equal "completed", closed.fetch("state")
+      assert_equal "planned", mission_store.snapshot(plan.fetch("operation_id")).dig("status", "state")
+      assert_equal "review_ready", mission_store.status(plan.fetch("operation_id")).dig("status", "state")
+      completed_snapshot = Flightdeck::OperationsSnapshot.new(config).snapshot
+      completed_operation = completed_snapshot.fetch("operations").find { |item| item.dig("detail", "operation_id") == plan.fetch("operation_id") }
+      assert_equal "completed", completed_operation.fetch("status")
 
       persisted = File.read(Dir.glob(File.join(root, "hub/state/operation-execution/*.json")).first)
       refute_includes persisted, session_ref

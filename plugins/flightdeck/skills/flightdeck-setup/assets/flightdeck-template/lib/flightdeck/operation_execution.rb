@@ -643,6 +643,10 @@ module Flightdeck
     end
 
     def apply_to_mission!(mission)
+      # Explicit completion owns the durable terminal state. A retained runtime
+      # observation remains evidence, but must not reopen a completed Operation.
+      return mission if mission.dig("status", "state") == "complete"
+
       operation_id = mission.dig("metadata", "id")
       projections = mission_status_projection(operation_id, include_runtime_agents: true)
       return mission if projections.empty?

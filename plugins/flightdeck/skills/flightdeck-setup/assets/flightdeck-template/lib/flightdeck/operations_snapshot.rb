@@ -44,6 +44,11 @@ module Flightdeck
       detail_identities = OperationAuthoring.new(@config).snapshot_detail_identities
       lifecycle_metadata = OperationLifecycle.new(@config).metadata
       operations = mission_operations(detail_identities, lifecycle_metadata) + task_operations
+      lifecycle_counts = {
+        "active" => operations.count { |operation| !operation.fetch("archived") && operation.fetch("status") != "completed" },
+        "completed" => operations.count { |operation| !operation.fetch("archived") && operation.fetch("status") == "completed" },
+        "archived" => operations.count { |operation| operation.fetch("archived") }
+      }
       operations.select! { |operation| archive_view == "archived" ? operation.fetch("archived") : !operation.fetch("archived") }
       operations.sort_by! { |operation| [operation.fetch("updated_at"), operation.fetch("operation_id")] }.reverse!
       alerts = operations.filter_map do |operation|
@@ -62,6 +67,7 @@ module Flightdeck
         "ok" => true,
         "runtime_capabilities" => runtime_capabilities!,
         "summary" => {
+          "lifecycle" => lifecycle_counts,
           "counts" => STATUSES.to_h { |status| [status, operations.count { |item| item["status"] == status }] },
           "alerts" => alerts
         },
@@ -128,8 +134,9 @@ module Flightdeck
         events = Array(mission.dig("status", "skill_events"))
         nodes = Array(mission.dig("spec", "graph", "nodes")).map { |node| mission_child(node, events) }
         lifecycle = lifecycle_metadata.fetch(id, { "archived" => false, "archived_at" => nil })
+        state = lifecycle["completed_at"] ? "complete" : mission.dig("status", "state")
         operation(
-          "mission", id, mission.dig("metadata", "title"), mission.dig("status", "state"),
+          "mission", id, mission.dig("metadata", "title"), state,
           mission.dig("metadata", "created_at"), mission.dig("metadata", "updated_at"),
           { "mode" => mission.dig("spec", "mode"), "logical_project_keys" => nodes.map { |node| node["logical_project_key"] }.uniq.sort },
           nodes, detail: detail_identity(detail_identities[id]), skills: skill_summary(events), lifecycle: lifecycle

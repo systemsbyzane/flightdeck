@@ -10,7 +10,7 @@
     "schema": {"const": "hub/schemas/operation-lifecycle-result.schema.json"},
     "ok": {"const": true},
     "operation_id": {"type": "string", "pattern": "^operation-[0-9a-f]{24}$"},
-    "state": {"enum": ["review_ready", "completed", "failed_validation", "runtime_failure", "cancelled"]},
+    "state": {"enum": ["review_ready", "completed", "failed_validation", "runtime_failure", "cancelled", "blocked", "stale", "dispatch_unknown"]},
     "archived": {"type": "boolean"},
     "completed_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
     "archived_at": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
