@@ -47,7 +47,7 @@ Run the control plane from the Hub root. The implemented v1 interface is:
 bin/flightdeck help
 bin/flightdeck doctor [--json] [--strict]
 bin/flightdeck status [--json] [--write]
-bin/flightdeck hub operations-snapshot --hub-root ABSOLUTE_PATH [--json]
+bin/flightdeck hub operations-snapshot --hub-root ABSOLUTE_PATH [--archive-view active|archived] [--json]
 bin/flightdeck work list --hub-root ABSOLUTE_PATH [--limit 1..100] [--cursor CURSOR] [--json]
 bin/flightdeck work create --request FILE [--json]
 bin/flightdeck work adapter-bind --request FILE [--json]
@@ -76,6 +76,7 @@ bin/flightdeck operation authoring-plan --request FILE [--json]
 bin/flightdeck operation authoring-launch --request FILE [--json]
 bin/flightdeck operation authoring-guidance --request FILE [--json]
 bin/flightdeck operation authoring-operation --request FILE [--json]
+bin/flightdeck operation lifecycle --request FILE [--json]
 bin/flightdeck operation execution-plan --request FILE [--json]
 bin/flightdeck operation execution-bind --request FILE [--json]
 bin/flightdeck operation execution-observe --request FILE [--json]
@@ -119,6 +120,21 @@ title, outcome, prompt, expected skill list, repository, or agent prose.
 Those optional fields are shown only when their typed durable Hub observation
 exists. Legacy Mission children without authenticated skill telemetry retain
 the typed unavailable/empty state.
+
+The default `active` archive view excludes only Operations explicitly archived
+through the lifecycle command. The `archived` view returns only those records.
+Archiving is reversible visibility metadata: it never deletes the Operation,
+its agents, execution observations, validation, changes, or result evidence.
+Legacy task projections remain active because they lack a canonical authored
+Operation identity and cannot safely accept lifecycle mutation.
+
+`operation lifecycle` accepts one closed request with `close`, `archive`, or
+`restore`. `close` is the explicit operator acknowledgement gate and succeeds
+only when the authored Operation is `review_ready`; the Operation then projects
+as `completed`. `archive` accepts only completed or terminal Operations, so
+active work cannot be hidden. `restore` accepts only an archived Operation and
+returns it to the active view. Request identities are replay-safe, records are
+bounded and private ignored Hub state, and conflicts fail closed.
 
 Template 1.12 adds authenticated runtime-agent telemetry for adapter-backed
 Operations. Flightdeck durably projects whatever task agents and subagents the

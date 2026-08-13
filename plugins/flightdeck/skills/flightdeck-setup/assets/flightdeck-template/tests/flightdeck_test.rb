@@ -18,6 +18,7 @@ require "flightdeck/hub_snapshot"
 require "flightdeck/operations_snapshot"
 require "flightdeck/operation_detail"
 require "flightdeck/operation_execution"
+require "flightdeck/operation_lifecycle"
 require "flightdeck/work_coordinator"
 require "flightdeck/mission_objectives"
 require "flightdeck/mission_store"
@@ -32,7 +33,7 @@ class FlightdeckTest < Minitest::Test
     .gitignore AGENTS.md Makefile README.md bin docs flightdeck.yaml lib scripts tests
   ].freeze
   HUB_CONTROL_PLANE_ENTRIES = %w[
-    .mission-authoring.lock .operation-authoring.lock automations bridges compatibility.json repositories.yaml schemas templates workflows
+    .mission-authoring.lock .operation-authoring.lock .operation-lifecycle.lock automations bridges compatibility.json repositories.yaml schemas templates workflows
   ].freeze
   WORKLOAD_ROOTS = %w[charts development environments operations patching research].freeze
 
@@ -438,7 +439,7 @@ class FlightdeckTest < Minitest::Test
       expected = {
         "intake" => "queued", "scoped" => "queued", "designed" => "queued", "authorized" => "queued", "planned" => "queued", "dispatch_pending" => "queued",
         "executing" => "working", "running" => "working", "validating" => "working", "integration_ready" => "waiting", "validation_ready" => "waiting", "awaiting_handoff" => "waiting",
-        "needs_approval" => "approval_required", "approval_required" => "approval_required", "blocked" => "blocked", "review_ready" => "review_ready", "closed" => "review_ready", "complete" => "review_ready",
+        "needs_approval" => "approval_required", "approval_required" => "approval_required", "blocked" => "blocked", "review_ready" => "review_ready", "closed" => "completed", "complete" => "completed",
         "failed_validation" => "failed_validation", "runtime_failure" => "failed_validation", "cancelled" => "cancelled", "dispatch_unknown" => "reconcile_required", "stale" => "reconcile_required", "rollback_required" => "reconcile_required", "unknown" => "reconcile_required"
       }
       expected.each { |source, projected| assert_equal projected, snapshot.send(:map_state, source) }
@@ -506,11 +507,92 @@ class FlightdeckTest < Minitest::Test
     assert_equal false, schema.dig("$defs", "success", "additionalProperties")
     assert_equal false, schema.dig("$defs", "error", "additionalProperties")
     assert_equal false, schema.dig("$defs", "skills", "additionalProperties")
-    assert_equal ["queued", "working", "waiting", "approval_required", "blocked", "review_ready", "failed_validation", "cancelled", "reconcile_required"], schema.dig("$defs", "status", "enum")
+    assert_equal ["queued", "working", "waiting", "approval_required", "blocked", "review_ready", "completed", "failed_validation", "cancelled", "reconcile_required"], schema.dig("$defs", "status", "enum")
     compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
     capability = compatibility.dig("capabilities", "flightdeck.command.operations-snapshot.v1")
     assert_equal "command", capability["kind"]
     assert_includes capability["managed_paths"], "hub/schemas/operations-snapshot.schema.json"
+  end
+
+  def test_operation_lifecycle_closes_archives_restores_and_replays_exactly
+    with_operation_authoring_fixture do |root, config, authoring, _catalog, target|
+      proposal = operation_proposal(target, title: "Lifecycle Operation")
+      plan = operation_plan(authoring, proposal)
+      operation_id = authoring.launch(operation_launch_request(plan, proposal)).fetch("operation_id")
+      store = Flightdeck::MissionStore.new(config)
+      nodes = store.snapshot(operation_id).dig("spec", "graph", "nodes")
+      nodes.each_with_index do |node, index|
+        handoff = store.next_actions(operation_id).find do |action|
+          action["type"] == "dependency_handoff" && action.dig("payload", "node_id") == node.fetch("id")
+        end
+        store.prepare_action(slug: operation_id, action_id: handoff.fetch("id")) if handoff
+        store.record_dispatch(
+          slug: operation_id, node_id: node.fetch("id"), runtime_project_id: node.fetch("runtime_project_id"),
+          host_id: node.fetch("host_id"), task_id: "task-lifecycle-operation-#{index + 1}"
+        )
+        store.acknowledge_action(slug: operation_id, action_id: handoff.fetch("id")) if handoff
+        observation = mission_observation(config, slug: operation_id, node_id: node.fetch("id"), state: "review_ready", revision: index + 1)
+        observations_path = write_mission_observations(root, operation_id, [observation], name: "lifecycle-ready-#{index + 1}.json")
+        apply_mission_sync(Flightdeck::MissionSync.new(store), slug: operation_id, observations_path: observations_path)
+      end
+      lifecycle_snapshot = store.snapshot(operation_id)
+      assert_equal "review_ready", lifecycle_snapshot.dig("status", "state"), JSON.generate(lifecycle_snapshot.dig("spec", "graph", "nodes"))
+
+      lifecycle = Flightdeck::OperationLifecycle.new(config, clock: -> { Time.iso8601("2026-08-13T12:00:00Z") })
+      close_request = {
+        "schema_version" => Flightdeck::OperationLifecycle::REQUEST,
+        "request_id" => "lifecycle-close-0001",
+        "operation_id" => operation_id,
+        "action" => "close"
+      }
+      closed = lifecycle.apply(close_request)
+      assert_equal "completed", closed.fetch("state")
+      assert_equal false, closed.fetch("archived")
+      assert_equal true, lifecycle.apply(close_request).fetch("replayed")
+      active = Flightdeck::OperationsSnapshot.new(config).snapshot.fetch("operations")
+      assert_equal "completed", active.find { |item| item.dig("detail", "operation_id") == operation_id }.fetch("status")
+
+      archive_request = close_request.merge("request_id" => "lifecycle-archive-0001", "action" => "archive")
+      assert_equal true, lifecycle.apply(archive_request).fetch("archived")
+      refute Flightdeck::OperationsSnapshot.new(config).snapshot.fetch("operations").any? { |item| item.dig("detail", "operation_id") == operation_id }
+      archived = Flightdeck::OperationsSnapshot.new(config).snapshot(archive_view: "archived").fetch("operations")
+      assert_equal true, archived.find { |item| item.dig("detail", "operation_id") == operation_id }.fetch("archived")
+
+      restore_request = close_request.merge("request_id" => "lifecycle-restore-0001", "action" => "restore")
+      assert_equal false, lifecycle.apply(restore_request).fetch("archived")
+      assert Flightdeck::OperationsSnapshot.new(config).snapshot.fetch("operations").any? { |item| item.dig("detail", "operation_id") == operation_id }
+      assert_empty Flightdeck::OperationsSnapshot.new(config).snapshot(archive_view: "archived").fetch("operations")
+
+      conflicting = close_request.merge("action" => "archive")
+      error = assert_raises(Flightdeck::OperationLifecycle::ContractError) { lifecycle.apply(conflicting) }
+      assert_equal "duplicate_request_conflict", error.code
+    end
+  end
+
+  def test_operation_lifecycle_rejects_archiving_active_operations_and_is_declared
+    with_operation_authoring_fixture do |_root, config, authoring, _catalog, target|
+      proposal = operation_proposal(target, title: "Active Operation")
+      plan = operation_plan(authoring, proposal)
+      operation_id = authoring.launch(operation_launch_request(plan, proposal)).fetch("operation_id")
+      lifecycle = Flightdeck::OperationLifecycle.new(config)
+      error = assert_raises(Flightdeck::OperationLifecycle::ContractError) do
+        lifecycle.apply(
+          "schema_version" => Flightdeck::OperationLifecycle::REQUEST,
+          "request_id" => "lifecycle-archive-active-0001",
+          "operation_id" => operation_id,
+          "action" => "archive"
+        )
+      end
+      assert_equal "operation_not_terminal", error.code
+    end
+
+    compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
+    capability = compatibility.dig("capabilities", Flightdeck::OperationLifecycle::CAPABILITY)
+    assert_equal "command", capability.fetch("kind")
+    assert_includes capability.fetch("managed_paths"), "hub/.operation-lifecycle.lock"
+    %w[request result error].each do |name|
+      assert_includes capability.fetch("managed_paths"), "hub/schemas/operation-lifecycle-#{name}.schema.json"
+    end
   end
 
   def test_task_creation_is_non_destructive_and_transitions_are_gated

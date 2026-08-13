@@ -2,6 +2,7 @@
 
 require_relative "mission_store"
 require_relative "operation_authoring"
+require_relative "operation_lifecycle"
 require_relative "task_store"
 
 module Flightdeck
@@ -17,7 +18,7 @@ module Flightdeck
     MAX_ALERTS = 100
     STATUSES = %w[
       queued working waiting approval_required blocked review_ready failed_validation
-      cancelled reconcile_required
+      completed cancelled reconcile_required
     ].freeze
     ALERT_STATUSES = %w[blocked approval_required failed_validation reconcile_required].freeze
     SKILL_FAILURE_STATUSES = %w[failed blocked unknown_outcome].freeze
@@ -35,10 +36,14 @@ module Flightdeck
       @config = config
     end
 
-    def snapshot
+    def snapshot(archive_view: "active")
+      raise SnapshotError.new("invalid_request", "Operations archive view is invalid.") unless %w[active archived].include?(archive_view)
+
       compatibility = compatibility!
       detail_identities = OperationAuthoring.new(@config).snapshot_detail_identities
-      operations = mission_operations(detail_identities) + task_operations
+      lifecycle_metadata = OperationLifecycle.new(@config).metadata
+      operations = mission_operations(detail_identities, lifecycle_metadata) + task_operations
+      operations.select! { |operation| archive_view == "archived" ? operation.fetch("archived") : !operation.fetch("archived") }
       operations.sort_by! { |operation| [operation.fetch("updated_at"), operation.fetch("operation_id")] }.reverse!
       alerts = operations.filter_map do |operation|
         next unless ALERT_STATUSES.include?(operation.fetch("status"))
@@ -106,7 +111,7 @@ module Flightdeck
       raise SnapshotError.new("unsupported_hub_contract", "Selected Hub has invalid runtime capability metadata.")
     end
 
-    def mission_operations(detail_identities)
+    def mission_operations(detail_identities, lifecycle_metadata)
       store = MissionStore.new(@config)
       record_ids(@config.mission_dir, "mission").map do |id|
         raise SnapshotError.new("invalid_hub_state", "Hub Operations state is invalid.") unless store.validate(id).empty?
@@ -114,11 +119,12 @@ module Flightdeck
 
         events = Array(mission.dig("status", "skill_events"))
         nodes = Array(mission.dig("spec", "graph", "nodes")).map { |node| mission_child(node, events) }
+        lifecycle = lifecycle_metadata.fetch(id, { "archived" => false, "archived_at" => nil })
         operation(
           "mission", id, mission.dig("metadata", "title"), mission.dig("status", "state"),
           mission.dig("metadata", "created_at"), mission.dig("metadata", "updated_at"),
           { "mode" => mission.dig("spec", "mode"), "logical_project_keys" => nodes.map { |node| node["logical_project_key"] }.uniq.sort },
-          nodes, detail: detail_identity(detail_identities[id]), skills: skill_summary(events)
+          nodes, detail: detail_identity(detail_identities[id]), skills: skill_summary(events), lifecycle: lifecycle
         )
       end
     end
@@ -137,7 +143,7 @@ module Flightdeck
       end
     end
 
-    def operation(kind, id, title, state, created_at, updated_at, route_scope, children, detail: unavailable_detail, validation: nil, skills: unavailable_skills)
+    def operation(kind, id, title, state, created_at, updated_at, route_scope, children, detail: unavailable_detail, validation: nil, skills: unavailable_skills, lifecycle: { "archived" => false, "archived_at" => nil })
       value = {
         "operation_id" => "#{kind}:#{id}",
         "operation_kind" => kind,
@@ -146,6 +152,8 @@ module Flightdeck
         "status" => map_state(state),
         "created_at" => iso8601!(created_at),
         "updated_at" => iso8601!(updated_at),
+        "archived" => lifecycle.fetch("archived"),
+        "archived_at" => lifecycle["archived_at"],
         "route_scope" => route_scope.reject { |_key, value| value.nil? },
         "children" => children,
         "skills" => skills
@@ -302,7 +310,8 @@ module Flightdeck
       when "integration_ready", "validation_ready", "awaiting_handoff" then "waiting"
       when "needs_approval", "approval_required" then "approval_required"
       when "blocked" then "blocked"
-      when "review_ready", "closed", "complete", "completed" then "review_ready"
+      when "review_ready" then "review_ready"
+      when "closed", "complete", "completed" then "completed"
       when "failed_validation", "runtime_failure", "failed" then "failed_validation"
       when "cancelled" then "cancelled"
       else "reconcile_required"
