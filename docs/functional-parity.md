@@ -10,17 +10,6 @@ source process surface, every generated candidate file, and every plugin
 distribution file. See `docs/process-parity.md`. Unknown, ambiguous, missing,
 or count-drifting surfaces fail closed.
 
-The public, source-local gate is:
-
-```sh
-make public-validate
-```
-
-It runs repository-owned structured checks, tests, fresh generation,
-synthetic acceptance, de-branding, and process inventory without requiring a
-private reference Hub or system-installed validators. It does not establish
-source parity or installed Codex behavior.
-
 The canonical source-backed gate is:
 
 ```sh
@@ -54,28 +43,6 @@ Mandatory surfaces are:
 - Doctor finding categories, stable identities, repository state, no-fetch
   caveat, compliance parity, bridge integrity, and automation safety;
 - route, registration, onboarding, task receipt, and no-monitoring contracts;
-- Mission opt-in and default compatibility: ordinary dispatch still creates no
-  Mission and returns without monitoring, while an explicit durable Mission
-  supports `dispatch_only`, `watch_only`, and `supervised` modes, exact child
-  identities, dependency fan-in, bounded synchronization, two-phase actions,
-  replay safety, core-derived authorized-target boundaries, criterion
-  accountability, sync plan tokens, closed child declarations,
-  exact-receipt core materialization of reference provenance and event digests,
-  transported-artifact resolver direction, receipt-gated `awaiting_handoff`,
-  prepared pending/unknown preservation, no duplicate create, exact prepared
-  complete compatible non-root dispatch, terminal-evidence exclusion,
-  blocked/stale non-actionability, and operator-only close;
-- Mission failure and trust behavior: duplicate, stale, out-of-order,
-  `notLoaded`, malformed, interrupted, blocked, failed-validation,
-  runtime-failure, approval, and review-ready observations; per-host failures;
-  required-versus-optional dependencies; cycle and same-checkout mutation
-  conflicts; compact core-materialized producer-bound artifact/task references
-  from closed child declarations instead of child-authored canonical refs or
-  free text, terminal-only check/review evidence, secrets, raw
-  evidence, or action instructions;
-- Mission domain routing and output envelopes for compliance, patching,
-  development, CI/CD, platform/runtime, research, and professional DOCX, PDF,
-  and XLSX building;
 - reference, materialized, and repo-native bridge behavior;
 - declarative repositories, bulk read-only planning, safe/idempotent apply,
   per-repository receipts, natural-language setup triggers, and exact project
@@ -99,13 +66,5 @@ tasks, evidence, generated findings, and controlled artifacts are mandatory
 exclusions, not parity gaps. Runtime Codex UI registration and dispatch remain
 unresolved until installed fresh-task acceptance is actually executed and its
 evidence proves exact-path ID capture, create-versus-resume, and the
-no-monitoring boundary. Local Mission acceptance drives the generated-Hub CLI
-and store with an injected Codex UI adapter; it proves deterministic source
-behavior, not live waits, task creation, follow-up delivery, restart recovery,
-or the installed skill. Those require fresh installed acceptance for both the
-default dispatch path and explicit Mission modes. Runtime-acceptance v1 remains
-the backward-compatible exact-three direct-dispatch contract; v2 adds exactly
-four Mission results for default dispatch, watch synchronization, supervised
-fan-in, and operator closure. A locally tested upgrade
-planner cannot prove that an installed upgrade succeeded or that refreshed
-skills loaded in a new task.
+no-monitoring boundary. A locally tested upgrade planner cannot prove that an
+installed upgrade succeeded or that refreshed skills loaded in a new task.

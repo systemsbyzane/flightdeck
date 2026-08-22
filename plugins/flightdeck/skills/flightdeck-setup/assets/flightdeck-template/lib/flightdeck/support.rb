@@ -20,7 +20,7 @@ module Flightdeck
     module_function
 
     SLUG = /\A[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?\z/
-    IDENTIFIER = /\A[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\z/
+    IDENTIFIER = /\A[a-z0-9]+(?:[a-z0-9._-]*[a-z0-9])?\z/
     DIRECTORY = /\A[A-Za-z0-9][A-Za-z0-9._-]*\z/
 
     def stringify(value, ancestors = {})
@@ -161,7 +161,6 @@ module Flightdeck
     end
 
     def validate_identifier!(value, label: "identifier")
-      raise UsageError, "#{label} exceeds 128 bytes" if value.to_s.bytesize > 128
       return value if IDENTIFIER.match?(value.to_s)
 
       raise UsageError, "#{label} contains unsupported characters"

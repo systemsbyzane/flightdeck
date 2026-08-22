@@ -7,8 +7,6 @@ the Hub into a monorepo.
 
 ## Start Here
 
-- [Missions](workflows/missions.md) - opt into durable graph coordination for
-  verified persistent tasks while keeping direct dispatch receipt-and-stop.
 - [Thread routing](workflows/thread-routing.md) - resolve the owning project,
   execution mode, and environment.
 - [Planning](workflows/planning.md) - create a right-sized, read-only plan from

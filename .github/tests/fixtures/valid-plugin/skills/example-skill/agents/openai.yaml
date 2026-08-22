@@ -1,4 +1,0 @@
-interface:
-  display_name: "Example Skill"
-  short_description: "Validate a synthetic skill fixture"
-  default_prompt: "Use $example-skill to validate this synthetic fixture."
