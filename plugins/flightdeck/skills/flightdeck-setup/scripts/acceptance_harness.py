@@ -6,12 +6,9 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
-import importlib.util
 import json
 import os
-import re
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -23,9 +20,6 @@ SETUP = SCRIPTS / "setup_flightdeck.py"
 SCANNER = SCRIPTS / "scan_debranding.py"
 STRUCTURED = SCRIPTS / "validate_structured.py"
 HUB_COMPATIBILITY = SCRIPTS / "hub_compatibility.py"
-SETUP_TESTS = SCRIPTS.parent / "tests"
-MISSION_TEST = SETUP_TESTS / "test_mission_acceptance.py"
-MISSION_FIXTURES = SETUP_TESTS / "mission_fixtures.py"
 
 
 class HarnessFailure(RuntimeError):
@@ -37,7 +31,6 @@ def run(
     *,
     cwd: Path,
     expect: int = 0,
-    environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         arguments,
@@ -46,7 +39,7 @@ def run(
         capture_output=True,
         check=False,
         timeout=300,
-        env={**os.environ, "LC_ALL": "C", **(environment or {})},
+        env={**os.environ, "LC_ALL": "C"},
     )
     if result.returncode != expect:
         raise HarnessFailure(
@@ -114,23 +107,6 @@ def tree_state(root: Path) -> dict[str, str]:
     }
 
 
-def mission_stress_report() -> dict[str, Any]:
-    spec = importlib.util.spec_from_file_location(
-        "flightdeck_mission_fixtures", MISSION_FIXTURES
-    )
-    if not spec or not spec.loader:
-        raise HarnessFailure("mission fixture module is unavailable")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module.run_stress(
-        seed=20260803,
-        mission_count=100,
-        children_per_mission=16,
-        replayed_snapshots=10_000,
-    )
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", type=Path, help="Write the report to this ignored local path")
@@ -151,22 +127,6 @@ def main() -> int:
             },
             {
                 "name": "installed_task_search_create_resume_and_no_monitoring",
-                "status": "not_run_requires_installed_plugin_fresh_task",
-            },
-            {
-                "name": "installed_mission_dispatch_only_default",
-                "status": "not_run_requires_installed_plugin_fresh_task",
-            },
-            {
-                "name": "installed_mission_watch_only_synchronization",
-                "status": "not_run_requires_installed_plugin_fresh_task",
-            },
-            {
-                "name": "installed_mission_supervised_fan_in",
-                "status": "not_run_requires_installed_plugin_fresh_task",
-            },
-            {
-                "name": "installed_mission_operator_closure",
                 "status": "not_run_requires_installed_plugin_fresh_task",
             },
             {
@@ -241,52 +201,6 @@ def main() -> int:
                 ["python3", str(SETUP), str(hub), "--no-git", "--json"], cwd=root
             )
             probe(report, "fresh_generation", setup.get("generated") is True, setup)
-
-            mission_tests = run(
-                [
-                    "python3",
-                    "-m",
-                    "unittest",
-                    "discover",
-                    "-s",
-                    str(SETUP_TESTS),
-                    "-p",
-                    MISSION_TEST.name,
-                    "-v",
-                ],
-                cwd=root,
-                environment={"FLIGHTDECK_ACCEPTANCE_HUB": str(hub)},
-            )
-            mission_test_output = mission_tests.stdout + mission_tests.stderr
-            mission_test_count_match = re.search(r"Ran (\d+) tests?", mission_test_output)
-            mission_test_count = (
-                int(mission_test_count_match.group(1))
-                if mission_test_count_match
-                else 0
-            )
-            mission_stress = mission_stress_report()
-            report["mission_acceptance"] = {
-                "evidence_class": "local_generated_hub_cli_with_injected_codex_ui",
-                "live_runtime_verified": False,
-                "test_count": mission_test_count,
-                "stress": mission_stress,
-            }
-            probe(
-                report,
-                "mission_injected_adapter_contract_and_bounded_stress",
-                mission_test_count >= 26
-                and "OK" in mission_test_output
-                and mission_stress["missions"] == 100
-                and mission_stress["total_children"] == 1600
-                and mission_stress["replayed_snapshots"] == 10_000
-                and mission_stress["duplicates"]
-                + mission_stress["out_of_order"]
-                == 10_000
-                and mission_stress["dedupe_window"] <= 1024
-                and mission_stress["snapshot_bytes"] < 250_000
-                and mission_stress["elapsed_seconds"] < 10.0,
-                report["mission_acceptance"],
-            )
 
             artifact_guidance = " ".join(
                 (hub / "docs/workflows/artifacts.md")
@@ -388,20 +302,6 @@ def main() -> int:
                     "flightdeck.command.setup-connect.v1",
                     "--require",
                     "flightdeck.document.change-review.v1",
-                    "--require",
-                    "flightdeck.command.mission-manage.v1",
-                    "--require",
-                    "flightdeck.command.mission-plan.v1",
-                    "--require",
-                    "flightdeck.command.mission-status.v1",
-                    "--require",
-                    "flightdeck.command.mission-list.v1",
-                    "--require",
-                    "flightdeck.command.mission-sync.v1",
-                    "--require",
-                    "flightdeck.command.mission-authoring.v1",
-                    "--require",
-                    "flightdeck.document.mission-control.v1",
                 ],
                 cwd=root,
             )
@@ -414,7 +314,7 @@ def main() -> int:
                 and compatibility.get("hub", {})
                 .get("identity", {})
                 .get("template_version")
-                == "1.2.0"
+                == "1.0.0"
                 and not compatibility.get("requirements", {}).get("missing")
                 and tree_state(hub) == compatibility_before,
                 compatibility,

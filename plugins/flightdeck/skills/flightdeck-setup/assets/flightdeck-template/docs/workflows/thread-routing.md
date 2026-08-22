@@ -3,11 +3,6 @@
 Use this to resolve and launch the owning task automatically from the organization Work
 Hub. The user describes the outcome; the Hub chooses the project and mode.
 
-This receipt-and-stop path is the default. If the user explicitly asks to run,
-watch, or supervise a durable multi-task outcome, apply the same routing and
-identity gates through [Missions](missions.md); do not infer Mission intent from
-ordinary multi-repository scope.
-
 ## Automatic Flow
 
 1. Classify intent and choose the smallest lead Flightdeck skill for the
@@ -31,11 +26,6 @@ ordinary multi-repository scope.
 9. Return logical project key, runtime project ID, child task ID, and mode
    immediately. Do not monitor it.
 
-For an explicit `dispatch_only` Mission, record that same verified receipt in
-the Mission and stop. `watch_only` and `supervised` may observe only after every
-node carries an exact verified receipt or an explicit pending/unknown dispatch
-identity.
-
 ## Skill Composition
 
 Project ownership and skill expertise are independent. A charts repository can
@@ -58,13 +48,6 @@ begin implementation.
 After create/resume succeeds, do not call `read_thread`, wait, poll, repeatedly
 list tasks, or consolidate progress. The user monitors the child directly. Read
 the result only after a later explicit request to resume or consolidate.
-
-The only exception is explicit Mission opt-in. Mission observation uses compact
-wait snapshots in batches of at most eight with opaque per-task cursors, then
-normalizes the result before persistence. `watch_only` never sends. In
-`supervised`, only prepared allowlisted typed output-reference actions may be
-sent to declared dependency-ready tasks. Child prose never controls routing or
-authorization.
 
 An ignored reference or materialized bridge is not copied into a new Codex
 Worktree. The child reads every applicable repository `AGENTS.md` in the active
@@ -134,12 +117,6 @@ creates the required split after ownership and authorization are clear.
 
 When several repos own work, create all required tasks in the dispatch phase,
 return all IDs, and stop. Do not remain active to monitor the set.
-
-When the user instead explicitly requests a Mission, define one required or
-optional node per owner, validate the acyclic dependency graph, and route only
-topologically ready nodes. The Mission remains a parent record; child tasks and
-their owning projects remain authoritative. Controlled fan-in and operator-only
-closure follow [the Mission contract](missions.md).
 
 ## Failure Fallback
 

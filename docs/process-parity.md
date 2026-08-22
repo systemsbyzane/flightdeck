@@ -68,7 +68,6 @@ and outside plugin, template, and generated-Hub content.
 | Task and workflow contracts | Schemas, typed adapters, gates, approvals, checks, evidence, risk, and lifecycle history |
 | Repository onboarding | Provider-aware planning, verified clone/existing-local adapters, and atomic ignored registry updates |
 | Project identity and dispatch | Exact normalized path verification, separate logical/runtime IDs, search/resume-before-create, receipt, and no monitoring |
-| Mission coordination | Opt-in durable parent records, default dispatch compatibility, three supervision modes, exact authorized targets and task/host/project identity, criterion-accountable DAG fan-in, compact producer-bound references, plan-token-bound synchronization, replay-safe two-phase actions, and operator-only close |
 | Repository bridges | Reference, materialized, and repo-native modes; read-only bulk plan; fail-closed apply; per-repository receipts |
 | Doctor and operations | Stable finding codes, no-fetch repository state, task/schema checks, bridge integrity, sidecar checks, and disabled automation policy |
 | Automation patterns | Disabled YAML specifications plus a separate approval-gated real-schedule method |
@@ -83,8 +82,8 @@ and outside plugin, template, and generated-Hub content.
 
 Semantic parity remains a second gate. The strict inventory proves that every
 surface is classified and present; `compare_hubs.py` separately probes schema,
-workflow, CLI, Doctor, bridge, task, Mission, artifact, STIG, documentation,
-de-branding, and local acceptance behavior.
+workflow, CLI, Doctor, bridge, task, artifact, STIG, documentation, de-branding,
+and local acceptance behavior.
 
 ## Required exclusions
 
@@ -112,30 +111,15 @@ private instances.
 
 Local validation can prove generation, schemas, CLI behavior, bridge
 idempotence, transition gates, no-fetch Doctor behavior, de-branding, artifact
-gates, deterministic CKL tools, release-ledger integrity, read-only upgrade
-planning, and generated-Hub Mission state/outbox behavior under synthetic
-injected Codex UI observations. It cannot prove live Codex project
-registration, real task creation/resume/wait/follow-up behavior, restart
-recovery in the installed runtime, or an installed plugin update.
+gates, deterministic CKL tools, release-ledger integrity, and read-only upgrade
+planning. It cannot prove live Codex project registration, real task
+creation/resume behavior, or an installed plugin update.
 
 Installed runtime evidence remains unresolved unless a fresh task records the
 exact plugin version, current candidate root, a preserved synthetic generated
 Hub, exact-path project match, distinct logical and opaque runtime IDs, bridge
 configuration behavior, task create/resume identity, and confirmation that the
-Hub stopped without monitoring. Mission acceptance additionally proves that an
-explicit fresh Mission loads the installed Mission skill; honors
-`dispatch_only`, `watch_only`, and `supervised`; uses compact batched waits and
-saved cursors; proves criterion coverage, producer provenance, and resolver
-direction; keeps raw child output out of durable state; performs only
-allowlisted exact-receipt dependency handoffs through `awaiting_handoff`;
-preserves prepared pending/unknown receipts without duplicate create; requires
-an exact prepared complete compatible action for non-root dispatch; rejects
-terminal-only starts, child-authored canonical refs, and blocked/stale delivery; survives
-restart/replay; and never treats
-review-ready as operator closure. Stale or cross-plugin evidence must fail.
-The validator preserves the exact-three `flightdeck.runtime-acceptance/v1`
-contract and requires those three plus exactly four Mission results in
-`flightdeck.runtime-acceptance/v2`.
+Hub stopped without monitoring. Stale or cross-plugin evidence must fail.
 Installed upgrade acceptance separately requires explicit authorization,
 before/after exact versions, structured command results, preserved synthetic
 Hub and repository state, and a fresh task that loads the target build.
@@ -154,9 +138,3 @@ python3 plugins/flightdeck/skills/flightdeck-setup/scripts/process_inventory.py 
 
 The report includes source, generated candidate, and plugin file counts,
 classification totals, unresolved items, and deterministic path-list digests.
-
-For a CI-friendly public check that does not require a private source Hub or
-system-installed validators, run `make public-validate`. This proves only the
-source-local synthetic boundary. `make release-validate` remains the stricter
-source-backed parity gate, and installed fresh-task acceptance remains a
-separate release decision.

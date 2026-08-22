@@ -58,37 +58,8 @@ module Flightdeck
       mapping("routing")
     end
 
-    def mission_defaults
-      mapping("mission_control")
-    end
-
-    def mission_budgets
-      defaults = {
-        "max_units" => 50,
-        "max_retries" => 3,
-        "max_actions" => 200,
-        "max_forwarded_bytes" => 65_536,
-        "max_duration_seconds" => 604_800,
-        "stale_after_seconds" => 3_600,
-        "max_record_bytes" => 2_097_152
-      }
-      value = mission_defaults.fetch("budgets", {})
-      raise ConfigurationError, "flightdeck.yaml mission_control.budgets must be a mapping" unless value.is_a?(Hash)
-
-      defaults.merge(value).each_with_object({}) do |(name, limit), output|
-        unless limit.is_a?(Integer) && limit.positive?
-          raise ConfigurationError, "mission budget #{name} must be a positive integer"
-        end
-        output[name] = limit
-      end
-    end
-
     def task_dir
       root_path(workspace.fetch("task_records_root", "hub/tasks"), label: "task root")
-    end
-
-    def mission_dir
-      root_path(workspace.fetch("mission_records_root", "hub/missions"), label: "mission root")
     end
 
     def report_dir

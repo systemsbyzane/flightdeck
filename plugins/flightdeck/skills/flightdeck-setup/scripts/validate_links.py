@@ -25,7 +25,6 @@ PLATFORM_SKILL = ROOT.parent / "flightdeck-platform"
 DB_SKILL = ROOT.parent / "flightdeck-db"
 STIG_SKILL = ROOT.parent / "flightdeck-stig"
 UPGRADE_SKILL = ROOT.parent / "flightdeck-upgrade"
-MISSION_SKILL = ROOT.parent / "flightdeck-mission"
 COORDINATOR_SKILL = ROOT.parent / "flightdeck"
 REQUIRED = (
     ROOT / "references" / "setup-runbook.md",
@@ -42,8 +41,6 @@ REQUIRED = (
     TEMPLATE / "docs" / "README.md",
     TEMPLATE / "docs" / "codex-ui-workflow.md",
     TEMPLATE / "docs" / "workflows" / "thread-routing.md",
-    TEMPLATE / "docs" / "workflows" / "missions.md",
-    TEMPLATE / "docs" / "workflows" / "mission-authoring-api.md",
     TEMPLATE / "docs" / "workflows" / "repo-onboarding.md",
     TEMPLATE / "docs" / "workflows" / "planning.md",
     TEMPLATE / "docs" / "workflows" / "ci-cd.md",
@@ -57,18 +54,6 @@ REQUIRED = (
     TEMPLATE / "hub" / "repositories.yaml",
     TEMPLATE / "hub" / "compatibility.json",
     TEMPLATE / "hub" / "schemas" / "hub-compatibility.schema.json",
-    TEMPLATE / "hub" / "schemas" / "mission.schema.json",
-    TEMPLATE / "hub" / "schemas" / "mission-observation.schema.json",
-    TEMPLATE / "hub" / "schemas" / "mission-authoring-types.schema.json",
-    TEMPLATE / "hub" / "schemas" / "mission-authoring-catalog-request.schema.json",
-    TEMPLATE / "hub" / "schemas" / "mission-authoring-catalog-result.schema.json",
-    TEMPLATE / "hub" / "schemas" / "mission-authoring-plan-request.schema.json",
-    TEMPLATE / "hub" / "schemas" / "mission-authoring-plan-result.schema.json",
-    TEMPLATE / "hub" / "schemas" / "mission-authoring-create-request.schema.json",
-    TEMPLATE / "hub" / "schemas" / "mission-authoring-create-result.schema.json",
-    TEMPLATE / "hub" / "schemas" / "mission-authoring-operation-request.schema.json",
-    TEMPLATE / "hub" / "schemas" / "mission-authoring-operation-result.schema.json",
-    TEMPLATE / "hub" / "schemas" / "mission-authoring-error-result.schema.json",
     TEMPLATE / "hub" / "schemas" / "repository-declarations.schema.json",
     TEMPLATE / "hub" / "schemas" / "project-verifications.schema.json",
     BRIDGE_SKILL / "references" / "configure-bridge-repos.md",
@@ -80,7 +65,6 @@ REQUIRED = (
     DB_SKILL / "references" / "operations-safety.md",
     STIG_SKILL / "references" / "evidence-contract.md",
     UPGRADE_SKILL / "references" / "upgrade-contract.md",
-    MISSION_SKILL / "references" / "mission-contract.md",
     COORDINATOR_SKILL / "references" / "hub-compatibility.md",
     PLUGIN / "releases.json",
     PLUGIN / "process-parity.json",
@@ -121,12 +105,7 @@ def local_markdown_link_failures(root: Path) -> list[str]:
 def main() -> int:
     required = list(REQUIRED)
     if SOURCE_REPOSITORY is not None:
-        required.extend(
-            (
-                SOURCE_REPOSITORY / "README.md",
-                SOURCE_REPOSITORY / "docs" / "missions.md",
-            )
-        )
+        required.append(SOURCE_REPOSITORY / "README.md")
     failures = [f"missing: {display(path)}" for path in required if not path.is_file()]
     validation_root = SOURCE_REPOSITORY or PLUGIN
     failures.extend(local_markdown_link_failures(validation_root))
@@ -213,11 +192,6 @@ def main() -> int:
             UPGRADE_SKILL,
             ("natural flightdeck upgrade", "explicit invocation is optional"),
             "references/upgrade-contract.md",
-        ),
-        (
-            MISSION_SKILL,
-            ("explicit mission intent", "receipt-and-stop"),
-            "references/mission-contract.md",
         ),
     )
     for skill_root, anchors, reference in focused_skills:
