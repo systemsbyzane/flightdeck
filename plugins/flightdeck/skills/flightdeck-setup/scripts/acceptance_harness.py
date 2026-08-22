@@ -170,10 +170,6 @@ def main() -> int:
                 "status": "not_run_requires_installed_plugin_fresh_task",
             },
             {
-                "name": "installed_mission_skill_telemetry_from_structured_task_events",
-                "status": "not_run_requires_installed_plugin_fresh_task",
-            },
-            {
                 "name": "installed_plugin_upgrade_and_preservation_verification",
                 "status": "not_run_requires_explicit_plugin_update_authorization",
             },
@@ -403,23 +399,7 @@ def main() -> int:
                     "--require",
                     "flightdeck.command.mission-sync.v1",
                     "--require",
-                    "flightdeck.command.skill-telemetry.v1",
-                    "--require",
                     "flightdeck.command.mission-authoring.v1",
-                    "--require",
-                    "flightdeck.command.operation-authoring.v1",
-                    "--require",
-                    "flightdeck.command.operation-projection.v1",
-                    "--require",
-                    "flightdeck.command.hub-snapshot.v1",
-                    "--require",
-                    "flightdeck.command.operations-snapshot.v1",
-                    "--require",
-                    "flightdeck.command.operations-snapshot-detail-identity.v1",
-                    "--require",
-                    "flightdeck.command.operation-execution.v1",
-                    "--require",
-                    "flightdeck.command.operation-observation.v1",
                     "--require",
                     "flightdeck.document.mission-control.v1",
                 ],
@@ -434,7 +414,7 @@ def main() -> int:
                 and compatibility.get("hub", {})
                 .get("identity", {})
                 .get("template_version")
-                == "1.13.0"
+                == "1.2.0"
                 and not compatibility.get("requirements", {}).get("missing")
                 and tree_state(hub) == compatibility_before,
                 compatibility,

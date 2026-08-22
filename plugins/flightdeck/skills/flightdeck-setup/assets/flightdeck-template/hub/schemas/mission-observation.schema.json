@@ -55,20 +55,6 @@
         "status_code": {"$ref": "#/$defs/id"}
       }
     },
-    "skillEvent": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["schema_version", "skill_id", "skill_version", "lifecycle_status", "observed_at", "evidence_id", "evidence_source"],
-      "properties": {
-        "schema_version": {"const": "flightdeck.skill-invocation-event/v1"},
-        "skill_id": {"$ref": "#/$defs/id"},
-        "skill_version": {"oneOf": [{"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$"}, {"type": "null"}]},
-        "lifecycle_status": {"enum": ["started", "completed", "succeeded", "failed", "blocked", "unknown_outcome"]},
-        "observed_at": {"type": "string", "format": "date-time"},
-        "evidence_id": {"$ref": "#/$defs/opaque"},
-        "evidence_source": {"const": "codex_task_skill_event"}
-      }
-    },
     "outcome": {
       "type": "object",
       "additionalProperties": false,
@@ -105,7 +91,6 @@
         "status_code": {"$ref": "#/$defs/id"},
         "observed_at": {"type": "string", "format": "date-time"},
         "worktree_ready": {"type": "boolean"},
-        "skill_events": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/skillEvent"}},
         "outcome": {"$ref": "#/$defs/outcome"}
       },
       "allOf": [

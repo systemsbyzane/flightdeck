@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "digest"
+require "base64"
 require "fileutils"
 require "json"
 require "minitest/autorun"
@@ -14,17 +15,14 @@ require "flightdeck/bridge_bulk_store"
 require "flightdeck/cli"
 require "flightdeck/config"
 require "flightdeck/doctor"
-require "flightdeck/hub_snapshot"
-require "flightdeck/operations_snapshot"
-require "flightdeck/operation_detail"
-require "flightdeck/operation_execution"
-require "flightdeck/operation_lifecycle"
-require "flightdeck/work_coordinator"
-require "flightdeck/mission_objectives"
+require "flightdeck/mission_graph"
+require "flightdeck/mission_authoring"
 require "flightdeck/mission_store"
+require "flightdeck/mission_sync"
 require "flightdeck/repo_planner"
 require "flightdeck/repository_store"
 require "flightdeck/route_planner"
+require "flightdeck/setup_store"
 require "flightdeck/task_store"
 
 class FlightdeckTest < Minitest::Test
@@ -33,7 +31,7 @@ class FlightdeckTest < Minitest::Test
     .gitignore AGENTS.md Makefile README.md bin docs flightdeck.yaml lib scripts tests
   ].freeze
   HUB_CONTROL_PLANE_ENTRIES = %w[
-    .mission-authoring.lock .operation-authoring.lock .operation-lifecycle.lock automations bridges compatibility.json repositories.yaml schemas templates workflows
+    .mission-authoring.lock automations bridges compatibility.json repositories.yaml schemas templates workflows
   ].freeze
   WORKLOAD_ROOTS = %w[charts development environments operations patching research].freeze
 
@@ -96,15 +94,14 @@ class FlightdeckTest < Minitest::Test
     git("commit", "--quiet", "-m", "Synthetic fixture", chdir: path)
   end
 
-  def register_repository(config, id, path, mode: "reference", placement: "managed")
+  def register_repository(config, id, path, mode: "reference")
     registry = File.file?(config.local_registry_path) ? Flightdeck::Support.load_data(config.local_registry_path) : {
       "api_version" => "flightdeck.dev/v1alpha1",
       "kind" => "LocalRepositoryRegistry",
       "repositories" => {}
     }
     registry["repositories"][id] = {
-      "local_path" => placement == "attached" ? File.realpath(path) : Flightdeck::Support.relative_path(config.root, path),
-      "placement" => placement,
+      "local_path" => Flightdeck::Support.relative_path(config.root, path),
       "provider" => "existing-local",
       "locator" => path,
       "owner" => "local",
@@ -133,13 +130,13 @@ class FlightdeckTest < Minitest::Test
     Flightdeck::Config.new(root: config.root)
   end
 
-  def declaration(id, path, mode: "reference", placement: "managed")
-    value = {
+  def declaration(id, path, mode: "reference")
+    {
       "id" => id,
-      "placement" => placement,
       "workload" => "development",
       "provider" => "existing-local",
       "locator" => File.join("development", File.basename(path)),
+      "local_path" => File.join("development", File.basename(path)),
       "owner" => "local",
       "default_branch" => "main",
       "default_branch_verified" => true,
@@ -152,55 +149,218 @@ class FlightdeckTest < Minitest::Test
         "logical_key" => id
       }
     }
-    value["local_path"] = File.join("development", File.basename(path)) if placement == "managed"
-    value
   end
 
-  def write_project_verifications(config, records)
-    Flightdeck::Support.atomic_yaml(
-      config.project_registry_path,
-      {
-        "api_version" => "flightdeck.dev/v1alpha1",
-        "kind" => "CodexProjectVerifications",
-        "projects" => records
-      }
+  def mission_authorized_target(config, node_id: "unit-a", project_path: nil, host_id: "host-local",
+                                execution_mode: "local", access_mode: "read_only")
+    project_path ||= File.join(config.root, "development", node_id)
+    {
+      "logical_project_key" => "project-#{node_id}",
+      "runtime_project_id" => "runtime-#{node_id}",
+      "project_path_digest" => Digest::SHA256.hexdigest(File.expand_path(project_path)),
+      "host_id" => host_id,
+      "execution_mode" => execution_mode,
+      "access_mode" => access_mode
+    }
+  end
+
+  def with_authoring_fixture
+    with_hub do |root, config|
+      project_path = initialize_repository(root, "authoring-project")
+      config = register_repository(config, "authoring-project", project_path)
+      config = write_declarations(config, [declaration("authoring-project", project_path)])
+      FileUtils.mkdir_p(File.dirname(config.project_registry_path))
+      Flightdeck::Support.atomic_yaml(
+        config.project_registry_path,
+        {
+          "api_version" => "flightdeck.dev/v1alpha1",
+          "kind" => "CodexProjectVerifications",
+          "projects" => {
+            "authoring-project" => {
+              "logical_key" => "authoring-project",
+              "runtime_project_id" => "runtime-project-authoring",
+              "path" => File.realpath(project_path),
+              "verified" => true,
+              "verification_source" => "live_project_list_exact_path",
+              "verified_at" => "2026-08-06T12:00:00Z"
+            }
+          }
+        }
+      )
+      config = Flightdeck::Config.new(root: root)
+      authoring = Flightdeck::MissionAuthoring.new(
+        config,
+        clock: -> { Time.iso8601("2026-08-06T12:00:00Z") }
+      )
+      catalog = authoring.catalog(
+        "schema_version" => Flightdeck::MissionAuthoring::CATALOG_REQUEST
+      )
+      target = catalog.fetch("targets").find do |candidate|
+        candidate["logical_project_key"] == "authoring-project" &&
+          candidate["execution_mode"] == "worktree" && candidate["access_mode"] == "write"
+      end
+      yield root, config, authoring, catalog, target
+    end
+  end
+
+  def authoring_draft(target, title: "Typed client mission", nodes: nil)
+    selected = target.reject { |key, _| key == "display_label" }
+    {
+      "title" => title,
+      "outcome" => "Produce the declared validated outputs.",
+      "success_criteria" => ["Every required node returns its declared validated output."],
+      "non_goals" => ["Do not dispatch, commit, publish, deploy, or close."],
+      "mode" => "supervised",
+      "selected_targets" => [selected],
+      "nodes" => nodes || [
+        {
+          "id" => "implementation",
+          "target_id" => target.fetch("target_id"),
+          "required" => true,
+          "dependencies" => [],
+          "accepted_input_types" => [],
+          "allowed_output_types" => ["validation_ref"]
+        }
+      ]
+    }
+  end
+
+  def authoring_plan(authoring, draft)
+    authoring.plan(
+      "schema_version" => Flightdeck::MissionAuthoring::PLAN_REQUEST,
+      "draft" => draft
     )
   end
 
-  def verified_project(key, path, runtime_id: "opaque-runtime-#{key}")
+  def authoring_create_request(plan, draft, operation_id)
     {
-      "logical_key" => key,
-      "runtime_project_id" => runtime_id,
-      "path" => path,
-      "verified" => true,
-      "verification_source" => "live_project_list_exact_path",
-      "verified_at" => "2026-08-08T00:00:00Z"
+      "schema_version" => Flightdeck::MissionAuthoring::CREATE_REQUEST,
+      "operation_id" => operation_id,
+      "confirmation" => %w[plan_id plan_generation plan_digest plan_token].to_h do |field|
+        [field, plan.fetch(field)]
+      end,
+      "draft" => draft
     }
   end
 
-  def snapshot_hub(root, config, ids: %w[zulu alpha])
-    registry = Flightdeck::Support.load_data(File.join(root, "flightdeck.yaml"))
-    registry.fetch("workspace")["root"] = root
-    registry.fetch("codex_projects").fetch("flightdeck")["path"] = root
-    Flightdeck::Support.atomic_yaml(File.join(root, "flightdeck.yaml"), registry)
-    config = Flightdeck::Config.new(root: root)
-    records = {
-      "flightdeck" => verified_project("flightdeck", root, runtime_id: "opaque-runtime-hub")
+  def create_mission(config, slug: "sample-mission", mode: "supervised", authorized_targets: nil)
+    authorized_targets ||= [mission_authorized_target(config)]
+    Flightdeck::MissionStore.new(config).create(
+      slug: slug,
+      title: "Synthetic mission",
+      outcome: "Produce validated typed outputs.",
+      mode: mode,
+      success_criteria: ["All required nodes provide validated typed outputs."],
+      non_goals: ["Do not expand the declared mission graph after execution."],
+      authorized_targets: authorized_targets
+    )
+  end
+
+  def add_mission_node(config, slug: "sample-mission", node_id: "unit-a", required: true,
+                       dependencies: [], execution_mode: "local", access_mode: "read_only",
+                       accepted: [], outputs: ["validation_result"], project_path: nil,
+                       host_id: "host-local", artifact_resolver_kind: nil, artifact_resolver_id: nil,
+                       criterion_ids: nil)
+    project_path ||= File.join(config.root, "development", node_id)
+    mission = Flightdeck::MissionStore.new(config).snapshot(slug)
+    Flightdeck::MissionStore.new(config).add_node(
+      slug: slug,
+      node_id: node_id,
+      logical_project_key: "project-#{node_id}",
+      runtime_project_id: "runtime-#{node_id}",
+      project_path: project_path,
+      host_id: host_id,
+      execution_mode: execution_mode,
+      access_mode: access_mode,
+      work_type: "validation",
+      required: required,
+      dependencies: dependencies,
+      accepted_input_types: accepted,
+      allowed_output_types: outputs,
+      artifact_resolver_kind: artifact_resolver_kind,
+      artifact_resolver_id: artifact_resolver_id,
+      criterion_ids: criterion_ids || (required ? mission.dig("spec", "success_criteria").map { |criterion| criterion["id"] } : [])
+    )
+  end
+
+  def dispatch_mission_node(config, slug: "sample-mission", node_id: "unit-a", host_id: "host-local")
+    Flightdeck::MissionStore.new(config).record_dispatch(
+      slug: slug,
+      node_id: node_id,
+      runtime_project_id: "runtime-#{node_id}",
+      host_id: host_id,
+      task_id: "task-#{node_id}"
+    )
+  end
+
+  def mission_observation(config, slug:, node_id:, state:, revision:, event_id: nil,
+                          validation: nil, output_declarations: nil, cursor: nil, include_outcome: nil,
+                          status_code: nil, criterion_results: nil)
+    mission = Flightdeck::MissionStore.new(config).snapshot(slug)
+    node = mission.dig("spec", "graph", "nodes").find { |item| item["id"] == node_id }
+    validation ||= state == "failed_validation" ? "failed" : (state == "review_ready" ? "passed" : "not_applicable")
+    output_declarations ||= state == "review_ready" ? [
+      {
+        "type" => node.fetch("allowed_output_types").first,
+        "codex_task" => true
+      }
+    ] : []
+    observation = {
+      "node_id" => node_id,
+      "logical_project_key" => node["logical_project_key"],
+      "runtime_project_id" => node["runtime_project_id"],
+      "project_path_digest" => node["project_path_digest"],
+      "host_id" => node["host_id"],
+      "task_id" => node["task_id"],
+      "cursor" => cursor || "cursor-#{node_id}-#{revision}",
+      "revision" => revision,
+      "event_id" => event_id || "event-#{node_id}-#{revision}",
+      "observed_state" => state,
+      "status_code" => status_code || (state == "notLoaded" ? "not_loaded" : state),
+      "observed_at" => (Time.now.utc + revision).iso8601,
+      "worktree_ready" => true
     }
-    declarations = ids.map do |id|
-      repository = initialize_repository(root, id)
-      config = register_repository(config, id, repository)
-      records[id] = verified_project(id, repository, runtime_id: "opaque-runtime-#{id}")
-      declaration(id, repository)
+    include_outcome = %w[review_ready failed_validation].include?(state) if include_outcome.nil?
+    if include_outcome
+      observation["outcome"] = {
+        "schema_version" => "flightdeck.child-outcome/v1",
+        "code" => observation["status_code"],
+        "validation" => validation,
+        "output_declarations" => output_declarations,
+        "criterion_results" => criterion_results || node.fetch("criterion_ids").each_with_index.map do |criterion_id, index|
+          passed = state == "review_ready" || index.positive?
+          {
+            "criterion_id" => criterion_id,
+            "disposition" => passed ? "passed" : "failed",
+            "status_code" => passed ? "criterion_passed" : "criterion_failed"
+          }
+        end
+      }
     end
-    write_project_verifications(config, records)
-    config = Flightdeck::Config.new(root: root)
-    write_declarations(config, declarations)
-    config = Flightdeck::Config.new(root: root)
-    ids.each do |id|
-      Flightdeck::BridgeStore.new(config).install(repository_id: id, mode: "reference", profile: "application")
-    end
-    Flightdeck::Config.new(root: root)
+    observation
+  end
+
+  def write_mission_observations(root, slug, observations, name: "observations.json")
+    path = File.join(root, name)
+    File.write(
+      path,
+      JSON.pretty_generate(
+        {
+          "api_version" => "flightdeck.dev/v1alpha1",
+          "kind" => "MissionObservationBatch",
+          "schema" => "hub/schemas/mission-observation.schema.json",
+          "mission_id" => slug,
+          "observed_at" => Time.now.utc.iso8601,
+          "observations" => observations
+        }
+      )
+    )
+    path
+  end
+
+  def apply_mission_sync(sync, slug:, observations_path:)
+    plan = sync.plan(slug: slug, observations_path: observations_path)
+    sync.apply(slug: slug, observations_path: observations_path, plan_token: plan.fetch("plan_token"))
   end
 
   def test_workflows_and_providers_are_loadable
@@ -290,339 +450,12 @@ class FlightdeckTest < Minitest::Test
       assert plan["dispatch_ready"]
       assert plan["dispatch_required"]
       assert plan["stop_after_dispatch"]
+      prompt_requirements = plan.fetch("child_prompt_requirements").join(" ")
+      assert_includes prompt_requirements, "lead Flightdeck skill"
+      assert_includes prompt_requirements, "owning workload"
+      assert_includes prompt_requirements, "new evidence crosses domains"
+      assert_includes prompt_requirements, "before domain-specific mutation"
     end
-  end
-
-  def test_hub_snapshot_is_deterministic_and_redacts_local_runtime_details
-    with_hub do |root, config|
-      snapshot_hub(root, config)
-      output = StringIO.new
-      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
-
-      assert_equal 0, cli.run(["hub", "snapshot", "--hub-root", root, "--json"])
-      snapshot = JSON.parse(output.string)
-      assert_equal "flightdeck.hub-snapshot/v1", snapshot["api_version"]
-      assert_equal "HubSnapshot", snapshot["kind"]
-      assert_equal true, snapshot["ok"]
-      assert_equal %w[flightdeck alpha zulu], snapshot.fetch("projects").map { |item| item["logical_project_key"] }
-      coordinator = snapshot.fetch("projects").first
-      assert_equal "hub_coordinator", coordinator["destination"]
-      assert_equal "coordinate_and_route", coordinator["routing_capability"]
-      repository = snapshot.fetch("projects").find { |item| item["logical_project_key"] == "alpha" }
-      assert_equal "repository_routing_hint", repository["destination"]
-      assert_equal "healthy", repository["bridge_health"]
-      assert_equal ["model", "reasoning_effort"], snapshot.dig("runtime_capabilities", "adapters", "codex", "optional_controls")
-      assert_equal "omp", snapshot.dig("runtime_capabilities", "conversation", "adapter")
-      assert_equal "omp", snapshot.dig("runtime_capabilities", "operation_execution", "selected_adapter")
-      assert_equal true, snapshot.dig("runtime_capabilities", "adapters", "omp", "available")
-
-      rendered = output.string
-      refute_includes rendered, root
-      refute_includes rendered, "opaque-runtime-hub"
-      refute_includes rendered, "opaque-runtime-alpha"
-      refute_includes rendered, "bridge_handoff"
-      snapshot.fetch("projects").each do |project|
-        assert_equal %w[availability bridge_health destination display_label logical_project_key routing_capability workload], project.keys.sort
-      end
-    end
-  end
-
-  def test_hub_snapshot_fails_closed_for_missing_verification_and_invalid_registry
-    with_hub do |root, config|
-      config = snapshot_hub(root, config, ids: ["sample"])
-      project_state = Flightdeck::Support.load_data(config.project_registry_path)
-      project_state.fetch("projects").delete("sample")
-      Flightdeck::Support.atomic_yaml(config.project_registry_path, project_state)
-      output = StringIO.new
-      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
-
-      assert_equal 1, cli.run(["hub", "snapshot", "--hub-root", root, "--json"])
-      missing = JSON.parse(output.string)
-      assert_equal "project_verification_missing", missing.dig("error", "code")
-      refute missing.key?("projects")
-      refute_includes output.string, root
-
-      Flightdeck::Support.atomic_yaml(config.project_registry_path, { "projects" => {} })
-      output.truncate(0)
-      output.rewind
-      assert_equal 1, cli.run(["hub", "snapshot", "--hub-root", root, "--json"])
-      invalid = JSON.parse(output.string)
-      assert_equal "registry_invalid", invalid.dig("error", "code")
-      refute invalid.key?("projects")
-    end
-  end
-
-  def test_hub_snapshot_requires_its_capability_and_preserves_existing_commands
-    with_hub do |root, config|
-      snapshot_hub(root, config, ids: [])
-      compatibility_path = File.join(root, "hub", "compatibility.json")
-      compatibility = JSON.parse(File.read(compatibility_path))
-      compatibility.fetch("capabilities").delete("flightdeck.command.hub-snapshot.v1")
-      File.write(compatibility_path, JSON.pretty_generate(compatibility))
-      output = StringIO.new
-      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
-
-      assert_equal 1, cli.run(["hub", "snapshot", "--hub-root", root, "--json"])
-      assert_equal "unsupported_hub_contract", JSON.parse(output.string).dig("error", "code")
-
-      output.truncate(0)
-      output.rewind
-      assert_equal 0, cli.run(["mission", "list", "--hub-root", root, "--json"])
-      assert_equal "MissionList", JSON.parse(output.string)["kind"]
-    end
-  end
-
-  def test_operations_snapshot_projects_only_durable_hub_state_and_redacts_mission_identity
-    with_hub do |root, config|
-      store = Flightdeck::MissionStore.new(config)
-      raw_project_path = "/private/operations/source"
-      target = {
-        "logical_project_key" => "rap-backend",
-        "runtime_project_id" => "opaque-runtime-operations-42",
-        "project_path_digest" => Digest::SHA256.hexdigest(raw_project_path),
-        "host_id" => "opaque-host-operations-42",
-        "execution_mode" => "worktree",
-        "access_mode" => "write"
-      }
-      store.create(
-        slug: "operations-mission", title: "RAP Backend operation", outcome: "Do not expose raw prompts.",
-        mode: "supervised", success_criteria: ["Validate the bounded result."], authorized_targets: [target]
-      )
-      store.add_node(
-        slug: "operations-mission", node_id: "backend", logical_project_key: "rap-backend",
-        runtime_project_id: target.fetch("runtime_project_id"), host_id: target.fetch("host_id"),
-        project_path: raw_project_path, execution_mode: "worktree", access_mode: "write",
-        work_type: "implementation", required: true, criterion_ids: ["criterion-001"], allowed_output_types: ["patch_ref"]
-      )
-      output = StringIO.new
-      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
-
-      assert_equal 0, cli.run(["hub", "operations-snapshot", "--hub-root", root, "--json"]), output.string
-      snapshot = JSON.parse(output.string)
-      assert_equal "flightdeck.operations-snapshot/v1", snapshot["api_version"]
-      assert_equal "OperationsSnapshot", snapshot["kind"]
-      assert_equal true, snapshot.dig("runtime_capabilities", "adapters", "omp", "available")
-      assert_equal "omp", snapshot.dig("runtime_capabilities", "conversation", "adapter")
-      assert_equal "omp", snapshot.dig("runtime_capabilities", "operation_execution", "selected_adapter")
-      operation = snapshot.fetch("operations").fetch(0)
-      assert_equal "mission:operations-mission", operation["operation_id"]
-      assert_equal "queued", operation["status"]
-      child = operation.fetch("children").fetch(0)
-      assert_equal "rap-backend", child["logical_project_key"]
-      assert_equal "Hub Agent — rap-backend", child["role_name"]
-      assert_equal({ "state" => "absent", "items" => [] }, child["skills"])
-      refute_includes output.string, "opaque-runtime-operations-42"
-      refute_includes output.string, "opaque-host-operations-42"
-      refute_includes output.string, raw_project_path
-      refute_includes output.string, "Do not expose raw prompts."
-    end
-  end
-
-  def test_operations_snapshot_returns_an_empty_hub_projection_without_global_recents
-    with_hub do |root, _config|
-      output = StringIO.new
-      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
-      assert_equal 0, cli.run(["hub", "operations-snapshot", "--hub-root", root, "--json"])
-      snapshot = JSON.parse(output.string)
-      assert_equal [], snapshot.fetch("operations")
-      assert_equal [], snapshot.dig("summary", "alerts")
-      assert snapshot.dig("summary", "counts").values.all?(&:zero?)
-      assert_equal({ "active" => 0, "completed" => 0, "archived" => 0 }, snapshot.dig("summary", "lifecycle"))
-    end
-  end
-
-  def test_operations_snapshot_maps_every_status_and_never_infers_skills
-    with_hub do |root, config|
-      repository = initialize_repository(root, "rap-backend")
-      config = register_repository(config, "rap-backend", repository)
-      config = write_declarations(config, [declaration("rap-backend", repository)])
-      snapshot = Flightdeck::OperationsSnapshot.new(config)
-      expected = {
-        "intake" => "queued", "scoped" => "queued", "designed" => "queued", "authorized" => "queued", "planned" => "queued", "dispatch_pending" => "queued",
-        "executing" => "working", "running" => "working", "validating" => "working", "integration_ready" => "waiting", "validation_ready" => "waiting", "awaiting_handoff" => "waiting",
-        "needs_approval" => "approval_required", "approval_required" => "approval_required", "blocked" => "blocked", "review_ready" => "review_ready", "closed" => "completed", "complete" => "completed",
-        "failed_validation" => "failed_validation", "runtime_failure" => "failed_validation", "cancelled" => "cancelled", "dispatch_unknown" => "reconcile_required", "stale" => "reconcile_required", "rollback_required" => "reconcile_required", "unknown" => "reconcile_required"
-      }
-      expected.each { |source, projected| assert_equal projected, snapshot.send(:map_state, source) }
-      operation = snapshot.send(:operation, "task", "empty", "Empty", "intake", "2026-08-08T00:00:00Z", "2026-08-08T00:00:00Z", { "workload" => "development" }, [])
-      assert_equal({ "state" => "unavailable", "items" => [] }, operation.fetch("skills"))
-      assert_equal "Development Agent — rap-backend", snapshot.send(:project_info, "rap-backend", nil).fetch("role_name")
-    end
-  end
-
-  def test_operations_snapshot_rejects_invalid_state_and_missing_capability_without_partial_operations
-    with_hub do |root, config|
-      directory = File.join(config.mission_dir, "invalid-record")
-      FileUtils.mkdir_p(directory)
-      File.write(File.join(directory, "mission.yaml"), "not: a-valid-mission\n")
-      output = StringIO.new
-      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
-      assert_equal 1, cli.run(["hub", "operations-snapshot", "--hub-root", root, "--json"])
-      invalid = JSON.parse(output.string)
-      assert_equal "invalid_hub_state", invalid.dig("error", "code")
-      refute invalid.key?("operations")
-
-      FileUtils.rm_rf(directory)
-      compatibility_path = File.join(root, "hub", "compatibility.json")
-      compatibility = JSON.parse(File.read(compatibility_path))
-      compatibility.fetch("capabilities").delete("flightdeck.command.operations-snapshot.v1")
-      File.write(compatibility_path, JSON.pretty_generate(compatibility))
-      output.truncate(0)
-      output.rewind
-      assert_equal 1, cli.run(["hub", "operations-snapshot", "--hub-root", root, "--json"])
-      denied = JSON.parse(output.string)
-      assert_equal "unsupported_hub_contract", denied.dig("error", "code")
-      refute denied.key?("operations")
-    end
-  end
-
-  def test_operations_snapshot_quarantines_stale_authoring_identity_without_deleting_history
-    with_operation_authoring_fixture do |root, config, authoring, _catalog, target|
-      stale_proposal = operation_proposal(target, title: "Stale historical Operation")
-      stale_plan = operation_plan(authoring, stale_proposal)
-      stale_id = authoring.launch(operation_launch_request(stale_plan, stale_proposal)).fetch("operation_id")
-      current_proposal = operation_proposal(target, title: "Current Operation")
-      current_plan = operation_plan(authoring, current_proposal)
-      current_id = authoring.launch(operation_launch_request(current_plan, current_proposal)).fetch("operation_id")
-
-      stale_mission_path = File.join(config.mission_dir, stale_id, "mission.yaml")
-      stale_mission = Flightdeck::Support.load_data(stale_mission_path)
-      stale_mission.dig("metadata", "operation_authoring")["plan_digest"] = "f" * 64
-      Flightdeck::Support.atomic_write(stale_mission_path, YAML.dump(stale_mission))
-      assert_empty Flightdeck::MissionStore.new(config).validate(stale_id)
-
-      snapshot = Flightdeck::OperationsSnapshot.new(config).snapshot
-      stale = snapshot.fetch("operations").find { |operation| operation["operation_id"] == "mission:#{stale_id}" }
-      current = snapshot.fetch("operations").find { |operation| operation["operation_id"] == "mission:#{current_id}" }
-      assert_equal({ "availability" => "unavailable" }, stale.fetch("detail"))
-      assert_equal({ "availability" => "available", "operation_id" => current_id }, current.fetch("detail"))
-      assert File.file?(stale_mission_path), "quarantine must preserve the historical Mission"
-      assert File.file?(File.join(root, "hub", "state", "operation-authoring", "#{stale_mission.dig('metadata', 'operation_authoring', 'operation_digest')}.json")),
-             "quarantine must preserve the historical authoring record"
-    end
-  end
-
-  def test_operations_snapshot_contract_is_declared_and_closed
-    schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "operations-snapshot.schema.json")))
-    assert_equal "https://flightdeck.dev/schemas/operations-snapshot.schema.json", schema["$id"]
-    assert_equal false, schema.dig("$defs", "success", "additionalProperties")
-    assert_equal false, schema.dig("$defs", "error", "additionalProperties")
-    assert_equal false, schema.dig("$defs", "skills", "additionalProperties")
-    assert_equal ["queued", "working", "waiting", "approval_required", "blocked", "review_ready", "completed", "failed_validation", "cancelled", "reconcile_required"], schema.dig("$defs", "status", "enum")
-    compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
-    capability = compatibility.dig("capabilities", "flightdeck.command.operations-snapshot.v1")
-    assert_equal "command", capability["kind"]
-    assert_includes capability["managed_paths"], "hub/schemas/operations-snapshot.schema.json"
-  end
-
-  def test_operation_lifecycle_closes_archives_restores_and_replays_exactly
-    with_operation_authoring_fixture do |root, config, authoring, _catalog, target|
-      proposal = operation_proposal(target, title: "Lifecycle Operation")
-      plan = operation_plan(authoring, proposal)
-      operation_id = authoring.launch(operation_launch_request(plan, proposal)).fetch("operation_id")
-      store = Flightdeck::MissionStore.new(config)
-      nodes = store.snapshot(operation_id).dig("spec", "graph", "nodes")
-      nodes.each_with_index do |node, index|
-        handoff = store.next_actions(operation_id).find do |action|
-          action["type"] == "dependency_handoff" && action.dig("payload", "node_id") == node.fetch("id")
-        end
-        store.prepare_action(slug: operation_id, action_id: handoff.fetch("id")) if handoff
-        store.record_dispatch(
-          slug: operation_id, node_id: node.fetch("id"), runtime_project_id: node.fetch("runtime_project_id"),
-          host_id: node.fetch("host_id"), task_id: "task-lifecycle-operation-#{index + 1}"
-        )
-        store.acknowledge_action(slug: operation_id, action_id: handoff.fetch("id")) if handoff
-        observation = mission_observation(config, slug: operation_id, node_id: node.fetch("id"), state: "review_ready", revision: index + 1)
-        observations_path = write_mission_observations(root, operation_id, [observation], name: "lifecycle-ready-#{index + 1}.json")
-        apply_mission_sync(Flightdeck::MissionSync.new(store), slug: operation_id, observations_path: observations_path)
-      end
-      lifecycle_snapshot = store.snapshot(operation_id)
-      assert_equal "review_ready", lifecycle_snapshot.dig("status", "state"), JSON.generate(lifecycle_snapshot.dig("spec", "graph", "nodes"))
-
-      lifecycle = Flightdeck::OperationLifecycle.new(config, clock: -> { Time.iso8601("2026-08-13T12:00:00Z") })
-      close_request = {
-        "schema_version" => Flightdeck::OperationLifecycle::REQUEST,
-        "request_id" => "lifecycle-close-0001",
-        "operation_id" => operation_id,
-        "action" => "close"
-      }
-      closed = lifecycle.apply(close_request)
-      assert_equal "completed", closed.fetch("state")
-      assert_equal false, closed.fetch("archived")
-      assert_equal true, lifecycle.apply(close_request).fetch("replayed")
-      active = Flightdeck::OperationsSnapshot.new(config).snapshot.fetch("operations")
-      assert_equal "completed", active.find { |item| item.dig("detail", "operation_id") == operation_id }.fetch("status")
-
-      archive_request = close_request.merge("request_id" => "lifecycle-archive-0001", "action" => "archive")
-      assert_equal true, lifecycle.apply(archive_request).fetch("archived")
-      refute Flightdeck::OperationsSnapshot.new(config).snapshot.fetch("operations").any? { |item| item.dig("detail", "operation_id") == operation_id }
-      archived = Flightdeck::OperationsSnapshot.new(config).snapshot(archive_view: "archived").fetch("operations")
-      assert_equal true, archived.find { |item| item.dig("detail", "operation_id") == operation_id }.fetch("archived")
-      assert_equal(
-        { "active" => 0, "completed" => 0, "archived" => 1 },
-        Flightdeck::OperationsSnapshot.new(config).snapshot(archive_view: "archived").dig("summary", "lifecycle")
-      )
-
-      restore_request = close_request.merge("request_id" => "lifecycle-restore-0001", "action" => "restore")
-      assert_equal false, lifecycle.apply(restore_request).fetch("archived")
-      assert Flightdeck::OperationsSnapshot.new(config).snapshot.fetch("operations").any? { |item| item.dig("detail", "operation_id") == operation_id }
-      assert_empty Flightdeck::OperationsSnapshot.new(config).snapshot(archive_view: "archived").fetch("operations")
-      assert_equal(
-        { "active" => 0, "completed" => 1, "archived" => 0 },
-        Flightdeck::OperationsSnapshot.new(config).snapshot.dig("summary", "lifecycle")
-      )
-
-      conflicting = close_request.merge("action" => "archive")
-      error = assert_raises(Flightdeck::OperationLifecycle::ContractError) { lifecycle.apply(conflicting) }
-      assert_equal "duplicate_request_conflict", error.code
-    end
-  end
-
-  def test_operation_lifecycle_rejects_archiving_active_operations_and_is_declared
-    with_operation_authoring_fixture do |_root, config, authoring, _catalog, target|
-      proposal = operation_proposal(target, title: "Active Operation")
-      plan = operation_plan(authoring, proposal)
-      operation_id = authoring.launch(operation_launch_request(plan, proposal)).fetch("operation_id")
-      lifecycle = Flightdeck::OperationLifecycle.new(config)
-      error = assert_raises(Flightdeck::OperationLifecycle::ContractError) do
-        lifecycle.apply(
-          "schema_version" => Flightdeck::OperationLifecycle::REQUEST,
-          "request_id" => "lifecycle-archive-active-0001",
-          "operation_id" => operation_id,
-          "action" => "archive"
-        )
-      end
-      assert_equal "operation_not_terminal", error.code
-
-      store = Flightdeck::MissionStore.new(config, clock: -> { Time.iso8601("2026-08-13T12:00:00Z") })
-      node = store.snapshot(operation_id).dig("spec", "graph", "nodes", 0)
-      store.record_dispatch(
-        slug: operation_id, node_id: node.fetch("id"), runtime_project_id: node.fetch("runtime_project_id"),
-        host_id: node.fetch("host_id"), task_id: "task-lifecycle-stale-operation"
-      )
-      stale_lifecycle = Flightdeck::OperationLifecycle.new(
-        config, clock: -> { Time.iso8601("2026-08-13T14:00:00Z") }
-      )
-      archived = stale_lifecycle.apply(
-        "schema_version" => Flightdeck::OperationLifecycle::REQUEST,
-        "request_id" => "lifecycle-archive-stale-0001",
-        "operation_id" => operation_id,
-        "action" => "archive"
-      )
-      assert_equal "stale", archived.fetch("state")
-      assert_equal true, archived.fetch("archived")
-    end
-
-    compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
-    capability = compatibility.dig("capabilities", Flightdeck::OperationLifecycle::CAPABILITY)
-    assert_equal "command", capability.fetch("kind")
-    assert_includes capability.fetch("managed_paths"), "hub/.operation-lifecycle.lock"
-    %w[request result error].each do |name|
-      assert_includes capability.fetch("managed_paths"), "hub/schemas/operation-lifecycle-#{name}.schema.json"
-    end
-    result_schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "operation-lifecycle-result.schema.json")))
-    assert_includes result_schema.dig("properties", "state", "enum"), "stale"
-    assert_includes result_schema.dig("properties", "state", "enum"), "dispatch_unknown"
   end
 
   def test_task_creation_is_non_destructive_and_transitions_are_gated
@@ -833,6 +666,305 @@ class FlightdeckTest < Minitest::Test
     end
   end
 
+  def test_setup_plan_discovers_attached_repository_without_writing
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      repository = initialize_repository(repositories_root, "attached-service")
+      commit_repository(repository)
+      File.write(File.join(repository, "local-note.txt"), "preserve me\n")
+      declarations_before = File.read(config.repository_declarations_path)
+
+      result = Flightdeck::SetupStore.new(config).plan(
+        repositories_root: repositories_root
+      )
+
+      assert_equal true, result["read_only"]
+      assert_equal 1, result.dig("summary", "discovered")
+      assert_equal 1, result.dig("summary", "ready")
+      item = result.fetch("repositories").first
+      assert_equal "attached", item["placement"]
+      assert_equal "reference", item.dig("bridge", "mode")
+      assert_equal false, item["clean"]
+      assert_equal "existing-local", item["provider"]
+      assert_equal "attached", item.dig("proposed_declaration", "placement")
+      refute item.fetch("proposed_declaration").key?("local_path")
+      assert_equal declarations_before, File.read(config.repository_declarations_path)
+      refute File.exist?(config.local_registry_path)
+      refute File.exist?(File.join(repository, "AGENTS.override.md"))
+    end
+  end
+
+  def test_setup_plan_normalizes_hosted_origin_without_network_access
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      repository = initialize_repository(repositories_root, "hosted-service")
+      commit_repository(repository)
+      git(
+        "remote", "add", "origin",
+        "https://github.com/example-company/hosted-service.git",
+        chdir: repository
+      )
+
+      item = Flightdeck::SetupStore.new(config).plan(
+        repositories_root: repositories_root
+      ).fetch("repositories").first
+
+      assert_equal "github", item["provider"]
+      assert_equal "example-company/hosted-service", item["locator"]
+      assert_equal "example-company", item["owner"]
+      assert_equal "main", item["verified_default_branch"]
+      assert_equal "checked_out_branch_fallback", item["default_branch_source"]
+      assert_equal false, item["default_branch_verified"]
+      assert_includes item.fetch("warnings").join(" "), "unverified fallback"
+
+      git("update-ref", "refs/remotes/origin/main", "HEAD", chdir: repository)
+      git(
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
+        chdir: repository
+      )
+      verified = Flightdeck::SetupStore.new(config).plan(
+        repositories_root: repositories_root
+      ).fetch("repositories").first
+      assert_equal "origin_head", verified["default_branch_source"]
+      assert_equal true, verified["default_branch_verified"]
+    end
+  end
+
+  def test_setup_plan_blocks_and_redacts_credential_bearing_origin
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      repository = initialize_repository(repositories_root, "credential-service")
+      commit_repository(repository)
+      git(
+        "remote", "add", "origin",
+        "https://synthetic-user:synthetic-secret@example.invalid/service.git",
+        chdir: repository
+      )
+
+      result = Flightdeck::SetupStore.new(config).plan(
+        repositories_root: repositories_root
+      )
+      item = result.fetch("repositories").first
+      serialized = JSON.generate(result)
+
+      assert_equal "blocked", item["status"]
+      assert_includes item.fetch("blockers").join(" "), "embedded credentials"
+      refute_includes serialized, "synthetic-user"
+      refute_includes serialized, "synthetic-secret"
+    end
+  end
+
+  def test_setup_connect_keeps_unverified_remote_default_branch_truthful
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      repository = initialize_repository(repositories_root, "branch-fallback-service")
+      commit_repository(repository)
+      git(
+        "remote", "add", "origin",
+        "https://github.com/example-company/branch-fallback-service.git",
+        chdir: repository
+      )
+
+      result = Flightdeck::SetupStore.new(config).connect(
+        repositories_root: repositories_root
+      )
+
+      assert_equal true, result["ok"], result.inspect
+      declaration = Flightdeck::Config.new(root: root).repository_declarations.first
+      assert_equal false, declaration["default_branch_verified"]
+      assert_equal "main", declaration["default_branch"]
+      doctor = Flightdeck::Doctor.new(Flightdeck::Config.new(root: root)).run
+      assert_equal 0, doctor.dig("summary", "errors"), doctor.inspect
+      assert_includes(
+        doctor["issues"].map { |item| item["code"] },
+        "repository.default_branch_pending"
+      )
+    end
+  end
+
+  def test_setup_connect_never_persists_local_file_origin_in_portable_declaration
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      repository = initialize_repository(repositories_root, "local-origin-service")
+      commit_repository(repository)
+      local_origin = File.join(File.dirname(root), "synthetic-origin.git")
+      git("remote", "add", "origin", "file://#{local_origin}", chdir: repository)
+
+      result = Flightdeck::SetupStore.new(config).connect(
+        repositories_root: repositories_root
+      )
+
+      assert_equal true, result["ok"], result.inspect
+      declaration = Flightdeck::Config.new(root: root).repository_declarations.first
+      assert_equal "existing-local", declaration["provider"]
+      assert_equal "local-origin-service", declaration["locator"]
+      serialized = File.read(config.repository_declarations_path)
+      refute_includes serialized, local_origin
+      refute_includes serialized, File.dirname(root)
+    end
+  end
+
+  def test_setup_connect_attaches_in_place_and_installs_safe_reference_bridge
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      repository = initialize_repository(repositories_root, "attached-service")
+      commit_repository(repository)
+      agents_before = File.read(File.join(repository, "AGENTS.md"))
+
+      result = Flightdeck::SetupStore.new(config).connect(
+        repositories_root: repositories_root
+      )
+
+      assert_equal true, result["ok"], result.inspect
+      assert_equal "connected_projects_pending", result["status"]
+      assert_equal 1, result.dig("summary", "connected")
+      assert_equal 1, result.dig("summary", "project_pending")
+      declaration = Flightdeck::Config.new(root: root).repository_declarations.first
+      assert_equal "attached", declaration["placement"]
+      refute declaration.key?("local_path")
+      refute_includes File.read(config.repository_declarations_path), repository
+      registered = Flightdeck::Config.new(root: root).repository("attached-service")
+      assert_equal File.realpath(repository), File.realpath(registered["path"])
+      assert_equal "attached", registered["placement"]
+      assert File.file?(File.join(repository, "AGENTS.override.md"))
+      _ignored, _error, ignored_status = Flightdeck::Support.capture(
+        "git", "check-ignore", "-q", "--", "AGENTS.override.md", chdir: repository
+      )
+      assert_equal 0, ignored_status
+      assert_equal agents_before, File.read(File.join(repository, "AGENTS.md"))
+      doctor = Flightdeck::Doctor.new(Flightdeck::Config.new(root: root)).run
+      assert_equal 0, doctor.dig("summary", "errors"), doctor.inspect
+      bridge_registry = File.read(config.bridge_registry_path)
+      second = Flightdeck::SetupStore.new(Flightdeck::Config.new(root: root)).connect(
+        repositories_root: repositories_root
+      )
+      assert_equal true, second["ok"], second.inspect
+      assert_equal false, second["changed"]
+      assert_equal "noop", second.dig("bridge_receipt", "repositories", 0, "bridge", "status")
+      assert_equal bridge_registry, File.read(config.bridge_registry_path)
+    end
+  end
+
+  def test_setup_connect_skips_unmanaged_override_without_writing_state
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      repository = initialize_repository(repositories_root, "conflict-service")
+      commit_repository(repository)
+      File.write(File.join(repository, "AGENTS.override.md"), "unmanaged\n")
+      declarations_before = File.read(config.repository_declarations_path)
+
+      result = Flightdeck::SetupStore.new(config).connect(
+        repositories_root: repositories_root
+      )
+
+      assert_equal false, result["ok"]
+      assert_equal false, result["changed"]
+      assert_equal "connected_with_blockers", result["status"]
+      assert_includes(
+        result.fetch("repositories").first.fetch("blockers").join(" "),
+        "refusing to overwrite"
+      )
+      assert_equal declarations_before, File.read(config.repository_declarations_path)
+      refute File.exist?(config.local_registry_path)
+      assert_equal "unmanaged\n", File.read(File.join(repository, "AGENTS.override.md"))
+
+      stopped = Flightdeck::SetupStore.new(config).connect(
+        repositories_root: repositories_root,
+        failure_policy: "stop"
+      )
+      assert_equal "stopped_before_changes", stopped["status"]
+      assert_equal 0, stopped.dig("summary", "project_verified")
+    end
+  end
+
+  def test_setup_connect_blocks_portable_and_local_identity_conflict_before_mutation
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      repository = initialize_repository(repositories_root, "flightdeck-client")
+      commit_repository(repository)
+      initial = Flightdeck::SetupStore.new(config).connect(repositories_root: repositories_root)
+      assert_equal true, initial["ok"], initial.inspect
+      config = Flightdeck::Config.new(root: root)
+      git("remote", "add", "origin", "https://github.com/example/flightdeck-client.git", chdir: repository)
+      git("update-ref", "refs/remotes/origin/main", "HEAD", chdir: repository)
+      git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main", chdir: repository)
+      config = write_declarations(
+        config,
+        [
+          {
+            "id" => "flightdeck-client", "placement" => "attached", "workload" => "development",
+            "provider" => "github", "locator" => "example/flightdeck-client", "owner" => "example",
+            "default_branch" => "main", "default_branch_verified" => false,
+            "bridge" => { "profile" => "application", "mode" => "reference" },
+            "codex_project" => { "expectation" => "saved_exact_path", "logical_key" => "flightdeck-client" }
+          }
+        ]
+      )
+      declarations_before = File.binread(config.repository_declarations_path)
+      registry_before = File.binread(config.local_registry_path)
+      bridge_before = File.binread(File.join(repository, "AGENTS.override.md"))
+      doctor_before = Flightdeck::Doctor.new(config).run.dig("summary", "errors")
+
+      plan = Flightdeck::SetupStore.new(config).plan(repositories_root: repositories_root)
+      item = plan.fetch("repositories").first
+      assert_equal "blocked", item["status"]
+      assert_includes item.fetch("blockers").join(" "), "existing local registration provider differs"
+      assert_includes item.fetch("blockers").join(" "), "existing local registration default_branch_verified differs"
+
+      result = Flightdeck::SetupStore.new(config).connect(repositories_root: repositories_root)
+      assert_equal false, result["changed"]
+      assert_equal "connected_with_blockers", result["status"]
+      assert_equal declarations_before, File.binread(config.repository_declarations_path)
+      assert_equal registry_before, File.binread(config.local_registry_path)
+      assert_equal bridge_before, File.binread(File.join(repository, "AGENTS.override.md"))
+      assert_equal doctor_before, Flightdeck::Doctor.new(Flightdeck::Config.new(root: root)).run.dig("summary", "errors")
+    end
+  end
+
+  def test_setup_connect_reports_empty_authorized_root_without_claiming_ready
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "empty-repositories")
+      FileUtils.mkdir_p(repositories_root)
+
+      result = Flightdeck::SetupStore.new(config).connect(
+        repositories_root: repositories_root
+      )
+
+      assert_equal true, result["ok"]
+      assert_equal false, result["complete"]
+      assert_equal "no_repositories_found", result["status"]
+      assert_equal 0, result.dig("summary", "connected")
+      assert_equal false, result["changed"]
+    end
+  end
+
+  def test_setup_connect_continues_independent_safe_repositories
+    with_hub do |root, config|
+      repositories_root = File.join(File.dirname(root), "repositories")
+      safe = initialize_repository(repositories_root, "a-safe-service")
+      blocked = initialize_repository(repositories_root, "b-blocked-service")
+      [safe, blocked].each { |repository| commit_repository(repository) }
+      File.write(File.join(blocked, "AGENTS.override.md"), "unmanaged\n")
+
+      result = Flightdeck::SetupStore.new(config).connect(
+        repositories_root: repositories_root,
+        failure_policy: "continue"
+      )
+
+      assert_equal false, result["ok"]
+      assert_equal 1, result.dig("summary", "connected")
+      assert_equal 1, result.dig("summary", "blocked")
+      assert File.file?(File.join(safe, "AGENTS.override.md"))
+      assert_equal "unmanaged\n", File.read(File.join(blocked, "AGENTS.override.md"))
+      declarations = Flightdeck::Config.new(root: root).repository_declarations
+      assert_equal ["a-safe-service"], declarations.map { |item| item["id"] }
+      doctor = Flightdeck::Doctor.new(Flightdeck::Config.new(root: root)).run
+      assert_equal 0, doctor.dig("summary", "errors"), doctor.inspect
+    end
+  end
+
   def test_doctor_detects_bridge_drift
     with_hub do |root, config|
       repository = initialize_repository(root)
@@ -847,26 +979,65 @@ class FlightdeckTest < Minitest::Test
     end
   end
 
-  def test_doctor_reports_missing_registered_repository_without_crashing
+  def test_doctor_and_status_report_missing_registered_repository_with_bridge
     with_hub do |root, config|
-      repository = initialize_repository(root)
-      config = register_repository(config, "sample", repository)
+      repository = initialize_repository(root, "missing-bridged-service")
+      commit_repository(repository)
+      config = register_repository(config, "missing-bridged-service", repository)
       Flightdeck::BridgeStore.new(config).install(
-        repository_id: "sample", mode: "reference", profile: "application"
+        repository_id: "missing-bridged-service",
+        mode: "reference",
+        profile: "application"
       )
       FileUtils.rm_rf(repository)
+      config = Flightdeck::Config.new(root: root)
 
-      result = Flightdeck::Doctor.new(Flightdeck::Config.new(root: root)).run
+      result = Flightdeck::Doctor.new(config).run
+      codes = result.fetch("issues").map { |item| item.fetch("code") }
+      assert_includes codes, "repo.unavailable"
+      assert_includes codes, "bridge.repository_unavailable"
 
-      refute result["ok"]
-      assert_includes result["issues"].map { |item| item["code"] }, "repo.unavailable"
-      assert_includes result["issues"].map { |item| item["code"] }, "bridge.repository_unavailable"
+      doctor_output = StringIO.new
+      doctor_status = Flightdeck::CLI.new(
+        root: root,
+        out: doctor_output,
+        err: StringIO.new
+      ).run(["doctor", "--json"])
+      assert_equal 1, doctor_status
+      doctor_result = JSON.parse(doctor_output.string)
+      assert_includes doctor_result.fetch("issues").map { |item| item.fetch("code") }, "repo.unavailable"
+      assert_includes doctor_result.fetch("issues").map { |item| item.fetch("code") }, "bridge.repository_unavailable"
+
+      status_output = StringIO.new
+      status_status = Flightdeck::CLI.new(
+        root: root,
+        out: status_output,
+        err: StringIO.new
+      ).run(["status", "--json"])
+      assert_equal 0, status_status
+      status_result = JSON.parse(status_output.string)
+      assert_includes status_result.fetch("issues").map { |item| item.fetch("code") }, "repo.unavailable"
+      assert_includes status_result.fetch("issues").map { |item| item.fetch("code") }, "bridge.repository_unavailable"
     end
   end
 
-  def test_compliance_sidecars_require_semantic_parity
+  def test_command_capture_normalizes_missing_working_directory
+    with_hub do |root, _config|
+      missing = File.join(root, "missing-working-directory")
+
+      output, error, status = Flightdeck::Support.capture(
+        "git", "status", chdir: missing
+      )
+
+      assert_equal "", output
+      assert_equal "working directory is unavailable", error
+      assert_equal 127, status
+    end
+  end
+
+  def test_compliance_working_records_require_semantic_parity
     with_hub do |root, config|
-      directory = File.join(root, "compliance", "example", "control-assessments")
+      directory = File.join(root, "compliance", "example", "working-records")
       FileUtils.mkdir_p(directory)
       File.write(File.join(directory, "control.json"), JSON.pretty_generate({ "status" => "not_assessed" }))
       File.write(File.join(directory, "control.yaml"), YAML.dump({ "status" => "not_assessed" }))
@@ -876,6 +1047,82 @@ class FlightdeckTest < Minitest::Test
       File.write(File.join(directory, "control.yaml"), YAML.dump({ "status" => "satisfied" }))
       second = Flightdeck::Doctor.new(config).run
       assert_includes second["issues"].map { |item| item["code"] }, "compliance.sidecar_mismatch"
+    end
+  end
+
+  def test_compliance_sidecars_accept_safe_yaml_aliases
+    with_hub do |root, config|
+      directory = File.join(root, "compliance", "example", "control-assessments")
+      FileUtils.mkdir_p(directory)
+      value = {
+        "controls" => [
+          { "id" => "AC-1", "status" => "satisfied" },
+          { "id" => "AC-1", "status" => "satisfied" }
+        ]
+      }
+      File.write(File.join(directory, "control.json"), JSON.pretty_generate(value))
+      File.write(
+        File.join(directory, "control.yaml"),
+        "---\ncontrols:\n- &control\n  id: AC-1\n  status: satisfied\n- *control\n"
+      )
+
+      result = Flightdeck::Doctor.new(config).run
+      assert_equal true, result.dig("compliance", "pairs", 0, "equivalent")
+      refute_includes result["issues"].map { |item| item["code"] }, "compliance.invalid_yaml"
+      refute_includes result["issues"].map { |item| item["code"] }, "compliance.sidecar_mismatch"
+    end
+  end
+
+  def test_compliance_parse_failure_does_not_duplicate_mismatch
+    with_hub do |root, config|
+      directory = File.join(root, "compliance", "example", "control-assessments")
+      FileUtils.mkdir_p(directory)
+      File.write(File.join(directory, "control.json"), JSON.pretty_generate({ "status" => "satisfied" }))
+      File.write(File.join(directory, "control.yaml"), "status: [\n")
+
+      result = Flightdeck::Doctor.new(config).run
+      codes = result["issues"].map { |item| item["code"] }
+      assert_includes codes, "compliance.invalid_yaml"
+      refute_includes codes, "compliance.sidecar_mismatch"
+      assert_nil result.dig("compliance", "pairs", 0, "equivalent")
+    end
+  end
+
+  def test_compliance_rejects_recursive_yaml_aliases_without_crashing
+    with_hub do |root, config|
+      directory = File.join(root, "compliance", "example", "control-assessments")
+      FileUtils.mkdir_p(directory)
+      File.write(File.join(directory, "control.json"), JSON.pretty_generate({ "status" => "satisfied" }))
+      File.write(
+        File.join(directory, "control.yaml"),
+        "---\ncycle: &cycle\n  self: *cycle\n"
+      )
+
+      result = Flightdeck::Doctor.new(config).run
+      codes = result["issues"].map { |item| item["code"] }
+      assert_includes codes, "compliance.invalid_yaml"
+      refute_includes codes, "compliance.sidecar_mismatch"
+    end
+  end
+
+  def test_compliance_allows_standalone_cyclonedx_json
+    with_hub do |root, config|
+      directory = File.join(root, "compliance", "example", "generated-documents")
+      FileUtils.mkdir_p(directory)
+      File.write(
+        File.join(directory, "sbom.cdx.json"),
+        JSON.pretty_generate(
+          {
+            "bomFormat" => "CycloneDX",
+            "specVersion" => "1.6",
+            "version" => 1,
+            "components" => []
+          }
+        )
+      )
+
+      result = Flightdeck::Doctor.new(config).run
+      refute_includes result["issues"].map { |item| item["code"] }, "compliance.orphan_json"
     end
   end
 
@@ -911,6 +1158,8 @@ class FlightdeckTest < Minitest::Test
       assert_includes output.string, "route plan"
       assert_includes output.string, "repo onboard"
       assert_includes output.string, "explicit state-changing names"
+      assert_includes output.string, "--pending-client-id ORIGINAL and --task-id RESOLVED"
+      assert_includes output.string, "Mission graph nodes may be added only while fully planned"
     end
   end
 
@@ -1193,2912 +1442,2182 @@ class FlightdeckTest < Minitest::Test
     end
   end
 
-  def test_attached_repository_resolves_only_from_ignored_local_state
+  def test_mission_is_separate_ignored_record_and_default_route_does_not_monitor
     with_hub do |root, config|
-      repository = initialize_repository(File.dirname(root), "attached-service")
-      commit_repository(repository)
-      config = register_repository(
-        config,
-        "attached-service",
-        repository,
-        placement: "attached"
+      mission = Flightdeck::MissionStore.new(config).create(
+        slug: "dispatch-default", title: "Dispatch", outcome: "Return receipt."
       )
-      config = write_declarations(
-        config,
-        [declaration("attached-service", repository, placement: "attached")]
+      assert_equal "MissionRecord", mission["kind"]
+      assert_equal "dispatch_only", mission.dig("spec", "mode")
+      assert File.file?(File.join(root, "hub", "missions", "dispatch-default", "mission.yaml"))
+      assert_includes File.read(File.join(root, ".gitignore")), "/hub/missions/"
+      assert_equal "return_without_monitoring", config.routing["post_dispatch_policy"]
+      assert_equal "user_initiated_only", config.routing["monitoring_policy"]
+      route = Flightdeck::RoutePlanner.new(config).plan(
+        workload_name: "development", work_type: "implementation"
       )
-
-      registered = config.repository("attached-service")
-      assert_equal "attached", registered["placement"]
-      assert_equal File.realpath(repository), config.repository_path(registered)
-      declaration_value = config.repository_declarations.find do |entry|
-        entry["id"] == "attached-service"
+      assert_includes route.fetch("steps").join(" "), "do not inspect owner artifacts, poll, wait, or read progress"
+      error = assert_raises(Flightdeck::ValidationError) do
+        Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)).plan(
+          slug: "dispatch-default", observations_path: write_mission_observations(root, "dispatch-default", [])
+        )
       end
-      refute declaration_value.key?("local_path")
-
-      plan = Flightdeck::BridgeBulkStore.new(config).plan
-      item = plan.fetch("repositories").find { |entry| entry["repository_id"] == "attached-service" }
-      assert_equal File.realpath(repository), item["git_root"]
-      assert_equal true, item.dig("checkout", "git_root_verified")
-      assert_empty item["blockers"]
-      assert_equal "ready", item["status"]
-
-      unsafe = declaration("attached-service", repository, placement: "attached")
-      unsafe["local_path"] = repository
-      unsafe_config = write_declarations(config, [unsafe])
-      error = assert_raises(Flightdeck::ConfigurationError) do
-        unsafe_config.repository_declarations
-      end
-      assert_includes error.message, "must not store a machine-local path"
+      assert_includes error.message, "dispatch_only"
     end
   end
 
-  def test_mission_client_snapshot_requires_an_exact_immutable_parent_binding
+  def test_mission_success_contract_and_durable_authorization_are_machine_enforced
     with_hub do |root, config|
-      store = Flightdeck::MissionStore.new(config)
-      store.create(
-        slug: "bound-snapshot", title: "Bound snapshot", outcome: "Exercise a snapshot.",
-        mode: "dispatch_only", parent_chat_id: "operator-parent-a"
-      )
-      record_path = File.join(config.mission_dir, "bound-snapshot", "mission.yaml")
-      record_before = File.binread(record_path)
-      refute_includes record_before, "operator-parent-a"
-
       output = StringIO.new
-      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
-      assert_equal 0, cli.run([
-        "mission", "client-snapshot", "--hub-root", root, "--mission", "bound-snapshot",
-        "--parent-chat-id", "operator-parent-a", "--json"
-      ])
-      snapshot = JSON.parse(output.string)
-      assert_equal "flightdeck.mission-client-snapshot/v1", snapshot["api_version"]
-      assert_equal "MissionClientSnapshot", snapshot["kind"]
-      assert_equal true, snapshot["ok"]
-      assert_equal "operator-parent-a", snapshot.dig("provenance", "parent_chat_id")
-      assert_equal [], snapshot.fetch("nodes")
-      assert_equal [], snapshot.fetch("task_events")
-      assert_equal({ "mode" => "none" }, snapshot.fetch("recovery"))
-      assert_equal record_before, File.binread(record_path)
+      errors = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: errors)
+      assert_equal 0, cli.run(%w[mission new compatible --title Compatible --outcome delivered --json])
+      compatible = JSON.parse(output.string)
+      assert_equal [{ "id" => "criterion-001", "text" => "delivered" }], compatible.dig("spec", "success_criteria")
+      assert_equal [], compatible.dig("spec", "non_goals")
+      assert_match(/\Ascope-[0-9a-f]{48}\z/, compatible.dig("spec", "authorization_boundary"))
 
       output.truncate(0)
       output.rewind
-      assert_equal 1, cli.run([
-        "mission", "client-snapshot", "--hub-root", root, "--mission", "bound-snapshot",
-        "--parent-chat-id", "operator-parent-b", "--json"
-      ])
-      denied = JSON.parse(output.string)
-      assert_equal "identity_unresolved", denied.dig("error", "code")
-      refute denied.key?("provenance")
-      refute denied.key?("nodes")
-      refute denied.key?("task_events")
+      errors.truncate(0)
+      errors.rewind
+      assert_equal 2, cli.run(
+        %w[mission new missing-criterion --title Durable --outcome delivered --mode watch_only
+           --authorized-target-json {} --json]
+      )
+      assert_includes errors.string, "--success-criterion"
+
+      errors.truncate(0)
+      errors.rewind
+      assert_equal 2, cli.run(
+        %w[mission new missing-target --title Durable --outcome delivered --mode supervised
+           --success-criterion verified --json]
+      )
+      assert_includes errors.string, "--authorized-target-json"
+
+      output.truncate(0)
+      output.rewind
+      target_json = JSON.generate(mission_authorized_target(config))
+      assert_equal 0, cli.run(
+        ["mission", "new", "durable", "--title", "Durable", "--outcome", "delivered", "--mode", "supervised",
+         "--success-criterion", "tested", "--success-criterion", "reviewed", "--non-goal", "deployment",
+         "--non-goal", "publication", "--authorized-target-json", target_json, "--json"]
+      )
+      durable = JSON.parse(output.string)
+      assert_equal [
+        { "id" => "criterion-001", "text" => "tested" },
+        { "id" => "criterion-002", "text" => "reviewed" }
+      ], durable.dig("spec", "success_criteria")
+      assert_equal %w[deployment publication], durable.dig("spec", "non_goals")
+
+      mission_path = File.join(config.mission_dir, "durable", "mission.yaml")
+      durable["spec"]["success_criteria"] = []
+      Flightdeck::Support.atomic_yaml(mission_path, durable)
+      assert Flightdeck::MissionStore.new(config).validate("durable").any? { |message| message.include?("success_criteria") }
     end
   end
 
-  def test_mission_client_snapshot_rejects_unknown_and_cross_hub_callers
-    with_hub do |first_root, first_config|
-      Flightdeck::MissionStore.new(first_config).create(
-        slug: "shared-snapshot", title: "First snapshot", outcome: "Exercise a snapshot.",
-        mode: "dispatch_only", parent_chat_id: "first-parent"
-      )
-      with_hub do |second_root, second_config|
-        Flightdeck::MissionStore.new(second_config).create(
-          slug: "shared-snapshot", title: "Second snapshot", outcome: "Exercise a snapshot.",
-          mode: "dispatch_only", parent_chat_id: "second-parent"
-        )
-        output = StringIO.new
-        cli = Flightdeck::CLI.new(root: first_root, out: output, err: StringIO.new)
-
-        assert_equal 1, cli.run([
-          "mission", "client-snapshot", "--hub-root", File.join(first_root, "unknown"),
-          "--mission", "shared-snapshot", "--parent-chat-id", "first-parent", "--json"
-        ])
-        unknown = JSON.parse(output.string)
-        assert_equal "hub_root_not_found", unknown.dig("error", "code")
-        refute unknown.key?("provenance")
-
-        output.truncate(0)
-        output.rewind
-        assert_equal 1, cli.run([
-          "mission", "client-snapshot", "--hub-root", second_root, "--mission", "shared-snapshot",
-          "--parent-chat-id", "first-parent", "--json"
-        ])
-        cross_hub = JSON.parse(output.string)
-        assert_equal "identity_unresolved", cross_hub.dig("error", "code")
-        refute cross_hub.key?("provenance")
-        refute_includes output.string, "second-parent"
-      end
-    end
-  end
-
-  def test_mission_client_snapshot_contract_is_declared_and_closed
-    schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "mission-client-snapshot.schema.json")))
-    assert_equal "https://flightdeck.dev/schemas/mission-client-snapshot.schema.json", schema["$id"]
-    assert_equal false, schema.dig("$defs", "success", "additionalProperties")
-    assert_equal false, schema.dig("$defs", "error", "additionalProperties")
-    assert_includes schema.dig("$defs", "error", "properties", "error", "properties", "code", "enum"), "identity_unresolved"
-
-    compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
-    assert_equal "1.13.0", compatibility["template_version"]
-    capability = compatibility.dig("capabilities", "flightdeck.command.mission-client-snapshot.v1")
-    assert_equal "command", capability["kind"]
-    assert_includes capability["managed_paths"], "hub/schemas/mission-client-snapshot.schema.json"
-
-    compatibility_schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "hub-compatibility.schema.json")))
-    assert_includes compatibility_schema.fetch("required"), "runtime_capabilities"
-    assert_equal false, compatibility_schema.dig("properties", "runtime_capabilities", "additionalProperties")
-
-    mission_schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "mission.schema.json")))
-    binding = mission_schema.dig("properties", "metadata", "properties", "client_snapshot_binding")
-    assert_equal false, binding["additionalProperties"]
-    assert_equal "flightdeck.mission-client-binding/v1", binding.dig("properties", "binding_version", "const")
-  end
-
-  def test_work_coordinator_returns_runtime_boundary_or_review_only_exact_operation_proposal
-    with_hub do |root, config|
-      client = initialize_repository(root, "flightdeck-client")
-      plugin = initialize_repository(root, "flightdeck-plugin")
-      config = register_repository(config, "flightdeck-client", client)
-      config = register_repository(config, "flightdeck-plugin", plugin)
-      config = write_declarations(config, [declaration("flightdeck-client", client), declaration("flightdeck-plugin", plugin)])
-      write_project_verifications(config, {
-        "flightdeck-client" => verified_project("flightdeck-client", client),
-        "flightdeck-plugin" => verified_project("flightdeck-plugin", plugin)
-      })
-      coordinator = Flightdeck::WorkCoordinator.new(config)
-
-      ordinary = coordinator.coordinate(
-        "schema_version" => Flightdeck::WorkCoordinator::REQUEST,
-        "message" => "Explain the purpose of this Hub.",
-        "active_operation_id" => nil
-      )
-      assert_equal "runtime_delegate", ordinary["disposition"]
-      assert_equal "omp", ordinary.dig("runtime", "adapter")
-      assert_equal true, ordinary.dig("runtime", "available")
-      assert_nil ordinary["proposal"]
-      refute Dir.exist?(config.mission_dir)
-
-      coordinated = coordinator.coordinate(
-        "schema_version" => Flightdeck::WorkCoordinator::REQUEST,
-        "message" => "Compare flightdeck-client and flightdeck-plugin across the release boundary.",
-        "active_operation_id" => nil
-      )
-      assert_equal "operation_proposal", coordinated["disposition"]
-      proposal = coordinated.fetch("proposal")
-      assert_equal %w[flightdeck-client flightdeck-plugin], proposal.dig("proposal", "selected_targets").map { |target| target.fetch("logical_project_key") }
-      assert_match(/^operation-[0-9a-f]{24}$/, proposal.fetch("operation_id"))
-      refute Dir.exist?(config.mission_dir), "reviewing a proposal must not launch an Operation"
-    end
-  end
-
-  def test_operation_detail_and_work_guidance_are_bound_to_the_exact_created_operation
-    with_hub do |root, config|
-      client = initialize_repository(root, "flightdeck-client")
-      plugin = initialize_repository(root, "flightdeck-plugin")
-      config = register_repository(config, "flightdeck-client", client)
-      config = register_repository(config, "flightdeck-plugin", plugin)
-      config = write_declarations(config, [declaration("flightdeck-client", client), declaration("flightdeck-plugin", plugin)])
-      write_project_verifications(config, {
-        "flightdeck-client" => verified_project("flightdeck-client", client),
-        "flightdeck-plugin" => verified_project("flightdeck-plugin", plugin)
-      })
-      coordinator = Flightdeck::WorkCoordinator.new(config)
-      coordinated = coordinator.coordinate(
-        "schema_version" => Flightdeck::WorkCoordinator::REQUEST,
-        "message" => "Review flightdeck-client and flightdeck-plugin together.",
-        "active_operation_id" => nil
-      )
-      proposal = coordinated.fetch("proposal")
-      confirmation = %w[operation_id plan_id plan_generation plan_digest plan_token].to_h { |field| [field, proposal.fetch(field)] }
-      launched = Flightdeck::OperationAuthoring.new(config).launch(
-        "schema_version" => Flightdeck::OperationAuthoring::LAUNCH_REQUEST,
-        "operation_id" => proposal.fetch("operation_id"),
-        "confirmation" => confirmation,
-        "proposal" => proposal.fetch("proposal")
-      )
-      assert_equal "created", launched["outcome"]
-
-      detail = Flightdeck::OperationDetail.new(config).detail(
-        "schema_version" => Flightdeck::OperationDetail::REQUEST,
-        "operation_id" => launched.fetch("operation_id")
-      ).fetch("operation")
-      assert_equal "work", detail["origin"]
-      assert_equal "Review flightdeck-client and flightdeck-plugin together.", detail["goal"]
-      assert_equal ["Flightdeck Client Agent", "Flightdeck Plugin Agent"], detail.fetch("agents").map { |agent| agent.fetch("name") }
-      assert_equal({ "state" => "unavailable", "items" => [] }, detail["skills"])
-      assert_equal false, detail.dig("authorization", "external_actions_authorized")
-
-      guidance = coordinator.coordinate(
-        "schema_version" => Flightdeck::WorkCoordinator::REQUEST,
-        "message" => "Also verify the compatibility schemas.",
-        "active_operation_id" => launched.fetch("operation_id")
-      )
-      assert_equal "guidance_attached", guidance["disposition"]
-      assert_equal launched.fetch("operation_id"), guidance.dig("guidance", "operation_id")
-    end
-  end
-
-  def test_authored_operations_are_not_missions_and_detail_v2_preserves_exact_source_identity
-    with_operation_authoring_fixture do |_root, config, authoring, _catalog, target|
-      mission_store = Flightdeck::MissionStore.new(config)
-      mission_store.create(
-        slug: "ordinary-mission", title: "Ordinary Mission", outcome: "Remain visible as a Mission."
-      )
-      proposal = operation_proposal(target, title: "Authored Operation only")
-      plan = operation_plan(authoring, proposal)
-      launched = authoring.launch(operation_launch_request(plan, proposal))
-
-      listed = mission_store.list_page
-      assert_equal ["ordinary-mission"], listed.fetch("missions").map { |item| item.fetch("mission_id") }
-      error = assert_raises(Flightdeck::MissionStore::ClientSnapshotError) do
-        mission_store.client_snapshot(slug: launched.fetch("operation_id"), parent_chat_id: "opaque-parent-chat-0001")
-      end
-      assert_equal "operation_not_mission", error.code
-
-      detail = Flightdeck::OperationDetail.new(config).detail(
-        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST,
-        "operation_id" => launched.fetch("operation_id")
-      ).fetch("operation")
-      assert_equal "authored_operation", detail["classification"]
-      assert_equal launched.fetch("operation_id"), detail["operation_id"]
-      assert_equal({ "kind" => "mission_record", "source_id" => "mission:#{launched.fetch('operation_id')}" }, detail["source"])
-      assert_equal "queued", detail["status"]
-      assert_equal "unavailable", detail.dig("agents", 0, "binding", "state")
-      assert_nil detail.dig("agents", 0, "agent_id")
-      assert_equal "unavailable", detail.dig("agents", 0, "last_observation", "availability")
-      assert_equal "unavailable", detail.dig("result", "availability")
-      assert_equal target.fetch("logical_project_key"), detail.dig("project_scope", 0, "logical_project_key")
-      assert_equal false, detail.dig("authorization", "external_actions_authorized")
-      refute_includes JSON.generate(detail), target.fetch("runtime_project_id")
-      refute_includes JSON.generate(detail), target.fetch("project_path_digest")
-
-      v1 = Flightdeck::OperationDetail.new(config).detail(
-        "schema_version" => Flightdeck::OperationDetail::REQUEST,
-        "operation_id" => launched.fetch("operation_id")
-      )
-      assert_equal Flightdeck::OperationDetail::RESULT, v1["schema_version"]
-    end
-  end
-
-  def test_operation_detail_v2_and_mission_operation_separation_are_declared_closed_and_additive
-    compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
-    detail = compatibility.dig("capabilities", Flightdeck::OperationDetail::V2_CAPABILITY)
-    separation = compatibility.dig("capabilities", "flightdeck.command.mission-operation-separation.v1")
-    assert_equal "1.13.0", compatibility["template_version"]
-    assert_equal true, detail["declaration_required"]
-    assert_equal true, separation["declaration_required"]
-    assert_equal({ "mode" => "stop_and_plan_migration" }, detail["fallback"])
-    assert_equal({ "mode" => "stop_and_plan_migration" }, separation["fallback"])
-    %w[operation-detail-v2-request.schema.json operation-detail-v2-result.schema.json operation-detail-v2-error.schema.json].each do |name|
-      schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", name)))
-      assert_equal "https://flightdeck.dev/schemas/#{name}", schema["$id"]
-      assert_equal false, schema["additionalProperties"]
-      assert_includes detail["managed_paths"], "hub/schemas/#{name}"
-    end
-    assert_includes separation["managed_paths"], "hub/schemas/mission-list.schema.json"
-    assert_includes separation["managed_paths"], "hub/schemas/mission-client-snapshot.schema.json"
-    assert_equal "operation_not_mission", JSON.parse(
-      File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "mission-client-snapshot.schema.json"))
-    ).dig("$defs", "error", "properties", "error", "properties", "code", "enum").last
-
-    error = Flightdeck::OperationDetail.error_result(
-      Flightdeck::OperationDetail::ContractError.new("operation_unavailable", "Unavailable"),
-      request: { "schema_version" => Flightdeck::OperationDetail::V2_REQUEST }
-    )
-    assert_equal Flightdeck::OperationDetail::V2_ERROR, error["schema_version"]
-    assert_equal "hub/schemas/operation-detail-v2-error.schema.json", error["schema"]
-    assert_equal Flightdeck::OperationDetail::ERROR,
-                 Flightdeck::OperationDetail.error_result(Flightdeck::UsageError.new("bad"))["schema_version"]
-  end
-
-  def test_mission_objective_preserves_ordered_operation_membership_and_requires_exact_confirmation
-    with_hub do |root, config|
-      client = initialize_repository(root, "flightdeck-client")
-      plugin = initialize_repository(root, "flightdeck-plugin")
-      config = register_repository(config, "flightdeck-client", client)
-      config = register_repository(config, "flightdeck-plugin", plugin)
-      config = write_declarations(config, [declaration("flightdeck-client", client), declaration("flightdeck-plugin", plugin)])
-      write_project_verifications(config, {
-        "flightdeck-client" => verified_project("flightdeck-client", client),
-        "flightdeck-plugin" => verified_project("flightdeck-plugin", plugin)
-      })
-      coordinator = Flightdeck::WorkCoordinator.new(config)
-      authoring = Flightdeck::OperationAuthoring.new(config)
-      launch = lambda do |message|
-        coordinated = coordinator.coordinate(
-          "schema_version" => Flightdeck::WorkCoordinator::REQUEST,
-          "message" => message,
-          "active_operation_id" => nil
-        )
-        proposal = coordinated.fetch("proposal")
-        confirmation = %w[operation_id plan_id plan_generation plan_digest plan_token].to_h { |field| [field, proposal.fetch(field)] }
-        authoring.launch(
-          "schema_version" => Flightdeck::OperationAuthoring::LAUNCH_REQUEST,
-          "operation_id" => proposal.fetch("operation_id"),
-          "confirmation" => confirmation,
-          "proposal" => proposal.fetch("proposal")
-        ).fetch("operation_id")
-      end
-      first = launch.call("Review flightdeck-client and flightdeck-plugin for compatibility.")
-      second = launch.call("Compare flightdeck-plugin and flightdeck-client validation behavior.")
-      objectives = Flightdeck::MissionObjectives.new(config)
-      plan_request = {
-        "schema_version" => Flightdeck::MissionObjectives::PLAN_REQUEST,
-        "title" => "Flightdeck release mission",
-        "goal" => "Deliver one supervised release decision.",
-        "mode" => "supervised",
-        "operation_ids" => [second, first]
-      }
-      plan = objectives.plan(plan_request)
-      bad = %w[mission_id plan_id plan_digest plan_token].to_h { |field| [field, plan.fetch(field)] }
-      bad["plan_token"] = "0" * 64
-      assert_raises(Flightdeck::MissionObjectives::ContractError) do
-        objectives.create("schema_version" => Flightdeck::MissionObjectives::CREATE_REQUEST, "plan_request" => plan_request, "confirmation" => bad)
-      end
-
-      confirmation = %w[mission_id plan_id plan_digest plan_token].to_h { |field| [field, plan.fetch(field)] }
-      created = objectives.create("schema_version" => Flightdeck::MissionObjectives::CREATE_REQUEST, "plan_request" => plan_request, "confirmation" => confirmation)
-      assert_equal false, created["replayed"]
-      mission = objectives.snapshot("schema_version" => Flightdeck::MissionObjectives::SNAPSHOT_REQUEST, "mission_id" => created.fetch("mission_id")).fetch("missions").fetch(0)
-      assert_equal [second, first], mission.fetch("operations").map { |operation| operation.fetch("operation_id") }
-      assert_equal [1, 2], mission.fetch("operations").map { |operation| operation.fetch("order") }
-      assert_equal "planned", mission["state"]
-    end
-  end
-
-  def mission_observation(config, slug:, node_id:, state:, revision:, event_id: nil,
-                          validation: nil, output_declarations: nil, cursor: nil, include_outcome: nil,
-                          status_code: nil, criterion_results: nil, skill_events: nil)
-    mission = Flightdeck::MissionStore.new(config).snapshot(slug)
-    node = mission.dig("spec", "graph", "nodes").find { |item| item["id"] == node_id }
-    validation ||= state == "failed_validation" ? "failed" : (state == "review_ready" ? "passed" : "not_applicable")
-    output_declarations ||= state == "review_ready" ? [
-      { "type" => node.fetch("allowed_output_types").first, "codex_task" => true }
-    ] : []
-    observation = {
-      "node_id" => node_id,
-      "logical_project_key" => node["logical_project_key"],
-      "runtime_project_id" => node["runtime_project_id"],
-      "project_path_digest" => node["project_path_digest"],
-      "host_id" => node["host_id"],
-      "task_id" => node["task_id"],
-      "cursor" => cursor || "cursor-#{node_id}-#{revision}",
-      "revision" => revision,
-      "event_id" => event_id || "event-#{node_id}-#{revision}",
-      "observed_state" => state,
-      "status_code" => status_code || (state == "notLoaded" ? "not_loaded" : state),
-      "observed_at" => (Time.now.utc + revision).iso8601,
-      "worktree_ready" => true
-    }
-    observation["skill_events"] = skill_events if skill_events
-    include_outcome = %w[review_ready failed_validation].include?(state) if include_outcome.nil?
-    if include_outcome
-      observation["outcome"] = {
-        "schema_version" => "flightdeck.child-outcome/v1",
-        "code" => observation["status_code"],
-        "validation" => validation,
-        "output_declarations" => output_declarations,
-        "criterion_results" => criterion_results || node.fetch("criterion_ids").each_with_index.map do |criterion_id, index|
-          passed = state == "review_ready" || index.positive?
-          {
-            "criterion_id" => criterion_id,
-            "disposition" => passed ? "passed" : "failed",
-            "status_code" => passed ? "criterion_passed" : "criterion_failed"
-          }
-        end
-      }
-    end
-    observation
-  end
-
-  def skill_event(skill_id:, status:, evidence_id:, observed_at:, version: nil,
-                  source: "codex_task_skill_event")
-    {
-      "schema_version" => "flightdeck.skill-invocation-event/v1",
-      "skill_id" => skill_id,
-      "skill_version" => version,
-      "lifecycle_status" => status,
-      "observed_at" => observed_at,
-      "evidence_id" => evidence_id,
-      "evidence_source" => source
-    }
-  end
-
-  def write_mission_observations(root, slug, observations, name: "observations.json")
-    path = File.join(root, name)
-    File.write(
-      path,
-      JSON.pretty_generate(
-        {
-          "api_version" => "flightdeck.dev/v1alpha1",
-          "kind" => "MissionObservationBatch",
-          "schema" => "hub/schemas/mission-observation.schema.json",
-          "mission_id" => slug,
-          "observed_at" => Time.now.utc.iso8601,
-          "observations" => observations
-        }
-      )
-    )
-    path
-  end
-
-  def apply_mission_sync(sync, slug:, observations_path:)
-    plan = sync.plan(slug: slug, observations_path: observations_path)
-    sync.apply(slug: slug, observations_path: observations_path, plan_token: plan.fetch("plan_token"))
-  end
-
-  def with_authoring_fixture
-    with_hub do |root, config|
-      project_path = initialize_repository(root, "authoring-project")
-      config = register_repository(config, "authoring-project", project_path)
-      config = write_declarations(config, [declaration("authoring-project", project_path)])
-      write_project_verifications(
-        config,
-        "authoring-project" => verified_project(
-          "authoring-project", project_path, runtime_id: "runtime-project-authoring"
-        )
-      )
-      config = Flightdeck::Config.new(root: root)
-      authoring = Flightdeck::MissionAuthoring.new(
-        config,
-        clock: -> { Time.iso8601("2026-08-06T12:00:00Z") }
-      )
-      catalog = authoring.catalog(
-        "schema_version" => Flightdeck::MissionAuthoring::CATALOG_REQUEST
-      )
-      target = catalog.fetch("targets").find do |candidate|
-        candidate["logical_project_key"] == "authoring-project" &&
-          candidate["execution_mode"] == "worktree" && candidate["access_mode"] == "write"
-      end
-      yield root, config, authoring, catalog, target
-    end
-  end
-
-  def with_operation_authoring_fixture
-    with_authoring_fixture do |root, config, _mission_authoring, _catalog, _target|
-      authoring = Flightdeck::OperationAuthoring.new(
-        config,
-        clock: -> { Time.iso8601("2026-08-08T12:00:00Z") }
-      )
-      catalog = authoring.catalog("schema_version" => Flightdeck::OperationAuthoring::CATALOG_REQUEST)
-      target = catalog.fetch("targets").find do |candidate|
-        candidate["logical_project_key"] == "authoring-project" &&
-          candidate["execution_mode"] == "worktree" && candidate["access_mode"] == "write"
-      end
-      yield root, config, authoring, catalog, target
-    end
-  end
-
-  def operation_proposal(target, title: "Client Operation")
-    {
-      "title" => title,
-      "work_intent" => "Produce one durable planned Operation without dispatching work.",
-      "success_criteria" => ["The Operation has an exact validated target binding."],
-      "non_goals" => ["Do not dispatch, infer task state, claim skill use, or claim success."],
-      "mode" => "supervised",
-      "selected_targets" => [target.reject { |key, _| key == "display_label" }]
-    }
-  end
-
-  def operation_plan(authoring, proposal)
-    authoring.plan("schema_version" => Flightdeck::OperationAuthoring::PLAN_REQUEST, "proposal" => proposal)
-  end
-
-  def operation_launch_request(plan, proposal)
-    {
-      "schema_version" => Flightdeck::OperationAuthoring::LAUNCH_REQUEST,
-      "operation_id" => plan.fetch("operation_id"),
-      "confirmation" => %w[operation_id plan_id plan_generation plan_digest plan_token].to_h do |field|
-        [field, plan.fetch(field)]
-      end,
-      "proposal" => proposal
-    }
-  end
-
-  def bind_work_adapter(store, created, session_id: "omp-conversation-session-0001", request_id: "adapter-binding-request-0001")
-    store.bind_adapter(
-      "schema_version" => Flightdeck::WorkStore::ADAPTER_BIND_REQUEST,
-      "work_id" => created.dig("work", "work_id"),
-      "resume_generation" => created.dig("resume", "generation"),
-      "adapter" => "omp",
-      "adapter_session_id" => session_id,
-      "binding_request_id" => request_id,
-      "structured_channel" => Flightdeck::WorkStore::STRUCTURED_CHANNEL
-    )
-  end
-
-  def signed_work_observation(store, binding_result, session_id:, observation_id:, observed_at:, recommendation: nil,
-                              observation_type: "managed_recommendation", resume_generation: nil)
-    binding = binding_result.fetch("binding")
-    observation = {
-      "schema_version" => Flightdeck::WorkStore::OBSERVATION_VERSION,
-      "hub_binding_id" => binding.fetch("hub_binding_id"),
-      "work_id" => binding.fetch("work_id"),
-      "binding_id" => binding.fetch("binding_id"),
-      "adapter" => binding.fetch("adapter"),
-      "adapter_session_id" => session_id,
-      "session_generation" => binding.fetch("session_generation"),
-      "resume_generation" => resume_generation || binding.fetch("resume_generation"),
-      "structured_channel" => binding.fetch("structured_channel"),
-      "observation_id" => observation_id,
-      "observation_type" => observation_type,
-      "observed_at" => observed_at
-    }
-    observation["recommendation"] = recommendation if recommendation
-    canonical = store.send(:canonical_json, observation)
-    observation["signature"] = OpenSSL::HMAC.hexdigest("SHA256", binding.fetch("shared_secret"), canonical)
-    observation
-  end
-
-  def propose_work_operation(store, suffix:, project_keys:, observed_at: "2026-08-09T12:00:00Z",
-                             access_mode: "write", execution_mode: "worktree")
-    created = store.create(
-      "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
-      "request_key" => "request-work-lifecycle-#{suffix}",
-      "title_hint" => "Lifecycle #{suffix}"
-    )
-    session_id = "codex-thread-lifecycle-#{suffix}"
-    binding = bind_work_adapter(
-      store, created, session_id: session_id, request_id: "adapter-binding-lifecycle-#{suffix}"
-    )
-    recommendation = {
-      "schema_version" => Flightdeck::WorkStore::RECOMMENDATION_VERSION,
-      "recommendation_id" => "runtime-operation-lifecycle-#{suffix}",
-      "disposition" => "operation",
-      "observed_at" => observed_at,
-      "title" => "Lifecycle #{suffix}",
-      "work_intent" => "Exercise the exact persisted Work to Operation lifecycle.",
-      "target_project_keys" => project_keys,
-      "access_mode" => access_mode,
-      "execution_mode" => execution_mode,
-      "success_criteria" => ["Every exact lifecycle transition is persisted and recoverable."],
-      "non_goals" => ["Do not perform unconfirmed or live dispatch."]
-    }
-    coordinated = store.coordinate(
-      "schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST,
-      "work_id" => created.dig("work", "work_id"),
-      "observation" => signed_work_observation(
-        store, binding, session_id: session_id,
-        observation_id: "adapter-observation-lifecycle-#{suffix}",
-        observed_at: observed_at, recommendation: recommendation
-      )
-    )
-    proposal = coordinated.fetch("proposal")
-    confirmation = Flightdeck::OperationAuthoring::CONFIRMATION_FIELDS.to_h do |field|
-      [field, proposal.fetch(field)]
-    end
-    {
-      "work" => created,
-      "binding" => binding,
-      "coordinated" => coordinated,
-      "proposal" => proposal,
-      "confirmation" => confirmation
-    }
-  end
-
-  def omp_execution_request(store, fixture, suffix: "0001")
-    work_id = fixture.dig("work", "work", "work_id")
-    operation_id = fixture.dig("proposal", "operation_id")
-    store.launch(
-      "schema_version" => Flightdeck::WorkStore::LAUNCH_REQUEST,
-      "work_id" => work_id,
-      "operation_id" => operation_id,
-      "confirmation" => fixture.fetch("confirmation")
-    )
-    dispatch = store.dispatch_plan(
-      "schema_version" => Flightdeck::WorkStore::DISPATCH_PLAN_REQUEST,
-      "work_id" => work_id,
-      "operation_id" => operation_id
-    )
-    request = {
-      "schema_version" => Flightdeck::OperationExecution::PLAN_REQUEST,
-      "adapter" => operation_execution_adapter,
-      "work_id" => work_id,
-      "operation_id" => operation_id,
-      "confirmation" => fixture.fetch("confirmation"),
-      "dispatch_generation" => dispatch.fetch("dispatch_generation"),
-      "dispatch_plan_digest" => dispatch.fetch("dispatch_plan_digest"),
-      "idempotency_key" => "omp-execution-plan-#{suffix}",
-      "agents" => dispatch.fetch("targets").map do |target|
-        {
-          "node_id" => target.fetch("node_id"),
-          "authorized_task" => "Perform only the confirmed bounded Operation scope for #{target.fetch('logical_project_key')}.",
-          "adapter_configuration" => {
-            "adapter_id" => "omp",
-            "schema_version" => "flightdeck.adapter.omp.configuration/v1",
-            "requested_model" => "gpt-5",
-            "reasoning_effort" => "high",
-            "tool_policy" => {
-              "profile" => target.fetch("access_mode") == "write" ? "workspace_write" : "read_only",
-              "allowed_tool_kinds" => %w[filesystem lsp shell subagent],
-              "network_access" => false
-            }
-          }
-        }
-      end
-    }
-    [request, dispatch]
-  end
-
-  def operation_execution_adapter
-    {
-      "id" => "omp",
-      "configuration_schema" => "flightdeck.adapter.omp.configuration/v1",
-      "execution_capability" => Flightdeck::OperationExecution::EXECUTION_CAPABILITY,
-      "observation_capability" => Flightdeck::OperationExecution::OBSERVATION_CAPABILITY
-    }
-  end
-
-  def signed_omp_observation(execution, plan, binding, session_ref:, sequence:, lifecycle:, observed_at:, suffix:)
-    request = {
-      "schema_version" => Flightdeck::OperationExecution::OBSERVE_REQUEST,
-      "adapter" => plan.fetch("adapter"),
-      "work_id" => plan.fetch("work_id"),
-      "operation_id" => plan.fetch("operation_id"),
-      "execution_id" => plan.dig("execution", "execution_id"),
-      "execution_generation" => plan.dig("execution", "execution_generation"),
-      "execution_digest" => plan.dig("execution", "execution_digest"),
-      "agent_id" => binding.fetch("agent_id"),
-      "binding_generation" => binding.dig("binding", "generation"),
-      "observation_id" => "omp-observation-#{suffix}",
-      "sequence" => sequence,
-      "lifecycle" => lifecycle,
-      "action_summary" => lifecycle == "review_ready" ? "Prepared bounded review evidence." : "Working within the confirmed Operation scope.",
-      "tool" => { "kind" => "lsp", "status" => lifecycle == "review_ready" ? "succeeded" : "running" },
-      "subagents" => { "active" => 0, "completed" => 0, "failed" => 0, "blocked" => 0 },
-      "attention" => { "required" => false, "code" => nil },
-      "error_code" => nil,
-      "observed_at" => observed_at,
-      "final_result" => lifecycle == "review_ready" ? {
-        "summary" => "Confirmed Operation work is ready for Flightdeck review.",
-        "evidence_refs" => ["operation-evidence-#{'a' * 48}"]
-      } : nil,
-      "adapter_session_ref" => session_ref,
-      "signature" => ""
-    }
-    payload = request.reject { |key, _| %w[adapter_session_ref signature].include?(key) }
-    request["signature"] = OpenSSL::HMAC.hexdigest("SHA256", session_ref, execution.send(:canonical_json, payload))
-    request
-  end
-
-  def signed_runtime_agent_observation(execution, plan, binding, session_ref:, sequence:, lifecycle:,
-                                       observed_at:, suffix:, runtime_agent_updates:)
-    request = signed_omp_observation(
-      execution, plan, binding, session_ref: session_ref, sequence: sequence,
-      lifecycle: lifecycle, observed_at: observed_at, suffix: suffix
-    )
-    request["schema_version"] = Flightdeck::OperationExecution::OBSERVE_V2_REQUEST
-    request["runtime_agent_updates"] = runtime_agent_updates
-    payload = request.reject { |key, _| %w[adapter_session_ref signature].include?(key) }
-    request["signature"] = OpenSSL::HMAC.hexdigest(
-      "SHA256", session_ref, execution.send(:canonical_json, payload)
-    )
-    request
-  end
-
-  def runtime_agent_update(agent, runtime_ref:, kind:, name:, role:, source:, lifecycle:, event:,
-                           parent_ref: nil, parent_tool_call_ref: nil, session_ref: nil,
-                           activity_summary: "Working inside the authorized Operation scope.",
-                           structured_yield: nil, validations: [], error: nil, terminal_result: nil)
-    {
-      "runtime_agent_ref" => runtime_ref,
-      "parent_runtime_agent_ref" => parent_ref,
-      "parent_tool_call_ref" => parent_tool_call_ref,
-      "runtime_session_ref" => session_ref,
-      "agent_kind" => kind,
-      "reported_name" => name,
-      "reported_role" => role,
-      "source" => source,
-      "project_scope" => {
-        "node_id" => agent.fetch("node_id"),
-        "logical_project_key" => agent.fetch("logical_project_key")
-      },
-      "lifecycle" => lifecycle,
-      "activity_summary" => activity_summary,
-      "event" => event,
-      "structured_yield" => structured_yield,
-      "validations" => validations,
-      "error" => error,
-      "terminal_result" => terminal_result
-    }
-  end
-
-  def runtime_event(id:, sequence:, kind:, status:, summary:, occurred_at:, detail:)
-    {
-      "event_id" => id, "sequence" => sequence, "kind" => kind, "status" => status,
-      "summary" => summary, "occurred_at" => occurred_at, "detail" => detail
-    }
-  end
-
-  def execution_start_report_request(plan, agent, suffix:, retry_generation: nil, retryable: true,
-                                     failure_code: "adapter_start_failed", summary: "Adapter session start failed safely.",
-                                     failed_at: "2026-08-10T16:00:01Z")
-    {
-      "schema_version" => Flightdeck::OperationExecution::START_REPORT_REQUEST,
-      "adapter" => plan.fetch("adapter"),
-      "work_id" => plan.fetch("work_id"),
-      "operation_id" => plan.fetch("operation_id"),
-      "execution_id" => plan.dig("execution", "execution_id"),
-      "execution_generation" => plan.dig("execution", "execution_generation"),
-      "execution_digest" => plan.dig("execution", "execution_digest"),
-      "agent_id" => agent.fetch("agent_id"),
-      "dispatch_generation" => plan.dig("authorization", "dispatch_generation"),
-      "dispatch_id" => agent.dig("native_authorization", "dispatch_id"),
-      "runtime_project_id" => agent.dig("native_authorization", "runtime_project_id"),
-      "retry_generation" => retry_generation,
-      "report_id" => "execution-start-report-#{suffix}",
-      "failure" => {
-        "code" => failure_code,
-        "summary" => summary,
-        "retryable" => retryable,
-        "failed_at" => failed_at
-      }
-    }
-  end
-
-  def execution_retry_bind_request(plan, agent, retry_generation:, session_ref:, suffix:)
-    {
-      "schema_version" => Flightdeck::OperationExecution::RETRY_BIND_REQUEST,
-      "adapter" => plan.fetch("adapter"),
-      "work_id" => plan.fetch("work_id"),
-      "operation_id" => plan.fetch("operation_id"),
-      "execution_id" => plan.dig("execution", "execution_id"),
-      "execution_generation" => plan.dig("execution", "execution_generation"),
-      "execution_digest" => plan.dig("execution", "execution_digest"),
-      "agent_id" => agent.fetch("agent_id"),
-      "dispatch_generation" => plan.dig("authorization", "dispatch_generation"),
-      "dispatch_id" => agent.dig("native_authorization", "dispatch_id"),
-      "runtime_project_id" => agent.dig("native_authorization", "runtime_project_id"),
-      "retry_generation" => retry_generation,
-      "binding_idempotency_key" => "execution-retry-bind-#{suffix}",
-      "adapter_session_ref" => session_ref
-    }
-  end
-
-  def test_work_create_list_open_restart_and_ordinary_runtime_boundary_are_display_safe
-    with_hub do |root, config|
-      clock = -> { Time.iso8601("2026-08-09T12:00:00Z") }
-      sequence = 0
-      random = lambda do |_bytes|
-        sequence += 1
-        format("%024x", sequence)
-      end
-      store = Flightdeck::WorkStore.new(config, clock: clock, random_hex: random)
-      first = store.create(
-        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
-        "request_key" => "request-work-create-0001",
-        "title_hint" => "Explain authentication"
-      )
-      replay = store.create(
-        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
-        "request_key" => "request-work-create-0001",
-        "title_hint" => "Explain authentication"
-      )
-      assert_equal first.dig("work", "work_id"), replay.dig("work", "work_id")
-      assert_equal true, replay["replayed"]
-
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.create(
-          "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
-          "request_key" => "request-work-create-0001",
-          "title_hint" => "Conflicting title"
-        )
-      end
-      assert_equal "duplicate_request_conflict", error.code
-
-      assert_equal true, first.dig("runtime", "available")
-      assert_equal "binding_required", first.dig("resume", "state")
-      refute Dir.exist?(config.mission_dir)
-
-      restarted = Flightdeck::WorkStore.new(Flightdeck::Config.new(root: root), clock: clock)
-      opened = restarted.open(
-        "schema_version" => Flightdeck::WorkStore::OPEN_REQUEST,
-        "work_id" => first.dig("work", "work_id")
-      )
-      assert_equal %w[work_created], opened.fetch("events").map { |event| event.fetch("type") }
-      assert_equal "binding_required", opened.dig("resume", "state")
-      list = restarted.list_page(limit: 1)
-      assert_equal [first.dig("work", "work_id")], list.fetch("works").map { |work| work.fetch("work_id") }
-
-      rendered = JSON.generate(opened)
-      refute_includes rendered, "shared_secret"
-      refute_includes rendered, "hub_binding_id"
-      refute_includes rendered, "session_generation"
-      refute_includes rendered, root
-      refute_includes rendered, "runtime_project_id"
-      refute_includes rendered, "task_id"
-      refute_includes File.read(Dir.glob(File.join(root, "hub/state/work/*.json")).first), "Explain how"
-    end
-  end
-
-  def test_work_list_is_read_only_when_state_is_absent
-    with_hub do |root, config|
-      work_dir = File.join(root, "hub", "state", "work")
-      refute File.exist?(work_dir)
-
-      result = Flightdeck::WorkStore.new(config).list_page(limit: 1)
-
-      assert_equal true, result["ok"]
-      assert_empty result["works"]
-      refute File.exist?(work_dir)
-    end
-  end
-
-  def test_work_operation_recommendation_is_catalog_validated_review_only_and_explicitly_launched
-    with_hub do |root, config|
-      client = initialize_repository(root, "flightdeck-client")
-      plugin = initialize_repository(root, "flightdeck-plugin")
-      config = register_repository(config, "flightdeck-client", client)
-      config = register_repository(config, "flightdeck-plugin", plugin)
-      config = write_declarations(config, [declaration("flightdeck-client", client), declaration("flightdeck-plugin", plugin)])
-      write_project_verifications(config, {
-        "flightdeck-client" => verified_project("flightdeck-client", client),
-        "flightdeck-plugin" => verified_project("flightdeck-plugin", plugin)
-      })
-      clock = -> { Time.iso8601("2026-08-09T12:00:00Z") }
-      store = Flightdeck::WorkStore.new(config, clock: clock, random_hex: ->(_bytes) { "b" * 24 })
-      work = store.create(
-        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
-        "request_key" => "request-work-operation-0001",
-        "title_hint" => "Hub management"
-      )
-      work_id = work.dig("work", "work_id")
-      session_id = "codex-thread-hub-management-0001"
-      binding = bind_work_adapter(store, work, session_id: session_id, request_id: "adapter-binding-hub-management-0001")
-      recommendation = {
-        "schema_version" => Flightdeck::WorkStore::RECOMMENDATION_VERSION,
-        "recommendation_id" => "runtime-operation-recommendation-0001",
-        "disposition" => "operation",
-        "observed_at" => "2026-08-09T12:00:00Z",
-        "title" => "Review Hub management",
-        "work_intent" => "Inspect and validate the declared Hub management contract.",
-        "target_project_keys" => %w[flightdeck-client flightdeck-plugin],
-        "access_mode" => "read_only",
-        "execution_mode" => "worktree",
-        "review_mode" => "independent",
-        "success_criteria" => ["The declared contract is validated in every exact owner."],
-        "non_goals" => ["Do not commit, push, publish, deploy, or communicate externally."]
-      }
-
-      observation = signed_work_observation(
-        store, binding, session_id: session_id, observation_id: "adapter-observation-hub-management-0001",
-        observed_at: recommendation.fetch("observed_at"), recommendation: recommendation
-      )
-      proposal_result = store.coordinate(
-        "schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST,
-        "work_id" => work_id,
-        "observation" => observation
-      )
-      assert_equal "operation_proposal", proposal_result["disposition"]
-      assert_equal "independent", proposal_result.dig("proposal", "review_mode")
-      assert_equal %w[flightdeck-client flightdeck-plugin], proposal_result.dig("proposal", "targets").map { |target| target.fetch("logical_project_key") }
-      refute Dir.exist?(config.mission_dir), "a Work proposal must not launch"
-      rendered = JSON.generate(proposal_result)
-      refute_includes rendered, root
-      refute_includes rendered, "opaque-runtime"
-      refute_includes rendered, "project_path_digest"
-
-      replay = Flightdeck::WorkStore.new(config, clock: clock).coordinate(
-        "schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST,
-        "work_id" => work_id,
-        "observation" => observation
-      )
-      assert_equal true, replay["replayed"]
-      assert_equal proposal_result["proposal"], replay["proposal"]
-
-      unknown = recommendation.merge(
-        "recommendation_id" => "runtime-operation-recommendation-unknown",
-        "target_project_keys" => ["unknown-owner"]
-      )
-      unknown_observation = signed_work_observation(
-        store, binding, session_id: session_id, observation_id: "adapter-observation-unknown-owner-0001",
-        observed_at: unknown.fetch("observed_at"), recommendation: unknown,
-        resume_generation: binding.dig("binding", "resume_generation")
-      )
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.coordinate("schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST, "work_id" => work_id, "observation" => unknown_observation)
-      end
-      assert_equal "unknown_target", error.code
-
-      proposal = proposal_result.fetch("proposal")
-      confirmation = %w[operation_id plan_id plan_generation plan_digest plan_token].to_h { |field| [field, proposal.fetch(field)] }
-      stale = Marshal.load(Marshal.dump(confirmation))
-      stale["plan_digest"] = "0" * 64
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.launch(
-          "schema_version" => Flightdeck::WorkStore::LAUNCH_REQUEST,
-          "work_id" => work_id,
-          "operation_id" => proposal.fetch("operation_id"),
-          "confirmation" => stale
-        )
-      end
-      assert_equal "stale_or_mismatched_plan", error.code
-      refute Dir.exist?(config.mission_dir)
-
-      launched = store.launch(
-        "schema_version" => Flightdeck::WorkStore::LAUNCH_REQUEST,
-        "work_id" => work_id,
-        "operation_id" => proposal.fetch("operation_id"),
-        "confirmation" => confirmation
-      )
-      assert_equal "created", launched.dig("operation", "outcome")
-      assert_equal proposal.fetch("operation_id"), launched.dig("work", "active_operation_id")
-      opened = store.open("schema_version" => Flightdeck::WorkStore::OPEN_REQUEST, "work_id" => work_id)
-      assert_equal "in_progress", opened.dig("operation_links", 0, "result_state")
-      assert_equal opened.fetch("events").map { |event| event.fetch("event_id") }.uniq.length, opened.fetch("events").length
-
-      mismatch = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.guidance(
-          "schema_version" => Flightdeck::WorkStore::GUIDANCE_REQUEST,
-          "work_id" => work_id,
-          "operation_id" => "operation-#{'0' * 24}",
-          "request_key" => "request-guidance-mismatch-0001",
-          "guidance" => "Keep the contract exact."
-        )
-      end
-      assert_equal "operation_identity_conflict", mismatch.code
-
-      guidance_request = {
-        "schema_version" => Flightdeck::WorkStore::GUIDANCE_REQUEST,
-        "work_id" => work_id,
-        "operation_id" => proposal.fetch("operation_id"),
-        "request_key" => "request-guidance-exact-0001",
-        "guidance" => "Keep the contract exact."
-      }
-      guidance = store.guidance(guidance_request)
-      assert_equal proposal.fetch("operation_id"), guidance["operation_id"]
-      assert_equal true, store.guidance(guidance_request)["replayed"]
-      conflicting_guidance = guidance_request.merge("guidance" => "Different guidance.")
-      error = assert_raises(Flightdeck::WorkStore::ContractError) { store.guidance(conflicting_guidance) }
-      assert_equal "duplicate_request_conflict", error.code
-
-      mission = Flightdeck::MissionStore.new(config).snapshot(proposal.fetch("operation_id"))
-      nodes = mission.dig("spec", "graph", "nodes")
-      project_nodes = nodes.reject { |node| node["work_type"] == "review" }
-      reviewer = nodes.find { |node| node["work_type"] == "review" }
-      assert_equal %w[research research review], nodes.map { |node| node.fetch("work_type") }
-      assert_equal project_nodes.map { |node| node.fetch("id") }, reviewer.fetch("dependencies")
-      assert_equal ["operation_result"], reviewer.fetch("accepted_input_types")
-
-      project_nodes.each do |node|
-        Flightdeck::MissionStore.new(config).record_dispatch(
-          slug: proposal.fetch("operation_id"), node_id: node.fetch("id"),
-          runtime_project_id: node.fetch("runtime_project_id"), host_id: node.fetch("host_id"),
-          task_id: "task-#{node.fetch('id')}"
-        )
-      end
-      observations = project_nodes.each_with_index.map do |node, index|
-        mission_observation(config, slug: proposal.fetch("operation_id"), node_id: node.fetch("id"), state: "review_ready", revision: index + 1)
-      end
-      path = write_mission_observations(root, proposal.fetch("operation_id"), observations, name: "work-operation-projects.json")
-      apply_mission_sync(Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)), slug: proposal.fetch("operation_id"), observations_path: path)
-
-      store_after_projects = Flightdeck::MissionStore.new(config)
-      handoff = store_after_projects.next_actions(proposal.fetch("operation_id")).find do |action|
-        action["type"] == "dependency_handoff" && action.dig("payload", "node_id") == reviewer.fetch("id")
-      end
-      refute_nil handoff
-      store_after_projects.prepare_action(slug: proposal.fetch("operation_id"), action_id: handoff.fetch("id"))
-      store_after_projects.record_dispatch(
-        slug: proposal.fetch("operation_id"), node_id: reviewer.fetch("id"),
-        runtime_project_id: reviewer.fetch("runtime_project_id"), host_id: reviewer.fetch("host_id"),
-        task_id: "task-#{reviewer.fetch('id')}"
-      )
-      store_after_projects.acknowledge_action(slug: proposal.fetch("operation_id"), action_id: handoff.fetch("id"))
-      review_observation = mission_observation(
-        config, slug: proposal.fetch("operation_id"), node_id: reviewer.fetch("id"), state: "review_ready", revision: 3
-      )
-      review_path = write_mission_observations(root, proposal.fetch("operation_id"), [review_observation], name: "work-operation-review.json")
-      apply_mission_sync(Flightdeck::MissionSync.new(store_after_projects), slug: proposal.fetch("operation_id"), observations_path: review_path)
-
-      completed = Flightdeck::WorkStore.new(config, clock: clock).open(
-        "schema_version" => Flightdeck::WorkStore::OPEN_REQUEST,
-        "work_id" => work_id
-      )
-      assert_equal "result_ready", completed.dig("work", "status")
-      assert_equal "available", completed.dig("operation_links", 0, "result_state")
-      assert_equal 1, completed.fetch("events").count { |event| event["type"] == "operation_result" }
-      repeated = Flightdeck::WorkStore.new(config, clock: clock).open(
-        "schema_version" => Flightdeck::WorkStore::OPEN_REQUEST,
-        "work_id" => work_id
-      )
-      assert_equal completed.fetch("events"), repeated.fetch("events")
-      error = assert_raises(Flightdeck::WorkStore::ContractError) { store.guidance(guidance_request.merge("request_key" => "request-guidance-terminal-0001")) }
-      assert_equal "terminal_operation", error.code
-    end
-  end
-
-  def test_work_fails_closed_for_adapter_absence_symlink_malformed_identity_and_stale_pagination
-    with_hub do |root, config|
-      compatibility_path = File.join(root, "hub", "compatibility.json")
-      compatibility = JSON.parse(File.read(compatibility_path))
-      compatibility.dig("runtime_capabilities", "adapters", "omp")["available"] = false
-      Flightdeck::Support.atomic_write(compatibility_path, "#{JSON.pretty_generate(compatibility)}\n")
-      store = Flightdeck::WorkStore.new(config, random_hex: ->(_bytes) { "c" * 24 })
-      created = store.create(
-        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
-        "request_key" => "request-adapter-unavailable-0001",
-        "title_hint" => "Unavailable adapter"
-      )
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        bind_work_adapter(store, created, session_id: "codex-thread-unavailable-0001", request_id: "adapter-binding-unavailable-0001")
-      end
-      assert_equal "adapter_unavailable", error.code
-      assert_equal "unavailable", created.dig("resume", "state")
-
-      malformed = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.open("schema_version" => Flightdeck::WorkStore::OPEN_REQUEST, "work_id" => "work-not-valid")
-      end
-      assert_equal "malformed_request", malformed.code
-      unsafe = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.create(
-          "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
-          "request_key" => "request-unsafe-title-0001",
-          "title_hint" => "Open /Users/example/private"
-        )
-      end
-      assert_equal "malformed_request", unsafe.code
-
-      store = Flightdeck::WorkStore.new(config, random_hex: ->(_bytes) { "d" * 24 })
-      store.create(
-        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
-        "request_key" => "request-pagination-change-0001",
-        "title_hint" => "Second Work"
-      )
-      first_page = store.list_page(limit: 1)
-      refute_nil first_page.dig("page", "next_cursor")
-      store = Flightdeck::WorkStore.new(config, random_hex: ->(_bytes) { "e" * 24 })
-      store.create(
-        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
-        "request_key" => "request-pagination-change-0002",
-        "title_hint" => "Third Work"
-      )
-      stale = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.list_page(limit: 1, cursor: first_page.dig("page", "next_cursor"))
-      end
-      assert_equal "stale_cursor", stale.code
-
-      record = File.join(root, "hub/state/work", "#{Digest::SHA256.hexdigest(created.dig('work', 'work_id'))}.json")
-      original = File.read(record)
-      oversized = JSON.parse(original)
-      seed_event = oversized.fetch("events").first
-      oversized["events"] = 201.times.map do |index|
-        seed_event.merge(
-          "event_id" => "work-event-#{format('%024x', index)}",
-          "evidence_id" => Digest::SHA256.hexdigest("evidence-#{index}"),
-          "payload_digest" => Digest::SHA256.hexdigest("payload-#{index}")
-        )
-      end
-      Flightdeck::Support.atomic_write(record, "#{JSON.pretty_generate(oversized)}\n")
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.open("schema_version" => Flightdeck::WorkStore::OPEN_REQUEST, "work_id" => created.dig("work", "work_id"))
-      end
-      assert_equal "work_store_invalid", error.code
-      Flightdeck::Support.atomic_write(record, original)
-
-      backup = "#{record}.backup"
-      FileUtils.mv(record, backup)
-      File.symlink(backup, record)
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.open("schema_version" => Flightdeck::WorkStore::OPEN_REQUEST, "work_id" => created.dig("work", "work_id"))
-      end
-      assert_equal "work_store_invalid", error.code
-    end
-  end
-
-  def test_work_unknown_launch_is_non_retryable_and_recovers_by_exact_open
-    with_hub do |root, config|
-      project = initialize_repository(root, "work-unknown-owner")
-      config = register_repository(config, "work-unknown-owner", project)
-      config = write_declarations(config, [declaration("work-unknown-owner", project)])
-      write_project_verifications(config, "work-unknown-owner" => verified_project("work-unknown-owner", project))
-      clock = -> { Time.iso8601("2026-08-09T12:00:00Z") }
-      store = Flightdeck::WorkStore.new(config, clock: clock, random_hex: ->(_bytes) { "f" * 24 })
-      work = store.create(
-        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
-        "request_key" => "request-work-unknown-0001",
-        "title_hint" => "Unknown launch recovery"
-      )
-      session_id = "codex-thread-unknown-launch-0001"
-      binding = bind_work_adapter(store, work, session_id: session_id, request_id: "adapter-binding-unknown-launch-0001")
-      recommendation = {
-        "schema_version" => Flightdeck::WorkStore::RECOMMENDATION_VERSION,
-        "recommendation_id" => "runtime-work-unknown-0001",
-        "disposition" => "operation",
-        "observed_at" => "2026-08-09T12:00:00Z",
-        "title" => "Recover unknown launch",
-        "work_intent" => "Create one exact durable Operation and recover its launch outcome.",
-        "target_project_keys" => ["work-unknown-owner"],
-        "access_mode" => "write",
-        "execution_mode" => "worktree",
-        "success_criteria" => ["The exact launch outcome is recoverable."],
-        "non_goals" => ["Do not retry an unknown launch."]
-      }
-      coordinated = store.coordinate(
-        "schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST,
-        "work_id" => work.dig("work", "work_id"),
-        "observation" => signed_work_observation(
-          store, binding, session_id: session_id, observation_id: "adapter-observation-unknown-launch-0001",
-          observed_at: recommendation.fetch("observed_at"), recommendation: recommendation
-        )
-      )
-      proposal = coordinated.fetch("proposal")
-      request = {
-        "schema_version" => Flightdeck::WorkStore::LAUNCH_REQUEST,
-        "work_id" => work.dig("work", "work_id"),
-        "operation_id" => proposal.fetch("operation_id"),
-        "confirmation" => %w[operation_id plan_id plan_generation plan_digest plan_token].to_h { |field| [field, proposal.fetch(field)] }
-      }
-      authoring = store.instance_variable_get(:@authoring)
-      original = authoring.method(:write_operation!)
-      authoring.define_singleton_method(:write_operation!) do |record|
-        raise IOError, "synthetic response loss" if record["state"] == "created"
-
-        original.call(record)
-      end
-      error = assert_raises(Flightdeck::WorkStore::ContractError) { store.launch(request) }
-      assert_equal "unknown_outcome", error.code
-      error = assert_raises(Flightdeck::WorkStore::ContractError) { store.launch(request) }
-      assert_equal "unknown_outcome", error.code
-      assert_empty Flightdeck::MissionStore.new(config).list_page.fetch("missions")
-      authoring.define_singleton_method(:write_operation!, original)
-
-      recovered = Flightdeck::WorkStore.new(Flightdeck::Config.new(root: root), clock: clock).open(
-        "schema_version" => Flightdeck::WorkStore::OPEN_REQUEST,
-        "work_id" => work.dig("work", "work_id")
-      )
-      assert_equal "operation_active", recovered.dig("work", "status")
-      assert_equal "created", recovered.dig("operation_links", 0, "authoring_outcome")
-      assert_equal 1, recovered.fetch("events").count { |event| event["type"] == "operation_launch_unknown" }
-    ensure
-      authoring.define_singleton_method(:write_operation!, original) if authoring && original
-    end
-  end
-
-  def test_work_adapter_binding_is_signed_exact_restart_safe_and_fail_closed
-    with_hub do |root, config|
-      sequence = 0
-      random = lambda do |_bytes|
-        sequence += 1
-        format("%024x", sequence)
-      end
-      store = Flightdeck::WorkStore.new(config, clock: -> { Time.iso8601("2026-08-09T13:00:00Z") }, random_hex: random)
-      first = store.create(
-        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
-        "request_key" => "request-adapter-auth-first-0001",
-        "title_hint" => "First adapter Work"
-      )
-      second = store.create(
-        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
-        "request_key" => "request-adapter-auth-second-0001",
-        "title_hint" => "Second adapter Work"
-      )
-
-      unbound = {
-        "schema_version" => Flightdeck::WorkStore::OBSERVATION_VERSION,
-        "hub_binding_id" => "hub-binding-#{'0' * 24}",
-        "work_id" => first.dig("work", "work_id"),
-        "binding_id" => "adapter-binding-#{'0' * 24}",
-        "adapter" => "omp",
-        "adapter_session_id" => "codex-thread-unbound-0001",
-        "session_generation" => "adapter-session-#{'0' * 48}",
-        "resume_generation" => first.dig("resume", "generation"),
-        "structured_channel" => Flightdeck::WorkStore::STRUCTURED_CHANNEL,
-        "observation_id" => "adapter-observation-unbound-0001",
-        "observation_type" => "runtime_disconnected",
-        "observed_at" => "2026-08-09T13:00:00Z",
-        "signature" => "0" * 64
-      }
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.coordinate("schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST, "work_id" => first.dig("work", "work_id"), "observation" => unbound)
-      end
-      assert_equal "binding_absent", error.code
-
-      first_session = "codex-thread-first-0001"
-      first_binding = bind_work_adapter(store, first, session_id: first_session, request_id: "adapter-binding-first-0001")
-      restarted = Flightdeck::WorkStore.new(config, clock: -> { Time.iso8601("2026-08-09T13:00:00Z") })
-      replay = bind_work_adapter(restarted, first, session_id: first_session, request_id: "adapter-binding-first-0001")
-      assert_equal true, replay["replayed"]
-      assert_equal first_binding.fetch("binding"), replay.fetch("binding")
-
-      stale_request = {
-        "schema_version" => Flightdeck::WorkStore::ADAPTER_BIND_REQUEST,
-        "work_id" => first.dig("work", "work_id"),
-        "resume_generation" => first.dig("resume", "generation"),
-        "adapter" => "omp",
-        "adapter_session_id" => "codex-thread-stale-0001",
-        "binding_request_id" => "adapter-binding-stale-0001",
-        "structured_channel" => Flightdeck::WorkStore::STRUCTURED_CHANNEL
-      }
-      error = assert_raises(Flightdeck::WorkStore::ContractError) { restarted.bind_adapter(stale_request) }
-      assert_equal "stale_binding", error.code
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        restarted.bind_adapter(stale_request.merge(
-          "resume_generation" => first_binding.dig("binding", "resume_generation"),
-          "binding_request_id" => "adapter-binding-channel-0001",
-          "structured_channel" => "flightdeck.runtime.unsupported/v1"
-        ))
-      end
-      assert_equal "unsupported_structured_channel", error.code
-
-      second_session = "codex-thread-second-0001"
-      second_binding = bind_work_adapter(store, second, session_id: second_session, request_id: "adapter-binding-second-0001")
-      cross_work = signed_work_observation(
-        store, first_binding, session_id: first_session, observation_id: "adapter-observation-cross-work-0001",
-        observed_at: "2026-08-09T13:00:01Z", observation_type: "runtime_disconnected"
-      )
-      cross_work["work_id"] = second.dig("work", "work_id")
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.coordinate("schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST, "work_id" => second.dig("work", "work_id"), "observation" => cross_work)
-      end
-      assert_equal "binding_mismatch", error.code
-
-      invalid_signature = signed_work_observation(
-        store, first_binding, session_id: first_session, observation_id: "adapter-observation-bad-signature-0001",
-        observed_at: "2026-08-09T13:00:01Z", observation_type: "runtime_disconnected"
-      ).merge("signature" => "0" * 64)
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.coordinate("schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST, "work_id" => first.dig("work", "work_id"), "observation" => invalid_signature)
-      end
-      assert_equal "adapter_authentication_failed", error.code
-
-      stale_observation = signed_work_observation(
-        store, first_binding, session_id: first_session, observation_id: "adapter-observation-stale-0001",
-        observed_at: "2026-08-09T13:00:01Z", observation_type: "runtime_disconnected",
-        resume_generation: "resume-#{'0' * 48}"
-      )
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.coordinate("schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST, "work_id" => first.dig("work", "work_id"), "observation" => stale_observation)
-      end
-      assert_equal "stale_binding", error.code
-
-      malformed_recommendation = {
-        "schema_version" => Flightdeck::WorkStore::RECOMMENDATION_VERSION,
-        "recommendation_id" => "adapter-recommendation-ordinary-0001",
-        "disposition" => "ordinary",
-        "observed_at" => "2026-08-09T13:00:01Z"
-      }
-      malformed_observation = signed_work_observation(
-        store, first_binding, session_id: first_session, observation_id: "adapter-observation-malformed-0001",
-        observed_at: malformed_recommendation.fetch("observed_at"), recommendation: malformed_recommendation
-      )
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.coordinate("schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST, "work_id" => first.dig("work", "work_id"), "observation" => malformed_observation)
-      end
-      assert_equal "malformed_request", error.code
-
-      disconnected = signed_work_observation(
-        store, first_binding, session_id: first_session, observation_id: "adapter-observation-disconnected-0001",
-        observed_at: "2026-08-09T13:00:02Z", observation_type: "runtime_disconnected"
-      )
-      result = store.coordinate(
-        "schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST,
-        "work_id" => first.dig("work", "work_id"),
-        "observation" => disconnected
-      )
-      assert_equal "runtime_unavailable", result["disposition"]
-      assert_equal "disconnected", result.dig("resume", "state")
-      assert_equal true, store.coordinate(
-        "schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST,
-        "work_id" => first.dig("work", "work_id"),
-        "observation" => disconnected
-      )["replayed"]
-
-      after_disconnect = {
-        "schema_version" => Flightdeck::WorkStore::RECOMMENDATION_VERSION,
-        "recommendation_id" => "adapter-recommendation-after-disconnect-0001",
-        "disposition" => "operation",
-        "observed_at" => "2026-08-09T13:00:03Z",
-        "title" => "Do not accept disconnected evidence",
-        "work_intent" => "Prove that a disconnected adapter cannot recommend managed work.",
-        "target_project_keys" => ["unknown-owner"],
-        "access_mode" => "read_only",
-        "execution_mode" => "local",
-        "success_criteria" => ["The disconnected binding fails closed."],
-        "non_goals" => ["Do not create an Operation."]
-      }
-      disconnected_observation = signed_work_observation(
-        store, first_binding, session_id: first_session, observation_id: "adapter-observation-after-disconnect-0001",
-        observed_at: after_disconnect.fetch("observed_at"), recommendation: after_disconnect,
-        resume_generation: result.dig("resume", "generation")
-      )
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.coordinate("schema_version" => Flightdeck::WorkStore::COORDINATE_REQUEST, "work_id" => first.dig("work", "work_id"), "observation" => disconnected_observation)
-      end
-      assert_equal "runtime_disconnected", error.code
-
-      opened = store.open("schema_version" => Flightdeck::WorkStore::OPEN_REQUEST, "work_id" => first.dig("work", "work_id"))
-      rendered = JSON.generate(opened)
-      refute_includes rendered, first_binding.dig("binding", "shared_secret")
-      refute_includes rendered, first_session
-      assert_equal "disconnected", opened.dig("resume", "state")
-      refute_nil second_binding
-      refute_includes File.read(Dir.glob(File.join(root, "hub/state/work/*.json")).first), "codex-thread-first-0001"
-    end
-  end
-
-  def test_work_operation_lifecycle_decline_is_persisted_idempotent_and_dispatch_free
-    with_hub do |root, config|
-      project = initialize_repository(root, "lifecycle-decline-owner")
-      config = register_repository(config, "lifecycle-decline-owner", project)
-      config = write_declarations(config, [declaration("lifecycle-decline-owner", project)])
-      write_project_verifications(config, "lifecycle-decline-owner" => verified_project("lifecycle-decline-owner", project))
-      sequence = 0
-      store = Flightdeck::WorkStore.new(
-        Flightdeck::Config.new(root: root),
-        clock: -> { Time.iso8601("2026-08-09T14:00:00Z") },
-        random_hex: ->(_bytes) { sequence += 1; format("%024x", sequence) }
-      )
-      fixture = propose_work_operation(store, suffix: "decline-0001", project_keys: ["lifecycle-decline-owner"])
-      work_id = fixture.dig("work", "work", "work_id")
-      operation_id = fixture.dig("proposal", "operation_id")
-      confirmation = fixture.fetch("confirmation")
-
-      opened = store.lifecycle_open(
-        "schema_version" => Flightdeck::WorkStore::LIFECYCLE_OPEN_REQUEST,
-        "work_id" => work_id
-      )
-      assert_equal "not_started", opened.dig("proposals", 0, "state")
-      assert_equal({ "confirm_and_launch" => true, "decline" => true }, opened.dig("proposals", 0, "actions"))
-      refute Dir.exist?(config.mission_dir), "proposal recovery must not create an Operation"
-
-      tampered = Marshal.load(Marshal.dump(confirmation))
-      tampered["plan_token"] = "0" * 64
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.decline(
-          "schema_version" => Flightdeck::WorkStore::DECLINE_REQUEST,
-          "work_id" => work_id, "operation_id" => operation_id, "confirmation" => tampered
-        )
-      end
-      assert_equal "stale_or_mismatched_plan", error.code
-
-      foreign = store.create(
-        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
-        "request_key" => "request-work-lifecycle-foreign-0001",
-        "title_hint" => "Foreign lifecycle"
-      )
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.decline(
-          "schema_version" => Flightdeck::WorkStore::DECLINE_REQUEST,
-          "work_id" => foreign.dig("work", "work_id"), "operation_id" => operation_id,
-          "confirmation" => confirmation
-        )
-      end
-      assert_equal "operation_not_found", error.code
-
-      request = {
-        "schema_version" => Flightdeck::WorkStore::DECLINE_REQUEST,
-        "work_id" => work_id, "operation_id" => operation_id, "confirmation" => confirmation
-      }
-      declined = store.decline(request)
-      assert_equal "declined", declined["proposal_state"]
-      assert_equal false, declined["replayed"]
-      assert_equal true, store.decline(request)["replayed"]
-      refute Dir.exist?(config.mission_dir), "decline must not create or dispatch an Operation"
-
-      restarted = Flightdeck::WorkStore.new(Flightdeck::Config.new(root: root))
-      recovered = restarted.lifecycle_open(
-        "schema_version" => Flightdeck::WorkStore::LIFECYCLE_OPEN_REQUEST,
-        "work_id" => work_id
-      )
-      assert_equal "declined", recovered.dig("proposals", 0, "state")
-      assert_equal({ "confirm_and_launch" => false, "decline" => false }, recovered.dig("proposals", 0, "actions"))
-      assert_empty recovered.dig("proposals", 0, "dispatches")
-      ordinary_open = restarted.open(
-        "schema_version" => Flightdeck::WorkStore::OPEN_REQUEST,
-        "work_id" => work_id
-      )
-      assert_equal "open", ordinary_open.dig("work", "status")
-      assert_equal "historical", ordinary_open.dig("operation_links", 0, "relation")
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        restarted.launch(
-          "schema_version" => Flightdeck::WorkStore::LAUNCH_REQUEST,
-          "work_id" => work_id, "operation_id" => operation_id, "confirmation" => confirmation
-        )
-      end
-      assert_equal "proposal_declined", error.code
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        restarted.dispatch_plan(
-          "schema_version" => Flightdeck::WorkStore::DISPATCH_PLAN_REQUEST,
-          "work_id" => work_id, "operation_id" => operation_id
-        )
-      end
-      assert_equal "not_created", error.code
-    end
-  end
-
-  def test_work_operation_lifecycle_launch_dispatch_receipts_partial_failure_and_recovery_are_exact
-    with_hub do |root, config|
-      projects = %w[lifecycle-client lifecycle-plugin].to_h do |key|
-        [key, initialize_repository(root, key)]
-      end
-      projects.each { |key, path| config = register_repository(config, key, path) }
-      config = write_declarations(config, projects.map { |key, path| declaration(key, path) })
-      write_project_verifications(
-        config,
-        projects.to_h { |key, path| [key, verified_project(key, path)] }
-      )
-      projects.each_key do |key|
-        Flightdeck::BridgeStore.new(config).install(repository_id: key, mode: "reference", profile: "application")
-      end
-      config = Flightdeck::Config.new(root: root)
-      sequence = 0
-      clock = -> { Time.iso8601("2026-08-09T15:00:00Z") }
-      store = Flightdeck::WorkStore.new(
-        config, clock: clock,
-        random_hex: ->(_bytes) { sequence += 1; format("%024x", sequence) }
-      )
-      fixture = propose_work_operation(
-        store, suffix: "dispatch-0001", project_keys: projects.keys.sort, access_mode: "read_only"
-      )
-      work_id = fixture.dig("work", "work", "work_id")
-      operation_id = fixture.dig("proposal", "operation_id")
-      launch_request = {
-        "schema_version" => Flightdeck::WorkStore::LAUNCH_REQUEST,
-        "work_id" => work_id, "operation_id" => operation_id,
-        "confirmation" => fixture.fetch("confirmation")
-      }
-      launched = store.launch(launch_request)
-      assert_equal false, launched.dig("operation", "replayed")
-      replayed = Flightdeck::WorkStore.new(config, clock: clock).launch(launch_request)
-      assert_equal true, replayed.dig("operation", "replayed")
-      assert_empty Flightdeck::MissionStore.new(config).list_page.fetch("missions")
-
-      plan = store.dispatch_plan(
-        "schema_version" => Flightdeck::WorkStore::DISPATCH_PLAN_REQUEST,
-        "work_id" => work_id, "operation_id" => operation_id
-      )
-      assert_equal "parallel_independent", plan.dig("policy", "strategy")
-      assert_equal 2, plan.dig("policy", "max_concurrency")
-      assert_equal true, plan.dig("policy", "requires_all_receipts")
-      assert_equal projects.keys.sort, plan.fetch("targets").map { |target| target.fetch("logical_project_key") }.sort
-      plan.fetch("targets").each do |target|
-        route = target.fetch("route")
-        assert_equal target["logical_project_key"], route["project_key"]
-        assert_equal target["runtime_project_id"], route["runtime_project_id"]
-        assert_equal target["project_path_digest"], Digest::SHA256.hexdigest(File.realpath(route.fetch("project_path")))
-        assert_match(/\Ascope-[0-9a-f]{48}\z/, target.fetch("authorization_boundary"))
-        assert_equal "verified", route.dig("bridge_handoff", "status")
-        assert_equal false, route.dig("bridge_handoff", "copy_into_worktree")
-      end
-
-      receipt = lambda do |target, attempt:, outcome:, task_id: nil, pending_client_id: nil, error_code: nil|
-        {
-          "dispatch_id" => target.fetch("dispatch_id"),
-          "node_id" => target.fetch("node_id"),
-          "attempt_key" => attempt,
-          "outcome" => outcome,
-          "runtime_project_id" => target.fetch("runtime_project_id"),
-          "host_id" => target.fetch("host_id"),
-          "project_path_digest" => target.fetch("project_path_digest"),
-          "task_id" => task_id,
-          "pending_client_id" => pending_client_id,
-          "error_code" => error_code
-        }
-      end
-      first_target, second_target = plan.fetch("targets")
-      pending_id = "pending-client-lifecycle-0001"
-      first_report = {
-        "schema_version" => Flightdeck::WorkStore::DISPATCH_REPORT_REQUEST,
-        "work_id" => work_id,
-        "operation_id" => operation_id,
-        "dispatch_generation" => plan.fetch("dispatch_generation"),
-        "dispatch_plan_digest" => plan.fetch("dispatch_plan_digest"),
-        "report_id" => "dispatch-report-lifecycle-0001",
-        "results" => [
-          receipt.call(first_target, attempt: "dispatch-attempt-lifecycle-0001", outcome: "pending", pending_client_id: pending_id),
-          receipt.call(second_target, attempt: "dispatch-attempt-lifecycle-0002", outcome: "failed", error_code: "native-dispatch-failed")
-        ]
-      }
-      original_write = store.method(:write_record!)
-      write_count = 0
-      store.define_singleton_method(:write_record!) do |record|
-        write_count += 1
-        raise IOError, "synthetic Work receipt write interruption" if write_count == 2
-
-        original_write.call(record)
-      end
-      interruption = assert_raises(Flightdeck::WorkStore::ContractError) { store.dispatch_report(first_report) }
-      assert_equal "unknown_outcome", interruption.code
-      store.define_singleton_method(:write_record!, original_write)
-      journal = JSON.parse(File.read(Dir.glob(File.join(root, "hub/state/work/*.json")).find do |path|
-        JSON.parse(File.read(path))["work_id"] == work_id
-      end))
-      assert_equal "applying", journal.dig("dispatch_reports", 0, "state")
-      interrupted_node = Flightdeck::MissionStore.new(config).snapshot(operation_id).dig("spec", "graph", "nodes").find do |node|
-        node["id"] == first_target["node_id"]
-      end
-      assert_equal "dispatch_pending", interrupted_node["observed_state"]
-      competing_report = first_report.merge("report_id" => "dispatch-report-lifecycle-competing")
-      error = assert_raises(Flightdeck::WorkStore::ContractError) { store.dispatch_report(competing_report) }
-      assert_equal "unknown_outcome", error.code
-
-      partial = Flightdeck::WorkStore.new(config, clock: clock).dispatch_report(first_report)
-      assert_equal true, partial["replayed"]
-      assert_equal %w[dispatch_pending failed], partial.fetch("dispatches").map { |item| item.fetch("state") }.sort
-      assert_equal true, store.dispatch_report(first_report)["replayed"]
-      conflicting_report = Marshal.load(Marshal.dump(first_report))
-      conflicting_report.dig("results", 1)["error_code"] = "different-failure"
-      error = assert_raises(Flightdeck::WorkStore::ContractError) { store.dispatch_report(conflicting_report) }
-      assert_equal "duplicate_request_conflict", error.code
-
-      terminal_report = first_report.merge(
-        "report_id" => "dispatch-report-lifecycle-terminal-interruption",
-        "results" => [receipt.call(
-          second_target, attempt: "dispatch-attempt-lifecycle-terminal-interruption",
-          outcome: "failed", error_code: "native-dispatch-still-failed"
-        )]
-      )
-      write_count = 0
-      store.define_singleton_method(:write_record!) do |record|
-        write_count += 1
-        raise IOError, "synthetic Work terminal journal interruption" if write_count == 3
-
-        original_write.call(record)
-      end
-      terminal_interruption = assert_raises(Flightdeck::WorkStore::ContractError) do
-        store.dispatch_report(terminal_report)
-      end
-      assert_equal "unknown_outcome", terminal_interruption.code
-      store.define_singleton_method(:write_record!, original_write)
-      terminal_journal = JSON.parse(File.read(Dir.glob(File.join(root, "hub/state/work/*.json")).find do |path|
-        JSON.parse(File.read(path))["work_id"] == work_id
-      end))
-      assert_equal "applying", terminal_journal.dig("dispatch_reports", 1, "state")
-      assert_equal true, store.dispatch_report(terminal_report)["replayed"]
-
-      recovered_partial = Flightdeck::WorkStore.new(config, clock: clock).lifecycle_open(
-        "schema_version" => Flightdeck::WorkStore::LIFECYCLE_OPEN_REQUEST,
-        "work_id" => work_id
-      )
-      assert_equal %w[dispatch_pending failed], recovered_partial.dig("proposals", 0, "dispatches").map { |item| item.fetch("state") }.sort
-      assert_equal operation_id, recovered_partial.dig("active_operation", "operation_id")
-
-      second_report = first_report.merge(
-        "report_id" => "dispatch-report-lifecycle-0002",
-        "results" => [
-          receipt.call(
-            first_target, attempt: "dispatch-attempt-lifecycle-0003", outcome: "created",
-            task_id: "codex-task-lifecycle-0001", pending_client_id: pending_id
-          ),
-          receipt.call(
-            second_target, attempt: "dispatch-attempt-lifecycle-0004", outcome: "created",
-            task_id: "codex-task-lifecycle-0002"
-          )
-        ]
-      )
-      mission_record_dispatch = Flightdeck::MissionStore.instance_method(:record_dispatch)
-      dispatch_calls = 0
-      Flightdeck::MissionStore.define_method(:record_dispatch) do |**arguments|
-        dispatch_calls += 1
-        raise Flightdeck::ValidationError, "synthetic later receipt rejection" if dispatch_calls == 2
-
-        mission_record_dispatch.bind_call(self, **arguments)
-      end
-      rejected = assert_raises(Flightdeck::WorkStore::ContractError) { store.dispatch_report(second_report) }
-      assert_equal "operation_identity_conflict", rejected.code
-      rejected_journal = JSON.parse(File.read(Dir.glob(File.join(root, "hub/state/work/*.json")).find do |path|
-        JSON.parse(File.read(path))["work_id"] == work_id
-      end))
-      assert_equal "rejected", rejected_journal.dig("dispatch_reports", 2, "state")
-      assert_equal "operation_identity_conflict", rejected_journal.dig("dispatch_reports", 2, "error_code")
-      replay_rejected = assert_raises(Flightdeck::WorkStore::ContractError) { store.dispatch_report(second_report) }
-      assert_equal "operation_identity_conflict", replay_rejected.code
-      Flightdeck::MissionStore.define_method(:record_dispatch, mission_record_dispatch)
-
-      recovery_report = second_report.merge(
-        "report_id" => "dispatch-report-lifecycle-0003",
-        "results" => [receipt.call(
-          second_target, attempt: "dispatch-attempt-lifecycle-0005", outcome: "created",
-          task_id: "codex-task-lifecycle-0002"
-        )]
-      )
-      completed_dispatch = store.dispatch_report(recovery_report)
-      assert_equal %w[running running], completed_dispatch.fetch("dispatches").map { |item| item.fetch("state") }
-      assert_equal true, store.dispatch_report(recovery_report)["replayed"]
-      mission = Flightdeck::MissionStore.new(config).snapshot(operation_id)
-      assert_equal %w[codex-task-lifecycle-0001 codex-task-lifecycle-0002], mission.dig("spec", "graph", "nodes").map { |node| node.fetch("task_id") }.sort
-      operation_projection = Flightdeck::MissionStore.new(config).operation_projection(operation_id)
-      assert_equal operation_id, operation_projection.dig("operation", "operation_id")
-      assert_equal %w[resolved resolved], operation_projection.dig("operation", "children").map { |child| child.dig("session", "state") }
-      safe_lifecycle = JSON.generate(store.lifecycle_open(
-        "schema_version" => Flightdeck::WorkStore::LIFECYCLE_OPEN_REQUEST,
-        "work_id" => work_id
-      ))
-      refute_includes safe_lifecycle, root
-      refute_includes safe_lifecycle, "runtime_project_id"
-      refute_includes safe_lifecycle, "codex-task-lifecycle"
-      persisted_work = File.read(Dir.glob(File.join(root, "hub/state/work/*.json")).find do |path|
-        JSON.parse(File.read(path))["work_id"] == work_id
-      end)
-      refute_includes persisted_work, root
-      refute_includes persisted_work, "opaque-runtime"
-      refute_includes persisted_work, "codex-task-lifecycle"
-      refute_includes persisted_work, pending_id
-
-      foreign_plan = Marshal.load(Marshal.dump(second_report))
-      foreign_plan["report_id"] = "dispatch-report-lifecycle-foreign"
-      foreign_plan["dispatch_plan_digest"] = "0" * 64
-      error = assert_raises(Flightdeck::WorkStore::ContractError) { store.dispatch_report(foreign_plan) }
-      assert_equal "stale_or_mismatched_plan", error.code
-      duplicate_child = second_report.merge(
-        "report_id" => "dispatch-report-lifecycle-duplicate",
-        "results" => [receipt.call(
-          first_target, attempt: "dispatch-attempt-lifecycle-duplicate", outcome: "created",
-          task_id: "codex-task-lifecycle-other"
-        )]
-      )
-      error = assert_raises(Flightdeck::WorkStore::ContractError) { store.dispatch_report(duplicate_child) }
-      assert_equal "conflicting_operation", error.code
-    ensure
-      store.define_singleton_method(:write_record!, original_write) if store && original_write
-      Flightdeck::MissionStore.define_method(:record_dispatch, mission_record_dispatch) if mission_record_dispatch
-    end
-  end
-
-  def test_work_operation_lifecycle_reads_legacy_v1_and_preserves_accepted_binding_generation
-    with_hub do |root, config|
-      project = initialize_repository(root, "lifecycle-legacy-owner")
-      config = register_repository(config, "lifecycle-legacy-owner", project)
-      config = write_declarations(config, [declaration("lifecycle-legacy-owner", project)])
-      write_project_verifications(config, "lifecycle-legacy-owner" => verified_project("lifecycle-legacy-owner", project))
-      sequence = 0
-      store = Flightdeck::WorkStore.new(
-        Flightdeck::Config.new(root: root),
-        random_hex: ->(_bytes) { sequence += 1; format("%024x", sequence) }
-      )
-      fixture = propose_work_operation(store, suffix: "legacy-0001", project_keys: ["lifecycle-legacy-owner"])
-      assert_equal fixture.dig("work", "resume", "generation"), fixture.dig("binding", "binding", "resume_generation")
-      work_id = fixture.dig("work", "work", "work_id")
-      record_path = Dir.glob(File.join(root, "hub/state/work/*.json")).find do |path|
-        JSON.parse(File.read(path))["work_id"] == work_id
-      end
-      record = JSON.parse(File.read(record_path))
-      record["schema_version"] = Flightdeck::WorkStore::LEGACY_RECORD_VERSION
-      record.delete("dispatch_reports")
-      record.fetch("proposals").each do |proposal|
-        next unless proposal["kind"] == "operation_proposal"
-
-        %w[lifecycle_state state_observed_at decline_digest declined_at launched_at dispatches].each { |field| proposal.delete(field) }
-      end
-      File.write(record_path, JSON.generate(record))
-
-      restarted = Flightdeck::WorkStore.new(Flightdeck::Config.new(root: root))
-      recovered = restarted.lifecycle_open(
-        "schema_version" => Flightdeck::WorkStore::LIFECYCLE_OPEN_REQUEST,
-        "work_id" => work_id
-      )
-      assert_equal "not_started", recovered.dig("proposals", 0, "state")
-      declined = restarted.decline(
-        "schema_version" => Flightdeck::WorkStore::DECLINE_REQUEST,
-        "work_id" => work_id,
-        "operation_id" => fixture.dig("proposal", "operation_id"),
-        "confirmation" => fixture.fetch("confirmation")
-      )
-      assert_equal "declined", declined["proposal_state"]
-      migrated = JSON.parse(File.read(record_path))
-      assert_equal Flightdeck::WorkStore::RECORD_VERSION, migrated["schema_version"]
-      assert_equal [], migrated["dispatch_reports"]
-    end
-  end
-
-  def test_operation_execution_is_post_confirmation_exact_once_authenticated_and_renderer_safe
-    with_hub do |root, config|
-      project = initialize_repository(root, "omp-operation-owner")
-      config = register_repository(config, "omp-operation-owner", project)
-      config = write_declarations(config, [declaration("omp-operation-owner", project)])
-      write_project_verifications(config, "omp-operation-owner" => verified_project("omp-operation-owner", project))
-      Flightdeck::BridgeStore.new(config).install(repository_id: "omp-operation-owner", mode: "reference", profile: "application")
-      config = Flightdeck::Config.new(root: root)
-      sequence = 0
-      clock = -> { Time.iso8601("2026-08-10T16:00:00Z") }
-      work = Flightdeck::WorkStore.new(
-        config, clock: clock,
-        random_hex: ->(_bytes) { sequence += 1; format("%024x", sequence) }
-      )
-      fixture = propose_work_operation(
-        work, suffix: "omp-0001", project_keys: ["omp-operation-owner"], access_mode: "read_only"
-      )
-      error = assert_raises(Flightdeck::WorkStore::ContractError) do
-        work.bind_adapter(
-          "schema_version" => Flightdeck::WorkStore::ADAPTER_BIND_REQUEST,
-          "work_id" => fixture.dig("work", "work", "work_id"),
-          "resume_generation" => fixture.dig("binding", "binding", "resume_generation"),
-          "adapter" => "codex",
-          "adapter_session_id" => "codex-conversation-substitution-0001",
-          "binding_request_id" => "codex-conversation-substitution-0001",
-          "structured_channel" => Flightdeck::WorkStore::STRUCTURED_CHANNEL
-        )
-      end
-      assert_equal "adapter_unavailable", error.code
-      request, _dispatch = omp_execution_request(work, fixture, suffix: "omp-0001")
-      execution = Flightdeck::OperationExecution.new(config, clock: clock, random_hex: ->(_bytes) { "1" * 32 })
-
-      plan = execution.plan(request)
-      assert_equal Flightdeck::OperationExecution::EXECUTION_CAPABILITY, plan["capability"]
-      assert_equal({ "conversation" => { "adapter" => "omp" }, "operation_execution" => operation_execution_adapter }, plan["runtime_boundary"])
-      assert_equal operation_execution_adapter, plan["adapter"]
-      assert_equal "confirmed", plan.dig("authorization", "state")
-      assert_equal fixture.dig("confirmation", "plan_digest"), plan.dig("authorization", "plan_digest")
-      assert_equal Digest::SHA256.hexdigest(fixture.dig("confirmation", "plan_token")), plan.dig("authorization", "plan_token_digest")
-      assert_equal "parallel_independent", plan.dig("policy", "strategy")
-      assert_equal true, execution.plan(request)["replayed"]
-      assert_equal plan.dig("execution", "execution_id"), execution.plan(request).dig("execution", "execution_id")
-      assert_match(/\Aflightdeck-agent-[0-9a-f]{48}\z/, plan.dig("agents", 0, "agent_id"))
-      refute plan.dig("agents", 0, "native_authorization").key?("project_path")
-
-      conflict = Marshal.load(Marshal.dump(request))
-      conflict.dig("agents", 0)["authorized_task"] = "Conflicting task content."
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.plan(conflict) }
-      assert_equal "duplicate_request_conflict", error.code
-
-      session_ref = "omp-session-operation-owner-0001"
-      agent = plan.fetch("agents").first
-      bind_request = {
-        "schema_version" => Flightdeck::OperationExecution::BIND_REQUEST,
-        "adapter" => plan.fetch("adapter"),
-        "work_id" => plan.fetch("work_id"),
-        "operation_id" => plan.fetch("operation_id"),
-        "execution_id" => plan.dig("execution", "execution_id"),
-        "execution_generation" => plan.dig("execution", "execution_generation"),
-        "execution_digest" => plan.dig("execution", "execution_digest"),
-        "agent_id" => agent.fetch("agent_id"),
-        "binding_idempotency_key" => "omp-binding-operation-owner-0001",
-        "adapter_session_ref" => session_ref
-      }
-      binding = execution.bind(bind_request)
-      assert_equal "bound", binding.dig("binding", "state")
-      assert_equal true, execution.bind(bind_request)["replayed"]
-      assert_equal "bound", execution.plan(request).dig("agents", 0, "binding_state")
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) do
-        execution.bind(bind_request.merge("adapter_session_ref" => "omp-session-operation-owner-foreign"))
-      end
-      assert_equal "duplicate_request_conflict", error.code
-
-      running = signed_omp_observation(
-        execution, plan, binding, session_ref: session_ref, sequence: 1, lifecycle: "running",
-        observed_at: "2026-08-10T16:00:01Z", suffix: "operation-owner-0001"
-      )
-      observed = execution.observe(running)
-      assert_equal "running", observed.dig("agent", "observation", "lifecycle")
-      assert_equal true, execution.observe(running)["replayed"]
-
-      out_of_order = signed_omp_observation(
-        execution, plan, binding, session_ref: session_ref, sequence: 3, lifecycle: "running",
-        observed_at: "2026-08-10T16:00:02Z", suffix: "operation-owner-0003"
-      )
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.observe(out_of_order) }
-      assert_equal "out_of_order_observation", error.code
-      stale = signed_omp_observation(
-        execution, plan, binding, session_ref: session_ref, sequence: 2, lifecycle: "running",
-        observed_at: "2026-08-10T16:00:02Z", suffix: "operation-owner-stale"
-      )
-      stale["binding_generation"] = "operation-execution-binding-generation-#{'0' * 48}"
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.observe(stale) }
-      assert_equal "stale_binding", error.code
-      bad_signature = signed_omp_observation(
-        execution, plan, binding, session_ref: session_ref, sequence: 2, lifecycle: "running",
-        observed_at: "2026-08-10T16:00:02Z", suffix: "operation-owner-auth"
-      ).merge("signature" => "0" * 64)
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.observe(bad_signature) }
-      assert_equal "authentication_failed", error.code
-
-      final = signed_omp_observation(
-        execution, plan, binding, session_ref: session_ref, sequence: 2, lifecycle: "review_ready",
-        observed_at: "2026-08-10T16:00:02Z", suffix: "operation-owner-0002"
-      )
-      assert_equal "review_ready", execution.observe(final).fetch("execution_state")
-      assert_equal true, execution.observe(final)["replayed"]
-      after_terminal = signed_omp_observation(
-        execution, plan, binding, session_ref: session_ref, sequence: 3, lifecycle: "running",
-        observed_at: "2026-08-10T16:00:03Z", suffix: "operation-owner-after-terminal"
-      )
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.observe(after_terminal) }
-      assert_equal "out_of_order_observation", error.code
-      opened = Flightdeck::OperationExecution.new(config, clock: clock).open(
-        "schema_version" => Flightdeck::OperationExecution::OPEN_REQUEST,
-        "adapter" => plan.fetch("adapter"),
-        "work_id" => plan.fetch("work_id"), "operation_id" => plan.fetch("operation_id"),
-        "execution_id" => plan.dig("execution", "execution_id")
-      )
-      assert_equal 1, opened.dig("progress", "terminal")
-      assert_equal "review_ready", opened.dig("agents", 0, "observation", "lifecycle")
-      open_path = File.join(root, "omp-operation-open.json")
-      File.write(open_path, JSON.generate(
-        "schema_version" => Flightdeck::OperationExecution::OPEN_REQUEST,
-        "adapter" => plan.fetch("adapter"),
-        "work_id" => plan.fetch("work_id"), "operation_id" => plan.fetch("operation_id"),
-        "execution_id" => plan.dig("execution", "execution_id")
-      ))
-      cli_output = StringIO.new
-      assert_equal 0, Flightdeck::CLI.new(root: root, out: cli_output, err: StringIO.new).run(
-        ["operation", "execution-open", "--request", open_path, "--json"]
-      )
-      assert_equal Flightdeck::OperationExecution::OPEN_RESULT, JSON.parse(cli_output.string)["schema_version"]
-      rendered = JSON.generate(opened)
-      refute_includes rendered, session_ref
-      refute_includes rendered, "runtime_project_id"
-      refute_includes rendered, "authorized_task"
-      refute_includes rendered, project
-
-      operation = Flightdeck::MissionStore.new(config).operation_projection(plan.fetch("operation_id"))
-      child = operation.dig("operation", "children", 0)
-      assert_equal "execution_bound", child.dig("session", "state")
-      assert_equal agent.fetch("agent_id"), child.dig("session", "agent_id")
-      assert_equal "review_ready", child.dig("execution", "observation", "lifecycle")
-      assert_equal "review_ready", operation.dig("operation", "state")
-      work_projection = work.open(
-        "schema_version" => Flightdeck::WorkStore::OPEN_REQUEST,
-        "work_id" => plan.fetch("work_id")
-      )
-      assert_equal "result_ready", work_projection.dig("work", "status")
-      assert_equal "available", work_projection.dig("operation_links", 0, "result_state")
-      assert_equal "2026-08-10T16:00:02Z", work_projection.dig("operation_links", 0, "observed_at")
-      snapshot = Flightdeck::OperationsSnapshot.new(config).snapshot
-      snapshot_operation = snapshot.fetch("operations").find { |item| item.dig("detail", "operation_id") == plan.fetch("operation_id") }
-      assert_equal "mission:#{plan.fetch('operation_id')}", snapshot_operation.fetch("operation_id")
-      assert_equal plan.fetch("operation_id"), snapshot_operation.dig("detail", "operation_id")
-      assert_equal "review_ready", snapshot_operation.dig("children", 0, "execution", "observation", "lifecycle")
-
-      mission_store = Flightdeck::MissionStore.new(config, clock: clock)
-      assert_equal "planned", mission_store.snapshot(plan.fetch("operation_id")).dig("status", "state")
-      assert_equal "review_ready", mission_store.status(plan.fetch("operation_id")).dig("status", "state")
-      lifecycle = Flightdeck::OperationLifecycle.new(config, clock: clock)
-      closed = lifecycle.apply(
-        "schema_version" => Flightdeck::OperationLifecycle::REQUEST,
-        "request_id" => "lifecycle-close-runtime-projection-0001",
-        "operation_id" => plan.fetch("operation_id"),
-        "action" => "close"
-      )
-      assert_equal "completed", closed.fetch("state")
-      assert_equal "planned", mission_store.snapshot(plan.fetch("operation_id")).dig("status", "state")
-      assert_equal "review_ready", mission_store.status(plan.fetch("operation_id")).dig("status", "state")
-      completed_snapshot = Flightdeck::OperationsSnapshot.new(config).snapshot
-      completed_operation = completed_snapshot.fetch("operations").find { |item| item.dig("detail", "operation_id") == plan.fetch("operation_id") }
-      assert_equal "completed", completed_operation.fetch("status")
-
-      persisted = File.read(Dir.glob(File.join(root, "hub/state/operation-execution/*.json")).first)
-      refute_includes persisted, session_ref
-      refute_includes persisted, "signature"
-      refute_includes persisted, "system_prompt"
-      refute_includes persisted, project
-      record_path = Dir.glob(File.join(root, "hub/state/operation-execution/*.json")).first
-      tampered_record = JSON.parse(File.read(record_path))
-      tampered_record["operation_id"] = "operation-#{'f' * 24}"
-      tampered_record["record_digest"] = nil
-      tampered_record["record_digest"] = Digest::SHA256.hexdigest(execution.send(:canonical_json, tampered_record))
-      Flightdeck::Support.atomic_write(record_path, "#{JSON.pretty_generate(tampered_record)}\n")
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) do
-        Flightdeck::OperationExecution.new(config).open(
-          "schema_version" => Flightdeck::OperationExecution::OPEN_REQUEST,
-          "adapter" => plan.fetch("adapter"),
-          "work_id" => plan.fetch("work_id"), "operation_id" => plan.fetch("operation_id"),
-          "execution_id" => plan.dig("execution", "execution_id")
-        )
-      end
-      assert_equal "execution_store_invalid", error.code
-    end
-  end
-
-  def test_operation_detail_v2_projects_bound_progress_approval_terminal_and_configured_staleness
-    with_hub do |root, config|
-      project = initialize_repository(root, "operation-detail-live-owner")
-      config = register_repository(config, "operation-detail-live-owner", project)
-      config = write_declarations(config, [declaration("operation-detail-live-owner", project)])
-      write_project_verifications(config, "operation-detail-live-owner" => verified_project("operation-detail-live-owner", project))
-      Flightdeck::BridgeStore.new(config).install(repository_id: "operation-detail-live-owner", mode: "reference", profile: "application")
-      config = Flightdeck::Config.new(root: root)
-      clock = -> { Time.iso8601("2026-08-10T16:00:10Z") }
-      store = Flightdeck::WorkStore.new(config, clock: clock)
-      fixture = propose_work_operation(
-        store, suffix: "detail-live-0001", project_keys: ["operation-detail-live-owner"], access_mode: "read_only"
-      )
-      request, = omp_execution_request(store, fixture, suffix: "detail-live-0001")
-      execution = Flightdeck::OperationExecution.new(config, clock: clock)
-      plan = execution.plan(request)
-      agent = plan.fetch("agents").first
-      session_ref = "omp-session-detail-live-owner-0001"
-      binding = execution.bind(
-        "schema_version" => Flightdeck::OperationExecution::BIND_REQUEST,
-        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
-        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id"),
-        "execution_generation" => plan.dig("execution", "execution_generation"),
-        "execution_digest" => plan.dig("execution", "execution_digest"), "agent_id" => agent.fetch("agent_id"),
-        "binding_idempotency_key" => "detail-live-binding-0001", "adapter_session_ref" => session_ref
-      )
-
-      starting = Flightdeck::OperationDetail.new(config, clock: clock).detail(
-        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST,
-        "operation_id" => plan.fetch("operation_id")
-      ).fetch("operation")
-      assert_equal "starting", starting["status"]
-      assert_equal "bound", starting.dig("agents", 0, "binding", "state")
-
-      approval = signed_omp_observation(
-        execution, plan, binding, session_ref: session_ref, sequence: 1, lifecycle: "needs_approval",
-        observed_at: "2026-08-10T16:00:01Z", suffix: "detail-live-approval"
-      )
-      execution.observe(approval)
-      approval_detail = Flightdeck::OperationDetail.new(config, clock: clock).detail(
-        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST,
-        "operation_id" => plan.fetch("operation_id")
-      ).fetch("operation")
-      assert_equal "approval_required", approval_detail["status"]
-      assert_equal "available", approval_detail.dig("approvals", "availability")
-      assert_equal 1, approval_detail.dig("agents", 0, "last_observation", "sequence")
-
-      terminal = signed_omp_observation(
-        execution, plan, binding, session_ref: session_ref, sequence: 2, lifecycle: "review_ready",
-        observed_at: "2026-08-10T16:00:02Z", suffix: "detail-live-terminal"
-      )
-      execution.observe(terminal)
-      completed = Flightdeck::OperationDetail.new(config, clock: -> { Time.iso8601("2026-08-12T16:00:00Z") }).detail(
-        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST,
-        "operation_id" => plan.fetch("operation_id")
-      ).fetch("operation")
-      assert_equal "review_ready", completed["status"]
-      assert_equal "available", completed.dig("result", "availability")
-      assert_equal ["operation-evidence-#{'a' * 48}"], completed.dig("evidence", "references")
-      assert_equal "review_ready", completed.dig("agents", 0, "last_observation", "lifecycle")
-    end
-
-    with_hub do |root, config|
-      project = initialize_repository(root, "operation-detail-stale-owner")
-      config = register_repository(config, "operation-detail-stale-owner", project)
-      config = write_declarations(config, [declaration("operation-detail-stale-owner", project)])
-      write_project_verifications(config, "operation-detail-stale-owner" => verified_project("operation-detail-stale-owner", project))
-      Flightdeck::BridgeStore.new(config).install(repository_id: "operation-detail-stale-owner", mode: "reference", profile: "application")
-      config = Flightdeck::Config.new(root: root)
-      store = Flightdeck::WorkStore.new(config, clock: -> { Time.iso8601("2026-08-10T16:00:00Z") })
-      fixture = propose_work_operation(
-        store, suffix: "detail-stale-0001", project_keys: ["operation-detail-stale-owner"], access_mode: "read_only"
-      )
-      request, = omp_execution_request(store, fixture, suffix: "detail-stale-0001")
-      execution = Flightdeck::OperationExecution.new(config, clock: -> { Time.iso8601("2026-08-10T16:00:00Z") })
-      plan = execution.plan(request)
-      session_ref = "omp-session-detail-stale-owner-0001"
-      agent = plan.fetch("agents").first
-      binding = execution.bind(
-        "schema_version" => Flightdeck::OperationExecution::BIND_REQUEST,
-        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
-        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id"),
-        "execution_generation" => plan.dig("execution", "execution_generation"),
-        "execution_digest" => plan.dig("execution", "execution_digest"), "agent_id" => agent.fetch("agent_id"),
-        "binding_idempotency_key" => "detail-stale-binding-0001", "adapter_session_ref" => session_ref
-      )
-      execution.observe(signed_omp_observation(
-        execution, plan, binding, session_ref: session_ref, sequence: 1, lifecycle: "running",
-        observed_at: "2026-08-10T16:00:00Z", suffix: "detail-stale-running"
-      ))
-      threshold = Flightdeck::MissionStore.new(config).snapshot(plan.fetch("operation_id")).dig("spec", "budgets", "stale_after_seconds")
-      at_threshold = Time.iso8601("2026-08-10T16:00:00Z") + threshold
-      fresh = Flightdeck::OperationDetail.new(config, clock: -> { at_threshold }).detail(
-        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST, "operation_id" => plan.fetch("operation_id")
-      )
-      assert_equal "working", fresh.dig("operation", "status")
-      stale = Flightdeck::OperationDetail.new(config, clock: -> { at_threshold + 1 }).detail(
-        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST, "operation_id" => plan.fetch("operation_id")
-      )
-      assert_equal "stalled", stale.dig("operation", "status")
-      assert_equal "execution_heartbeat_stale", Flightdeck::MissionStore.new(config, clock: -> { at_threshold + 1 }).status(plan.fetch("operation_id")).dig("spec", "graph", "nodes", 0, "status_code")
-    end
-  end
-
-  def test_operation_runtime_agents_are_dynamic_durable_hierarchical_and_renderer_safe
-    with_hub do |root, config|
-      project = initialize_repository(root, "runtime-agent-owner")
-      config = register_repository(config, "runtime-agent-owner", project)
-      config = write_declarations(config, [declaration("runtime-agent-owner", project)])
-      write_project_verifications(config, "runtime-agent-owner" => verified_project("runtime-agent-owner", project))
-      Flightdeck::BridgeStore.new(config).install(repository_id: "runtime-agent-owner", mode: "reference", profile: "application")
-      config = Flightdeck::Config.new(root: root)
-      store = Flightdeck::WorkStore.new(config, clock: -> { Time.iso8601("2026-08-10T16:00:00Z") })
-      fixture = propose_work_operation(store, suffix: "runtime-agent-0001", project_keys: ["runtime-agent-owner"])
-      request, = omp_execution_request(store, fixture, suffix: "runtime-agent-0001")
-      execution = Flightdeck::OperationExecution.new(config, clock: -> { Time.iso8601("2026-08-10T16:00:03Z") })
-      plan = execution.plan(request)
-      agent = plan.fetch("agents").find { |item| item.dig("native_authorization", "access_mode") == "write" }
-      session_ref = "omp-rpc-session-runtime-agent-0001"
-      binding = execution.bind(
-        "schema_version" => Flightdeck::OperationExecution::BIND_REQUEST,
-        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
-        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id"),
-        "execution_generation" => plan.dig("execution", "execution_generation"),
-        "execution_digest" => plan.dig("execution", "execution_digest"), "agent_id" => agent.fetch("agent_id"),
-        "binding_idempotency_key" => "runtime-agent-binding-0001", "adapter_session_ref" => session_ref
-      )
-
-      root_ref = "omp-runtime-agent-primary-0001"
-      scout_ref = "omp-runtime-agent-scout-0001"
-      reviewer_ref = "omp-runtime-agent-reviewer-0001"
-      unparented_ref = "omp-runtime-agent-unparented-0001"
-      tool_call_ref = "omp-parent-tool-call-scout-0001"
-      updates = [
-        runtime_agent_update(
-          agent, runtime_ref: root_ref, kind: "task_agent", name: "Primary Executor",
-          role: "implementation", source: "project", lifecycle: "running", session_ref: "omp-child-session-primary-0001",
-          event: runtime_event(
-            id: "runtime-event-primary-0001", sequence: 1, kind: "tool", status: "running",
-            summary: "Inspecting symbols through the language server.", occurred_at: "2026-08-10T16:00:01Z",
-            detail: { "name" => "workspace symbols", "kind" => "lsp" }
-          )
-        ),
-        runtime_agent_update(
-          agent, runtime_ref: scout_ref, kind: "subagent", name: "Scout", role: "repository exploration",
-          source: "bundled", lifecycle: "running", parent_tool_call_ref: tool_call_ref,
-          session_ref: "omp-child-session-scout-0001",
-          event: runtime_event(
-            id: "runtime-event-scout-0001", sequence: 1, kind: "file", status: "succeeded",
-            summary: "Read the bounded architecture guide.", occurred_at: "2026-08-10T16:00:01Z",
-            detail: { "path" => "docs/architecture.md", "action" => "read" }
-          )
-        ),
-        runtime_agent_update(
-          agent, runtime_ref: reviewer_ref, kind: "subagent", name: "Independent Reviewer",
-          role: "change review", source: "project", lifecycle: "queued", parent_ref: root_ref,
-          event: nil, activity_summary: nil
-        ),
-        runtime_agent_update(
-          agent, runtime_ref: unparented_ref, kind: "subagent", name: "Unparented Researcher",
-          role: "research", source: "user", lifecycle: "running", event: nil,
-          activity_summary: "Runtime reported the agent without parent evidence."
-        )
-      ]
-      observed = execution.observe(signed_runtime_agent_observation(
-        execution, plan, binding, session_ref: session_ref, sequence: 1, lifecycle: "running",
-        observed_at: "2026-08-10T16:00:01Z", suffix: "runtime-agent-0001", runtime_agent_updates: updates
-      ))
-      assert_equal Flightdeck::OperationExecution::OBSERVE_V2_RESULT, observed.fetch("schema_version")
-      runtime_agents = observed.dig("agent", "runtime_agents")
-      assert_equal ["Independent Reviewer", "Primary Executor", "Scout", "Unparented Researcher"],
-                   runtime_agents.map { |item| item.fetch("reported_name") }.sort
-      projected = runtime_agents.to_h { |item| [item.fetch("reported_name"), item] }
-      primary = projected.fetch("Primary Executor")
-      scout = projected.fetch("Scout")
-      reviewer = projected.fetch("Independent Reviewer")
-      unparented = projected.fetch("Unparented Researcher")
-      assert_match(/\Aoperation-runtime-agent-[0-9a-f]{48}\z/, primary.fetch("agent_id"))
-      assert_equal({ "availability" => "unavailable", "agent_id" => nil, "tool_call_ref_digest" => nil }, primary.fetch("parent"))
-      assert_equal "correlated", scout.dig("parent", "availability")
-      assert_nil scout.dig("parent", "agent_id")
-      assert_equal Digest::SHA256.hexdigest(tool_call_ref), scout.dig("parent", "tool_call_ref_digest")
-      assert_equal "available", reviewer.dig("parent", "availability")
-      assert_equal primary.fetch("agent_id"), reviewer.dig("parent", "agent_id")
-      assert_equal({ "availability" => "unavailable", "agent_id" => nil, "tool_call_ref_digest" => nil }, unparented.fetch("parent"))
-      assert_equal "file", scout.dig("events", 0, "kind")
-      assert_match(/\Aoperation-runtime-event-[0-9a-f]{48}\z/, scout.dig("events", 0, "event_id"))
-      rendered = JSON.generate(observed)
-      [root_ref, scout_ref, reviewer_ref, unparented_ref, tool_call_ref, "omp-child-session"].each do |value|
-        refute_includes rendered, value
-      end
-
-      terminal_update = runtime_agent_update(
-        agent, runtime_ref: scout_ref, kind: "subagent", name: "Scout", role: "repository exploration",
-        source: "bundled", lifecycle: "review_ready", parent_tool_call_ref: tool_call_ref,
-        session_ref: "omp-child-session-scout-0001", activity_summary: "Exploration results yielded to the primary agent.",
-        event: runtime_event(
-          id: "runtime-event-scout-0002", sequence: 2, kind: "skill", status: "succeeded",
-          summary: "Applied authenticated project guidance.", occurred_at: "2026-08-10T16:00:02Z",
-          detail: { "skill_id" => "flightdeck-development", "source" => "plugin" }
-        ),
-        structured_yield: {"summary" => "Located implementation boundaries.", "evidence_refs" => ["operation-evidence-#{'b' * 48}"]},
-        validations: [{
-          "validation_id" => "runtime-validation-scout-0001", "name" => "Boundary review", "status" => "passed",
-          "summary" => "Reported files remain within project scope.", "evidence_refs" => ["operation-evidence-#{'b' * 48}"]
-        }],
-        terminal_result: {
-          "status" => "succeeded", "summary" => "Repository exploration completed.",
-          "evidence_refs" => ["operation-evidence-#{'b' * 48}"]
-        }
-      )
-      execution.observe(signed_runtime_agent_observation(
-        execution, plan, binding, session_ref: session_ref, sequence: 2, lifecycle: "running",
-        observed_at: "2026-08-10T16:00:02Z", suffix: "runtime-agent-0002", runtime_agent_updates: [terminal_update]
-      ))
-
-      restarted = Flightdeck::OperationExecution.new(config)
-      opened = restarted.open(
-        "schema_version" => Flightdeck::OperationExecution::OPEN_V2_REQUEST,
-        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
-        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id")
-      )
-      assert_equal Flightdeck::OperationExecution::OPEN_V2_RESULT, opened.fetch("schema_version")
-      recovered_scout = opened.dig("agents", 0, "runtime_agents").find { |item| item["reported_name"] == "Scout" }
-      recovered_unparented = opened.dig("agents", 0, "runtime_agents").find { |item| item["reported_name"] == "Unparented Researcher" }
-      assert_equal "review_ready", recovered_scout.fetch("lifecycle")
-      assert_equal "flightdeck-development", recovered_scout.dig("events", 1, "detail", "skill_id")
-      assert_equal "passed", recovered_scout.dig("validations", 0, "status")
-      assert_equal "succeeded", recovered_scout.dig("terminal_result", "status")
-      assert_equal({ "availability" => "unavailable", "agent_id" => nil, "tool_call_ref_digest" => nil }, recovered_unparented.fetch("parent"))
-
-      legacy_open = restarted.open(
-        "schema_version" => Flightdeck::OperationExecution::OPEN_REQUEST,
-        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
-        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id")
-      )
-      refute legacy_open.dig("agents", 0).key?("runtime_agents")
-      detail = Flightdeck::OperationDetail.new(config).detail(
-        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST, "operation_id" => plan.fetch("operation_id")
-      )
-      detail_agents = detail.dig("operation", "agents", 0, "runtime_agents")
-      assert_equal 4, detail_agents.length
-      detail_unparented = detail_agents.find { |item| item["reported_name"] == "Unparented Researcher" }
-      assert_equal({ "availability" => "unavailable", "agent_id" => nil, "tool_call_ref_digest" => nil }, detail_unparented.fetch("parent"))
-    end
-  end
-
-  def test_operation_runtime_agent_contract_rejects_foreign_duplicate_inconsistent_and_unauthorized_input
-    with_hub do |root, config|
-      project = initialize_repository(root, "runtime-agent-denied-owner")
-      config = register_repository(config, "runtime-agent-denied-owner", project)
-      config = write_declarations(config, [declaration("runtime-agent-denied-owner", project)])
-      write_project_verifications(config, "runtime-agent-denied-owner" => verified_project("runtime-agent-denied-owner", project))
-      Flightdeck::BridgeStore.new(config).install(repository_id: "runtime-agent-denied-owner", mode: "reference", profile: "application")
-      config = Flightdeck::Config.new(root: root)
-      store = Flightdeck::WorkStore.new(config)
-      fixture = propose_work_operation(store, suffix: "runtime-agent-denied-0001", project_keys: ["runtime-agent-denied-owner"], access_mode: "read_only")
-      request, = omp_execution_request(store, fixture, suffix: "runtime-agent-denied-0001")
-      execution = Flightdeck::OperationExecution.new(config)
-      plan = execution.plan(request)
-      agent = plan.fetch("agents").first
-      session_ref = "omp-rpc-session-runtime-denied-0001"
-      binding = execution.bind(
-        "schema_version" => Flightdeck::OperationExecution::BIND_REQUEST,
-        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
-        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id"),
-        "execution_generation" => plan.dig("execution", "execution_generation"),
-        "execution_digest" => plan.dig("execution", "execution_digest"), "agent_id" => agent.fetch("agent_id"),
-        "binding_idempotency_key" => "runtime-agent-denied-binding-0001", "adapter_session_ref" => session_ref
-      )
-      base = runtime_agent_update(
-        agent, runtime_ref: "omp-runtime-agent-denied-0001", kind: "task_agent", name: "Custom Explorer",
-        role: "research", source: "user", lifecycle: "running",
-        event: runtime_event(
-          id: "runtime-agent-denied-event-0001", sequence: 1, kind: "file", status: "succeeded",
-          summary: "Read one bounded file.", occurred_at: "2026-08-10T16:00:01Z",
-          detail: { "path" => "README.md", "action" => "read" }
-        )
-      )
-      build_request = lambda do |suffix, updates, sequence = 1|
-        signed_runtime_agent_observation(
-          execution, plan, binding, session_ref: session_ref, sequence: sequence, lifecycle: "running",
-          observed_at: format("2026-08-10T16:00:%02dZ", sequence), suffix: suffix, runtime_agent_updates: updates
-        )
-      end
-
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) do
-        execution.observe(build_request.call("runtime-agent-duplicate-0001", [base, Marshal.load(Marshal.dump(base))]))
-      end
-      assert_equal "duplicate_agent_identity", error.code
-
-      foreign_scope = Marshal.load(Marshal.dump(base))
-      foreign_scope.dig("project_scope")["logical_project_key"] = "foreign-project"
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) do
-        execution.observe(build_request.call("runtime-agent-foreign-0001", [foreign_scope]))
-      end
-      assert_equal "foreign_project_scope", error.code
-
-      unauthorized_change = Marshal.load(Marshal.dump(base))
-      unauthorized_change["event"] = runtime_event(
-        id: "runtime-agent-denied-change-0001", sequence: 1, kind: "change", status: "succeeded",
-        summary: "Changed a file.", occurred_at: "2026-08-10T16:00:01Z",
-        detail: { "path" => "README.md", "action" => "modified", "additions" => 1, "deletions" => 0, "evidence_ref" => nil }
-      )
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) do
-        execution.observe(build_request.call("runtime-agent-change-0001", [unauthorized_change]))
-      end
-      assert_equal "authorization_conflict", error.code
-
-      conflicting_parent = Marshal.load(Marshal.dump(base))
-      conflicting_parent["runtime_agent_ref"] = "omp-runtime-agent-child-0001"
-      conflicting_parent["agent_kind"] = "subagent"
-      conflicting_parent["parent_runtime_agent_ref"] = "omp-runtime-agent-parent-0001"
-      conflicting_parent["parent_tool_call_ref"] = "omp-parent-tool-call-child-0001"
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) do
-        execution.observe(build_request.call("runtime-agent-parent-0001", [conflicting_parent]))
-      end
-      assert_equal "inconsistent_agent_identity", error.code
-
-      malformed = Marshal.load(Marshal.dump(base))
-      malformed["raw_reasoning"] = "private reasoning must never be accepted"
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) do
-        execution.observe(build_request.call("runtime-agent-reasoning-0001", [malformed]))
-      end
-      assert_equal "malformed_request", error.code
-
-      execution.observe(build_request.call("runtime-agent-accepted-0001", [base]))
-      drift = Marshal.load(Marshal.dump(base))
-      drift["reported_role"] = "different role"
-      drift["event"] = runtime_event(
-        id: "runtime-agent-denied-event-0002", sequence: 2, kind: "file", status: "succeeded",
-        summary: "Read another bounded file.", occurred_at: "2026-08-10T16:00:02Z",
-        detail: { "path" => "docs/README.md", "action" => "read" }
-      )
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) do
-        execution.observe(build_request.call("runtime-agent-drift-0002", [drift], 2))
-      end
-      assert_equal "inconsistent_agent_identity", error.code
-    end
-  end
-
-  def test_operation_runtime_agent_update_batch_accepts_64_and_rejects_65
-    with_hub do |root, config|
-      project = initialize_repository(root, "runtime-agent-capacity-owner")
-      config = register_repository(config, "runtime-agent-capacity-owner", project)
-      config = write_declarations(config, [declaration("runtime-agent-capacity-owner", project)])
-      write_project_verifications(
-        config,
-        "runtime-agent-capacity-owner" => verified_project("runtime-agent-capacity-owner", project)
-      )
-      Flightdeck::BridgeStore.new(config).install(
-        repository_id: "runtime-agent-capacity-owner", mode: "reference", profile: "application"
-      )
-      config = Flightdeck::Config.new(root: root)
-      store = Flightdeck::WorkStore.new(config)
-      fixture = propose_work_operation(
-        store, suffix: "runtime-agent-capacity-0001", project_keys: ["runtime-agent-capacity-owner"]
-      )
-      request, = omp_execution_request(store, fixture, suffix: "runtime-agent-capacity-0001")
-      execution = Flightdeck::OperationExecution.new(config)
-      plan = execution.plan(request)
-      agent = plan.fetch("agents").first
-      session_ref = "omp-rpc-session-runtime-capacity-0001"
-      binding = execution.bind(
-        "schema_version" => Flightdeck::OperationExecution::BIND_REQUEST,
-        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
-        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id"),
-        "execution_generation" => plan.dig("execution", "execution_generation"),
-        "execution_digest" => plan.dig("execution", "execution_digest"), "agent_id" => agent.fetch("agent_id"),
-        "binding_idempotency_key" => "runtime-agent-capacity-binding-0001", "adapter_session_ref" => session_ref
-      )
-      updates = 65.times.map do |index|
-        runtime_agent_update(
-          agent,
-          runtime_ref: format("omp-runtime-agent-capacity-%04d", index),
-          kind: "task_agent",
-          name: format("Runtime Agent %02d", index),
-          role: "capacity verification",
-          source: "unknown",
-          lifecycle: "queued",
-          event: nil,
-          activity_summary: nil
-        )
-      end
-
-      accepted = execution.observe(signed_runtime_agent_observation(
-        execution, plan, binding, session_ref: session_ref, sequence: 1, lifecycle: "running",
-        observed_at: "2026-08-10T16:00:01Z", suffix: "runtime-agent-capacity-0001",
-        runtime_agent_updates: updates.first(64)
-      ))
-      assert_equal 64, accepted.dig("agent", "runtime_agents").length
-      record_path = Dir.glob(File.join(root, "hub/state/operation-execution/*.json")).fetch(0)
-      accepted_record = File.binread(record_path)
-
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) do
-        execution.observe(signed_runtime_agent_observation(
-          execution, plan, binding, session_ref: session_ref, sequence: 2, lifecycle: "running",
-          observed_at: "2026-08-10T16:00:02Z", suffix: "runtime-agent-capacity-0002",
-          runtime_agent_updates: [updates.fetch(64)]
-        ))
-      end
-      assert_equal "runtime_agent_limit_exceeded", error.code
-      assert_equal accepted_record, File.binread(record_path)
-
-      opened = Flightdeck::OperationExecution.new(config).open(
-        "schema_version" => Flightdeck::OperationExecution::OPEN_V2_REQUEST,
-        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
-        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id")
-      )
-      assert_equal 64, opened.dig("agents", 0, "runtime_agents").length
-      assert_equal 1, opened.dig("agents", 0, "observation", "sequence")
-    end
-  end
-
-  def test_operation_start_failure_is_durable_visible_idempotent_and_retry_bind_recovers
-    with_hub do |root, config|
-      project = initialize_repository(root, "start-recovery-owner")
-      config = register_repository(config, "start-recovery-owner", project)
-      config = write_declarations(config, [declaration("start-recovery-owner", project)])
-      write_project_verifications(config, "start-recovery-owner" => verified_project("start-recovery-owner", project))
-      Flightdeck::BridgeStore.new(config).install(repository_id: "start-recovery-owner", mode: "reference", profile: "application")
-      config = Flightdeck::Config.new(root: root)
-      clock = -> { Time.iso8601("2026-08-10T16:00:02Z") }
-      store = Flightdeck::WorkStore.new(config, clock: clock)
-      fixture = propose_work_operation(store, suffix: "start-recovery-0001", project_keys: ["start-recovery-owner"])
-      request, = omp_execution_request(store, fixture, suffix: "start-recovery-0001")
-      execution = Flightdeck::OperationExecution.new(config, clock: clock)
-      plan = execution.plan(request)
-      agent = plan.fetch("agents").first
-      report_request = execution_start_report_request(plan, agent, suffix: "allowed-0001")
-      reported = execution.start_report(report_request)
-      assert_equal Flightdeck::OperationExecution::START_RECOVERY_CAPABILITY, reported["capability"]
-      assert_equal "retry_authorized", reported.dig("recovery", "state")
-      assert_match(/^operation-execution-retry-generation-[0-9a-f]{48}$/, reported.dig("recovery", "retry_generation"))
-      assert_equal false, reported["replayed"]
-      assert_equal true, execution.start_report(report_request)["replayed"]
-
-      detail = Flightdeck::OperationDetail.new(config, clock: clock).detail(
-        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST,
-        "operation_id" => plan.fetch("operation_id")
-      ).fetch("operation")
-      assert_equal "needs_recovery", detail["status"]
-      assert_equal "needs_recovery", detail.dig("agents", 0, "lifecycle")
-      assert_equal "unbound", detail.dig("agents", 0, "binding", "state")
-      assert_equal "available", detail.dig("agents", 0, "current_activity", "availability")
-      assert_equal "Adapter session start failed safely.", detail.dig("agents", 0, "current_activity", "action_summary")
-      assert_equal "unavailable", detail.dig("agents", 0, "last_observation", "availability")
-      assert_equal "available", detail.dig("approvals", "availability")
-
-      snapshot = Flightdeck::OperationsSnapshot.new(config).snapshot
-      operation = snapshot.fetch("operations").find { |item| item.dig("detail", "operation_id") == plan.fetch("operation_id") }
-      assert_equal "reconcile_required", operation["status"]
-      assert_equal "reconcile_required", operation.dig("children", 0, "status")
-      assert_equal "execution_start_retry_authorized", operation.dig("children", 0, "activity", "code")
-      assert_nil operation.dig("children", 0, "execution", "observation")
-
-      restarted = Flightdeck::OperationExecution.new(Flightdeck::Config.new(root: root), clock: clock)
-      recovered = restarted.start_open(
-        "schema_version" => Flightdeck::OperationExecution::START_OPEN_REQUEST,
-        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
-        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id"),
-        "agent_id" => agent.fetch("agent_id")
-      )
-      assert_equal "retry_authorized", recovered.dig("recovery", "state")
-      assert_equal ["adapter_start_failed"], recovered.fetch("failures").map { |item| item.fetch("failure_code") }
-
-      direct_bind = {
-        "schema_version" => Flightdeck::OperationExecution::BIND_REQUEST,
-        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
-        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id"),
-        "execution_generation" => plan.dig("execution", "execution_generation"),
-        "execution_digest" => plan.dig("execution", "execution_digest"), "agent_id" => agent.fetch("agent_id"),
-        "binding_idempotency_key" => "direct-bind-after-failure-0001",
-        "adapter_session_ref" => "omp-session-direct-after-failure-0001"
-      }
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { restarted.bind(direct_bind) }
-      assert_equal "retry_generation_required", error.code
-
-      retry_request = execution_retry_bind_request(
-        plan, agent, retry_generation: reported.dig("recovery", "retry_generation"),
-        session_ref: "omp-session-start-recovery-0001", suffix: "allowed-0001"
-      )
-      bound = restarted.retry_bind(retry_request)
-      assert_equal "bound", bound.dig("binding", "state")
-      assert_equal true, restarted.retry_bind(retry_request)["replayed"]
-      after = restarted.start_open(
-        "schema_version" => Flightdeck::OperationExecution::START_OPEN_REQUEST,
-        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
-        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id"),
-        "agent_id" => agent.fetch("agent_id")
-      )
-      assert_equal "bound", after.dig("recovery", "state")
-      assert_nil after.dig("recovery", "retry_generation")
-      assert_equal 1, after.fetch("failures").length
-      detail = Flightdeck::OperationDetail.new(config, clock: clock).detail(
-        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST, "operation_id" => plan.fetch("operation_id")
-      )
-      assert_equal "starting", detail.dig("operation", "status")
-      assert_equal "unavailable", detail.dig("operation", "agents", 0, "current_activity", "availability")
-      after_bound_report = execution_start_report_request(
-        plan, agent, suffix: "after-bound-0002",
-        retry_generation: reported.dig("recovery", "retry_generation")
-      )
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { restarted.start_report(after_bound_report) }
-      assert_equal "agent_already_bound", error.code
-    end
-  end
-
-  def test_operation_start_failure_rejects_conflicts_foreign_identity_stale_generation_and_nonretryable_bind
-    with_hub do |root, config|
-      project = initialize_repository(root, "start-denied-owner")
-      config = register_repository(config, "start-denied-owner", project)
-      config = write_declarations(config, [declaration("start-denied-owner", project)])
-      write_project_verifications(config, "start-denied-owner" => verified_project("start-denied-owner", project))
-      Flightdeck::BridgeStore.new(config).install(repository_id: "start-denied-owner", mode: "reference", profile: "application")
-      config = Flightdeck::Config.new(root: root)
-      store = Flightdeck::WorkStore.new(config, clock: -> { Time.iso8601("2026-08-10T16:00:00Z") })
-      fixture = propose_work_operation(store, suffix: "start-denied-0001", project_keys: ["start-denied-owner"])
-      request, = omp_execution_request(store, fixture, suffix: "start-denied-0001")
-      execution = Flightdeck::OperationExecution.new(config, clock: -> { Time.iso8601("2026-08-10T16:00:02Z") })
-      plan = execution.plan(request)
-      agent = plan.fetch("agents").first
-      report = execution_start_report_request(plan, agent, suffix: "denied-0001")
-
-      malformed = Marshal.load(Marshal.dump(report)).merge("unexpected" => true)
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(malformed) }
-      assert_equal "malformed_request", error.code
-      unsafe = Marshal.load(Marshal.dump(report))
-      unsafe.dig("failure")["summary"] = "unsafe\u0000summary"
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(unsafe) }
-      assert_equal "untrusted_payload", error.code
-      oversized = Marshal.load(Marshal.dump(report))
-      oversized.dig("failure")["summary"] = "x" * (Flightdeck::OperationExecution::MAX_ACTION_BYTES + 1)
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(oversized) }
-      assert_equal "untrusted_payload", error.code
-      foreign_runtime = Marshal.load(Marshal.dump(report))
-      foreign_runtime["runtime_project_id"] = "foreign-runtime-project-0001"
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(foreign_runtime) }
-      assert_equal "authorization_conflict", error.code
-      foreign_dispatch = Marshal.load(Marshal.dump(report))
-      foreign_dispatch["dispatch_id"] = "dispatch-#{'f' * 24}"
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(foreign_dispatch) }
-      assert_equal "authorization_conflict", error.code
-      foreign_agent = Marshal.load(Marshal.dump(report))
-      foreign_agent["agent_id"] = "flightdeck-agent-#{'f' * 48}"
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(foreign_agent) }
-      assert_equal "operation_identity_conflict", error.code
-      stale_execution = Marshal.load(Marshal.dump(report))
-      stale_execution["execution_generation"] = "operation-execution-generation-#{'f' * 48}"
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(stale_execution) }
-      assert_equal "operation_identity_conflict", error.code
-      foreign_operation = Marshal.load(Marshal.dump(report))
-      foreign_operation["operation_id"] = "operation-#{'f' * 24}"
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(foreign_operation) }
-      assert_equal "not_created", error.code
-
-      accepted = execution.start_report(report)
-      conflict = Marshal.load(Marshal.dump(report))
-      conflict.dig("failure")["summary"] = "Conflicting retry report."
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(conflict) }
-      assert_equal "duplicate_request_conflict", error.code
-      stale = execution_start_report_request(
-        plan, agent, suffix: "denied-stale-0002",
-        retry_generation: "operation-execution-retry-generation-#{'0' * 48}"
-      )
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(stale) }
-      assert_equal "stale_retry_generation", error.code
-      foreign_retry = execution_retry_bind_request(
-        plan, agent, retry_generation: accepted.dig("recovery", "retry_generation"),
-        session_ref: "omp-session-start-denied-0001", suffix: "denied-0001"
-      )
-      foreign_retry["runtime_project_id"] = "foreign-runtime-project-0002"
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.retry_bind(foreign_retry) }
-      assert_equal "authorization_conflict", error.code
-    end
-
-    with_hub do |root, config|
-      project = initialize_repository(root, "start-terminal-owner")
-      config = register_repository(config, "start-terminal-owner", project)
-      config = write_declarations(config, [declaration("start-terminal-owner", project)])
-      write_project_verifications(config, "start-terminal-owner" => verified_project("start-terminal-owner", project))
-      Flightdeck::BridgeStore.new(config).install(repository_id: "start-terminal-owner", mode: "reference", profile: "application")
-      config = Flightdeck::Config.new(root: root)
-      store = Flightdeck::WorkStore.new(config)
-      fixture = propose_work_operation(store, suffix: "start-terminal-0001", project_keys: ["start-terminal-owner"])
-      request, = omp_execution_request(store, fixture, suffix: "start-terminal-0001")
-      execution = Flightdeck::OperationExecution.new(config)
-      plan = execution.plan(request)
-      agent = plan.fetch("agents").first
-      failed = execution.start_report(execution_start_report_request(
-        plan, agent, suffix: "terminal-0001", retryable: false,
-        failure_code: "adapter_unavailable", summary: "Declared adapter could not start."
-      ))
-      assert_equal "failed", failed.dig("recovery", "state")
-      assert_nil failed.dig("recovery", "retry_generation")
-      detail = Flightdeck::OperationDetail.new(config).detail(
-        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST, "operation_id" => plan.fetch("operation_id")
-      )
-      assert_equal "failed", detail.dig("operation", "status")
-      retry_request = execution_retry_bind_request(
-        plan, agent, retry_generation: "operation-execution-retry-generation-#{'a' * 48}",
-        session_ref: "omp-session-terminal-denied-0001", suffix: "terminal-denied-0001"
-      )
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.retry_bind(retry_request) }
-      assert_equal "retry_not_authorized", error.code
-    end
-  end
-
-  def test_operation_start_failure_history_is_bounded_and_legacy_record_upgrades_on_authorized_write
-    with_hub do |root, config|
-      project = initialize_repository(root, "start-bounded-owner")
-      config = register_repository(config, "start-bounded-owner", project)
-      config = write_declarations(config, [declaration("start-bounded-owner", project)])
-      write_project_verifications(config, "start-bounded-owner" => verified_project("start-bounded-owner", project))
-      Flightdeck::BridgeStore.new(config).install(repository_id: "start-bounded-owner", mode: "reference", profile: "application")
-      config = Flightdeck::Config.new(root: root)
-      store = Flightdeck::WorkStore.new(config)
-      fixture = propose_work_operation(store, suffix: "start-bounded-0001", project_keys: ["start-bounded-owner"])
-      request, = omp_execution_request(store, fixture, suffix: "start-bounded-0001")
-      execution = Flightdeck::OperationExecution.new(config)
-      plan = execution.plan(request)
-      agent = plan.fetch("agents").first
-
-      generation = nil
-      Flightdeck::OperationExecution::MAX_START_FAILURES.times do |index|
-        result = execution.start_report(execution_start_report_request(
-          plan, agent, suffix: format("bounded-%04d", index + 1), retry_generation: generation,
-          failed_at: format("2026-08-10T16:00:%02dZ", index + 1)
-        ))
-        generation = result.dig("recovery", "retry_generation")
-      end
-      overflow = execution_start_report_request(
-        plan, agent, suffix: "bounded-overflow", retry_generation: generation,
-        failed_at: "2026-08-10T16:00:09Z"
-      )
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.start_report(overflow) }
-      assert_equal "start_failure_limit_exceeded", error.code
-      opened = execution.start_open(
-        "schema_version" => Flightdeck::OperationExecution::START_OPEN_REQUEST,
-        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
-        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id"),
-        "agent_id" => agent.fetch("agent_id")
-      )
-      assert_equal Flightdeck::OperationExecution::MAX_START_FAILURES, opened.fetch("failures").length
-    end
-
-    with_hub do |root, config|
-      project = initialize_repository(root, "start-legacy-owner")
-      config = register_repository(config, "start-legacy-owner", project)
-      config = write_declarations(config, [declaration("start-legacy-owner", project)])
-      write_project_verifications(config, "start-legacy-owner" => verified_project("start-legacy-owner", project))
-      Flightdeck::BridgeStore.new(config).install(repository_id: "start-legacy-owner", mode: "reference", profile: "application")
-      config = Flightdeck::Config.new(root: root)
-      store = Flightdeck::WorkStore.new(config)
-      fixture = propose_work_operation(store, suffix: "start-legacy-0001", project_keys: ["start-legacy-owner"])
-      request, = omp_execution_request(store, fixture, suffix: "start-legacy-0001")
-      execution = Flightdeck::OperationExecution.new(config)
-      plan = execution.plan(request)
-      record_path = Dir.glob(File.join(root, "hub/state/operation-execution/*.json")).first
-      record = JSON.parse(File.read(record_path))
-      record["schema_version"] = Flightdeck::OperationExecution::LEGACY_RECORD_VERSION
-      record.fetch("agents").each do |item|
-        item.delete("start")
-        item.delete("runtime_agents")
-      end
-      record["record_digest"] = nil
-      record["record_digest"] = Digest::SHA256.hexdigest(execution.send(:canonical_json, record))
-      Flightdeck::Support.atomic_write(record_path, "#{JSON.pretty_generate(record)}\n")
-
-      agent = plan.fetch("agents").first
-      initial = execution.start_open(
-        "schema_version" => Flightdeck::OperationExecution::START_OPEN_REQUEST,
-        "adapter" => plan.fetch("adapter"), "work_id" => plan.fetch("work_id"),
-        "operation_id" => plan.fetch("operation_id"), "execution_id" => plan.dig("execution", "execution_id"),
-        "agent_id" => agent.fetch("agent_id")
-      )
-      assert_equal "initial", initial.dig("recovery", "state")
-      execution.start_report(execution_start_report_request(plan, agent, suffix: "legacy-upgrade-0001"))
-      migrated = JSON.parse(File.read(record_path))
-      assert_equal Flightdeck::OperationExecution::RECORD_VERSION, migrated["schema_version"]
-      assert_equal "retry_authorized", migrated.dig("agents", 0, "start", "state")
-      assert_equal 1, migrated.dig("agents", 0, "start", "failures").length
-    end
-  end
-
-  def test_operation_execution_rejects_proposal_only_declined_tampered_foreign_and_untrusted_input
-    with_hub do |root, config|
-      project = initialize_repository(root, "omp-denied-owner")
-      config = register_repository(config, "omp-denied-owner", project)
-      config = write_declarations(config, [declaration("omp-denied-owner", project)])
-      write_project_verifications(config, "omp-denied-owner" => verified_project("omp-denied-owner", project))
-      Flightdeck::BridgeStore.new(config).install(repository_id: "omp-denied-owner", mode: "reference", profile: "application")
-      config = Flightdeck::Config.new(root: root)
-      work = Flightdeck::WorkStore.new(config, random_hex: ->(_bytes) { "2" * 24 })
-      proposed = propose_work_operation(work, suffix: "omp-denied-0001", project_keys: ["omp-denied-owner"])
-      fake = {
-        "schema_version" => Flightdeck::OperationExecution::PLAN_REQUEST,
-        "adapter" => operation_execution_adapter,
-        "work_id" => proposed.dig("work", "work", "work_id"),
-        "operation_id" => proposed.dig("proposal", "operation_id"),
-        "confirmation" => proposed.fetch("confirmation"),
-        "dispatch_generation" => "dispatch-generation-#{'0' * 48}",
-        "dispatch_plan_digest" => "0" * 64,
-        "idempotency_key" => "omp-execution-denied-0001",
-        "agents" => []
-      }
-      execution = Flightdeck::OperationExecution.new(config)
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.plan(fake) }
-      assert_equal "proposal_not_launched", error.code
-      work.decline(
-        "schema_version" => Flightdeck::WorkStore::DECLINE_REQUEST,
-        "work_id" => fake.fetch("work_id"), "operation_id" => fake.fetch("operation_id"),
-        "confirmation" => fake.fetch("confirmation")
-      )
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.plan(fake) }
-      assert_equal "proposal_not_launched", error.code
-    end
-
-    with_hub do |root, config|
-      project = initialize_repository(root, "omp-tamper-owner")
-      config = register_repository(config, "omp-tamper-owner", project)
-      config = write_declarations(config, [declaration("omp-tamper-owner", project)])
-      write_project_verifications(config, "omp-tamper-owner" => verified_project("omp-tamper-owner", project))
-      Flightdeck::BridgeStore.new(config).install(repository_id: "omp-tamper-owner", mode: "reference", profile: "application")
-      config = Flightdeck::Config.new(root: root)
-      work = Flightdeck::WorkStore.new(config, random_hex: ->(_bytes) { "3" * 24 })
-      fixture = propose_work_operation(work, suffix: "omp-tamper-0001", project_keys: ["omp-tamper-owner"])
-      request, = omp_execution_request(work, fixture, suffix: "omp-tamper-0001")
-      execution = Flightdeck::OperationExecution.new(config)
-      tampered = Marshal.load(Marshal.dump(request))
-      tampered.fetch("confirmation")["plan_digest"] = "f" * 64
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.plan(tampered) }
-      assert_equal "stale_or_tampered_confirmation", error.code
-      foreign = Marshal.load(Marshal.dump(request))
-      foreign["work_id"] = "work-#{'f' * 24}"
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.plan(foreign) }
-      assert_equal "operation_identity_conflict", error.code
-      untrusted = Marshal.load(Marshal.dump(request))
-      untrusted.dig("agents", 0)["authorized_task"] = "Bearer #{'a' * 32}"
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.plan(untrusted) }
-      assert_equal "untrusted_payload", error.code
-      oversized = Marshal.load(Marshal.dump(request))
-      oversized.dig("agents", 0)["authorized_task"] = "x" * (Flightdeck::OperationExecution::MAX_TASK_BYTES + 1)
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.plan(oversized) }
-      assert_equal "untrusted_payload", error.code
-      malformed = Marshal.load(Marshal.dump(request))
-      malformed["unexpected"] = true
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) { execution.plan(malformed) }
-      assert_equal "malformed_request", error.code
-      assert_empty Dir.glob(File.join(root, "hub/state/operation-execution/*.json"))
-    end
-  end
-
-  def test_omp_operation_contract_schemas_cli_and_runtime_compatibility_are_closed
-    compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
-    assert_equal "1.13.0", compatibility["template_version"]
-    assert_equal "omp", compatibility.dig("runtime_capabilities", "conversation", "adapter")
-    assert_equal "omp", compatibility.dig("runtime_capabilities", "operation_execution", "selected_adapter")
-    assert_equal true, compatibility.dig("runtime_capabilities", "adapters", "omp", "available")
-    assert_equal false, compatibility.dig("runtime_capabilities", "adapters", "codex_app_server", "available")
-    execution_types = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "operation-execution-types.schema.json")))
-    adapter_projections = execution_types.dig("$defs", "runtimeCapabilitiesProjection", "properties", "adapters", "properties")
-    assert_equal "flightdeck.adapter.omp.configuration/v1",
-                 adapter_projections.dig("omp", "allOf", 1, "properties", "configuration_schema", "const")
-    assert_equal "flightdeck.adapter.codex-app-server.configuration/v1",
-                 adapter_projections.dig("codex_app_server", "allOf", 1, "properties", "configuration_schema", "const")
-    execution = compatibility.dig("capabilities", Flightdeck::OperationExecution::EXECUTION_CAPABILITY)
-    observation = compatibility.dig("capabilities", Flightdeck::OperationExecution::OBSERVATION_CAPABILITY)
-    start_recovery = compatibility.dig("capabilities", Flightdeck::OperationExecution::START_RECOVERY_CAPABILITY)
-    agent_telemetry = compatibility.dig("capabilities", Flightdeck::OperationExecution::AGENT_TELEMETRY_CAPABILITY)
-    assert_equal true, execution["declaration_required"]
-    assert_equal true, observation["declaration_required"]
-    assert_equal true, start_recovery["declaration_required"]
-    assert_equal true, agent_telemetry["declaration_required"]
-    observe_v2_schema = JSON.parse(File.read(File.join(
-      TEMPLATE_ROOT, "hub", "schemas", "operation-execution-observe-v2-request.schema.json"
-    )))
-    assert_equal 64, observe_v2_schema.dig("properties", "runtime_agent_updates", "maxItems")
-    observe_v2_result_schema = JSON.parse(File.read(File.join(
-      TEMPLATE_ROOT, "hub", "schemas", "operation-execution-observe-v2-result.schema.json"
-    )))
-    assert_equal 64, observe_v2_result_schema.dig("$defs", "safeAgent", "properties", "runtime_agents", "maxItems")
-    detail_v2_schema = JSON.parse(File.read(File.join(
-      TEMPLATE_ROOT, "hub", "schemas", "operation-detail-v2-result.schema.json"
-    )))
-    assert_equal 64, detail_v2_schema.dig("$defs", "agent", "properties", "runtime_agents", "maxItems")
-    assert_equal 64, Flightdeck::OperationExecution::MAX_RUNTIME_AGENTS
-    agent_telemetry_schema = JSON.parse(File.read(File.join(
-      TEMPLATE_ROOT, "hub", "schemas", "operation-agent-telemetry-types.schema.json"
-    )))
-    assert_equal "unavailable", agent_telemetry_schema.dig(
-      "$defs", "parentProjection", "oneOf", 2, "properties", "availability", "const"
-    )
-    assert_equal({ "mode" => "stop_and_plan_migration" }, execution["fallback"])
-    assert_equal({ "mode" => "stop_and_plan_migration" }, observation["fallback"])
-    assert_equal({ "mode" => "stop_and_plan_migration" }, start_recovery["fallback"])
-    assert_equal({ "mode" => "stop_and_plan_migration" }, agent_telemetry["fallback"])
-    Flightdeck::OperationExecution::SCHEMAS.each do |name|
-      schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", name)))
-      assert_equal "https://flightdeck.dev/schemas/#{name}", schema["$id"]
-      assert_includes execution["managed_paths"] + observation["managed_paths"] + start_recovery["managed_paths"] + agent_telemetry["managed_paths"], "hub/schemas/#{name}"
-    end
-    help = StringIO.new
-    assert_equal 0, Flightdeck::CLI.new(root: TEMPLATE_ROOT, out: help, err: StringIO.new).run(["help"])
-    %w[execution-plan execution-bind execution-start-report execution-start-open execution-retry-bind execution-observe execution-open].each do |name|
-      assert_includes help.string, "bin/flightdeck operation #{name} --request FILE"
-    end
-  end
-
-  def test_operation_execution_rejects_unsupported_unavailable_and_mismatched_adapters
-    with_hub do |root, config|
-      compatibility_path = File.join(root, "hub", "compatibility.json")
-      compatibility = JSON.parse(File.read(compatibility_path))
-      compatibility.dig("runtime_capabilities", "operation_execution")["selected_adapter"] = "codex_app_server"
-      Flightdeck::Support.atomic_write(compatibility_path, "#{JSON.pretty_generate(compatibility)}\n")
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) do
-        Flightdeck::OperationExecution.new(config).plan({})
-      end
-      assert_equal "adapter_unavailable", error.code
-    end
-
+  def test_mission_unit_limits_cover_small_and_large_graphs
     with_hub do |_root, config|
-      execution = Flightdeck::OperationExecution.new(config)
-      unsupported = operation_execution_adapter.merge("id" => "foreign_runtime")
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) do
-        execution.send(:verify_adapter!, unsupported, operation_execution_adapter)
+      [1, 8, 9, 16, 50].each do |count|
+        slug = "units-#{count}"
+        target_count = count == 50 ? 51 : count
+        targets = target_count.times.map { |index| mission_authorized_target(config, node_id: "unit-#{index}") }
+        create_mission(config, slug: slug, authorized_targets: targets)
+        count.times do |index|
+          add_mission_node(config, slug: slug, node_id: "unit-#{index}")
+        end
+        assert_equal count, Flightdeck::MissionStore.new(config).snapshot(slug).dig("spec", "graph", "nodes").length
       end
-      assert_equal "unsupported_adapter", error.code
-
-      mismatched = operation_execution_adapter.merge(
-        "id" => "codex_app_server",
-        "configuration_schema" => "flightdeck.adapter.codex-app-server.configuration/v1"
-      )
-      error = assert_raises(Flightdeck::OperationExecution::ContractError) do
-        execution.send(:verify_adapter!, mismatched, operation_execution_adapter)
+      error = assert_raises(Flightdeck::ValidationError) do
+        add_mission_node(config, slug: "units-50", node_id: "unit-50")
       end
-      assert_equal "authorization_conflict", error.code
+      assert_includes error.message, "unit budget exhausted"
     end
   end
 
-  def test_operation_execution_uses_available_codex_app_server_through_the_same_lifecycle
+  def test_mission_graph_rejects_cycle_and_unordered_same_checkout_writers
     with_hub do |root, config|
-      project = initialize_repository(root, "codex-operation-owner")
-      config = register_repository(config, "codex-operation-owner", project)
-      config = write_declarations(config, [declaration("codex-operation-owner", project)])
-      write_project_verifications(config, "codex-operation-owner" => verified_project("codex-operation-owner", project))
-      Flightdeck::BridgeStore.new(config).install(repository_id: "codex-operation-owner", mode: "reference", profile: "application")
-      store = Flightdeck::WorkStore.new(config)
-      fixture = propose_work_operation(store, suffix: "codex-adapter-0001", project_keys: ["codex-operation-owner"])
-      request, = omp_execution_request(store, fixture, suffix: "codex-adapter-0001")
+      checkout = File.join(root, "development", "shared")
+      writer_targets = %w[writer-a writer-b].map do |id|
+        mission_authorized_target(config, node_id: id, project_path: checkout, access_mode: "write")
+      end
+      create_mission(config, slug: "graph-safety", authorized_targets: writer_targets)
+      add_mission_node(
+        config, slug: "graph-safety", node_id: "writer-a", access_mode: "write", project_path: checkout
+      )
+      error = assert_raises(Flightdeck::ValidationError) do
+        add_mission_node(
+          config, slug: "graph-safety", node_id: "writer-b", access_mode: "write", project_path: checkout
+        )
+      end
+      assert_includes error.message, "concurrent local writer conflict"
+      add_mission_node(
+        config, slug: "graph-safety", node_id: "writer-b", access_mode: "write",
+        project_path: checkout, dependencies: ["writer-a"], accepted: ["validation_result"]
+      )
 
-      compatibility_path = File.join(root, "hub", "compatibility.json")
-      compatibility = JSON.parse(File.read(compatibility_path))
-      runtime = compatibility.fetch("runtime_capabilities")
-      runtime.fetch("operation_execution")["selected_adapter"] = "codex_app_server"
-      runtime.dig("adapters", "omp")["available"] = false
-      runtime.dig("adapters", "omp")["structured_channels"] = []
-      runtime.dig("adapters", "codex_app_server")["available"] = true
-      runtime.dig("adapters", "codex_app_server")["structured_channels"] = [
-        "flightdeck.runtime.codex-app-server-operation-observation/v1"
+      mission = Flightdeck::MissionStore.new(config).snapshot("graph-safety")
+      mission.dig("spec", "graph", "nodes").first["dependencies"] = ["writer-b"]
+      Flightdeck::Support.atomic_yaml(
+        File.join(config.mission_dir, "graph-safety", "mission.yaml"), mission
+      )
+      errors = Flightdeck::MissionStore.new(config).validate("graph-safety")
+      assert errors.any? { |message| message.include?("dependency cycle") }
+    end
+  end
+
+  def test_mission_sync_states_required_optional_fan_in_and_explicit_close
+    with_hub do |root, config|
+      create_mission(
+        config, slug: "fan-in", authorized_targets: %w[required-unit optional-unit].map do |id|
+          mission_authorized_target(config, node_id: id)
+        end
+      )
+      add_mission_node(config, slug: "fan-in", node_id: "required-unit")
+      add_mission_node(config, slug: "fan-in", node_id: "optional-unit", required: false)
+      dispatch_mission_node(config, slug: "fan-in", node_id: "required-unit")
+      dispatch_mission_node(config, slug: "fan-in", node_id: "optional-unit")
+      observations = [
+        mission_observation(config, slug: "fan-in", node_id: "required-unit", state: "review_ready", revision: 1),
+        mission_observation(config, slug: "fan-in", node_id: "optional-unit", state: "blocked", revision: 1)
       ]
-      Flightdeck::Support.atomic_write(compatibility_path, "#{JSON.pretty_generate(compatibility)}\n")
-
-      adapter = {
-        "id" => "codex_app_server",
-        "configuration_schema" => "flightdeck.adapter.codex-app-server.configuration/v1",
-        "execution_capability" => Flightdeck::OperationExecution::EXECUTION_CAPABILITY,
-        "observation_capability" => Flightdeck::OperationExecution::OBSERVATION_CAPABILITY
-      }
-      request["adapter"] = adapter
-      request["idempotency_key"] = "codex-execution-plan-0001"
-      request.fetch("agents").each do |agent|
-        agent.dig("adapter_configuration")["adapter_id"] = "codex_app_server"
-        agent.dig("adapter_configuration")["schema_version"] = "flightdeck.adapter.codex-app-server.configuration/v1"
-      end
-
-      plan = Flightdeck::OperationExecution.new(config).plan(request)
-      assert_equal adapter, plan["adapter"]
-      assert_equal "codex_app_server", plan.dig("agents", 0, "adapter_configuration", "adapter_id")
-      hub_runtime = Flightdeck::HubSnapshot.new(config).send(:runtime_capabilities!, compatibility)
-      assert_equal "codex_app_server", hub_runtime.dig("operation_execution", "selected_adapter")
-      operations = Flightdeck::OperationsSnapshot.new(config).snapshot
-      assert_equal "codex_app_server", operations.dig("runtime_capabilities", "operation_execution", "selected_adapter")
-      assert_equal "codex_app_server", operations.dig("operations", 0, "children", 0, "execution", "adapter", "id")
+      path = write_mission_observations(root, "fan-in", observations)
+      sync = Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config))
+      assert_equal "review_ready", sync.plan(slug: "fan-in", observations_path: path)["resulting_state"]
+      result = apply_mission_sync(sync, slug: "fan-in", observations_path: path)
+      assert_equal "review_ready", result["resulting_state"]
+      assert_equal ["offer_fan_in"], Flightdeck::MissionStore.new(config).outbox_for("fan-in").map { |item| item["type"] }
+      closed = Flightdeck::MissionStore.new(config).close("fan-in")
+      assert_equal "complete", closed.dig("status", "state")
+      states = closed.dig("spec", "graph", "nodes").to_h { |node| [node["id"], node["observed_state"]] }
+      assert_equal "complete", states["required-unit"]
+      assert_equal "cancelled", states["optional-unit"]
+      assert_equal "explicit_close", closed.dig("status", "history").last["event"]
     end
   end
 
-  def test_omp_operation_plan_keeps_independent_agents_concurrent_without_creating_tasks
+  def test_mission_state_precedence_and_review_ready_requires_passed_typed_output
     with_hub do |root, config|
-      projects = %w[omp-concurrent-a omp-concurrent-b].to_h { |key| [key, initialize_repository(root, key)] }
-      projects.each { |key, path| config = register_repository(config, key, path) }
-      config = write_declarations(config, projects.map { |key, path| declaration(key, path) })
-      write_project_verifications(config, projects.to_h { |key, path| [key, verified_project(key, path)] })
-      projects.each_key do |key|
-        Flightdeck::BridgeStore.new(config).install(repository_id: key, mode: "reference", profile: "application")
-      end
-      config = Flightdeck::Config.new(root: root)
-      sequence = 0
-      work = Flightdeck::WorkStore.new(
-        config, random_hex: ->(_bytes) { sequence += 1; format("%024x", sequence) }
+      create_mission(
+        config, slug: "state-matrix", authorized_targets: %w[failed approval blocked runtime].map do |id|
+          mission_authorized_target(config, node_id: id)
+        end
       )
-      fixture = propose_work_operation(work, suffix: "omp-concurrent-0001", project_keys: projects.keys.sort)
-      request, = omp_execution_request(work, fixture, suffix: "omp-concurrent-0001")
-      plan = Flightdeck::OperationExecution.new(config).plan(request)
-      assert_equal 2, plan.dig("policy", "max_concurrency")
-      agents = plan.fetch("agents")
-      assert_equal 4, agents.length
-      assert_equal [0, 0, 1, 1], agents.map { |agent| agent.fetch("execution_order") }
-      assert_equal %w[implementation implementation review review], agents.map { |agent| agent.dig("native_authorization", "work_type") }
-      implementations = agents.select { |agent| agent.fetch("dependencies").empty? }
-      reviewers = agents.reject { |agent| agent.fetch("dependencies").empty? }
-      assert_equal projects.keys.sort, implementations.map { |agent| agent.fetch("logical_project_key") }.sort
-      reviewers.each do |reviewer|
-        owner = implementations.find { |agent| agent.fetch("logical_project_key") == reviewer.fetch("logical_project_key") }
-        assert_equal [owner.fetch("node_id")], reviewer.fetch("dependencies")
-        assert_equal "read_only", reviewer.dig("native_authorization", "access_mode")
+      %w[failed approval blocked runtime].each do |id|
+        add_mission_node(config, slug: "state-matrix", node_id: id)
       end
-      detail = Flightdeck::OperationDetail.new(config).detail(
-        "schema_version" => Flightdeck::OperationDetail::V2_REQUEST,
-        "operation_id" => plan.fetch("operation_id")
-      ).fetch("operation")
-      assert_equal 2, detail.fetch("project_scope").length
-      assert_equal 2, detail.fetch("agents").count { |agent| agent.fetch("name").end_with?("Implementation Agent") }
-      assert_equal 2, detail.fetch("agents").count { |agent| agent.fetch("name").end_with?("Independent Review Agent") }
-      mission = Flightdeck::MissionStore.new(config).snapshot(plan.fetch("operation_id"))
-      assert_equal [nil] * 4, mission.dig("spec", "graph", "nodes").map { |node| node["task_id"] }
-      assert_equal [nil] * 4, mission.dig("spec", "graph", "nodes").map { |node| node["pending_client_id"] }
+      %w[failed approval blocked runtime].each do |id|
+        dispatch_mission_node(config, slug: "state-matrix", node_id: id)
+      end
+      states = {
+        "failed" => "failed_validation",
+        "approval" => "needs_approval",
+        "blocked" => "blocked",
+        "runtime" => "runtime_failure"
+      }
+      observations = states.map do |id, state|
+        mission_observation(config, slug: "state-matrix", node_id: id, state: state, revision: 1)
+      end
+      path = write_mission_observations(root, "state-matrix", observations)
+      result = apply_mission_sync(Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)),
+        slug: "state-matrix", observations_path: path
+      )
+      assert_equal "failed_validation", result["resulting_state"]
+
+      invalid = mission_observation(
+        config, slug: "state-matrix", node_id: "failed", state: "review_ready", revision: 2,
+        validation: "not_applicable", output_declarations: []
+      )
+      invalid_path = write_mission_observations(root, "state-matrix", [invalid], name: "invalid-outcome.json")
+      error = assert_raises(Flightdeck::ValidationError) do
+        Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)).plan(
+          slug: "state-matrix", observations_path: invalid_path
+        )
+      end
+      assert_includes error.message, "requires passed"
     end
   end
 
-  def test_omp_projection_stays_off_the_mission_read_path_without_an_execution_record
-    with_operation_authoring_fixture do |_root, config, authoring, _catalog, target|
-      proposal = operation_proposal(target, title: "No OMP execution record")
-      plan = operation_plan(authoring, proposal)
-      authoring.launch(operation_launch_request(plan, proposal))
-      original = Flightdeck::OperationExecution.instance_method(:verify_capabilities!)
-      Flightdeck::OperationExecution.define_method(:verify_capabilities!) do
-        raise "OMP capability validation must not run for a non-OMP Mission"
+  def test_mission_observation_status_codes_are_required_persisted_and_non_controlling
+    with_hub do |root, config|
+      create_mission(config, slug: "status-codes", mode: "watch_only")
+      add_mission_node(config, slug: "status-codes")
+      dispatch_mission_node(config, slug: "status-codes")
+      sync = Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config))
+
+      approval = mission_observation(
+        config, slug: "status-codes", node_id: "unit-a", state: "needs_approval",
+        status_code: "approval_requested", revision: 1
+      )
+      refute approval.key?("outcome")
+      apply_mission_sync(sync,
+        slug: "status-codes",
+        observations_path: write_mission_observations(root, "status-codes", [approval], name: "approval-code.json")
+      )
+      node = Flightdeck::MissionStore.new(config).status("status-codes").dig("spec", "graph", "nodes", 0)
+      assert_equal "needs_approval", node["observed_state"]
+      assert_equal "approval_requested", node["status_code"]
+      assert_nil node["outcome_code"]
+
+      blocked = mission_observation(
+        config, slug: "status-codes", node_id: "unit-a", state: "blocked",
+        status_code: "dependency_unavailable", revision: 2
+      )
+      apply_mission_sync(sync,
+        slug: "status-codes",
+        observations_path: write_mission_observations(root, "status-codes", [blocked], name: "blocked-code.json")
+      )
+      assert_equal "dependency_unavailable",
+                   Flightdeck::MissionStore.new(config).status("status-codes").dig("spec", "graph", "nodes", 0, "status_code")
+
+      missing = mission_observation(config, slug: "status-codes", node_id: "unit-a", state: "running", revision: 3)
+      missing.delete("status_code")
+      error = assert_raises(Flightdeck::ValidationError) do
+        sync.plan(
+          slug: "status-codes",
+          observations_path: write_mission_observations(root, "status-codes", [missing], name: "missing-code.json")
+        )
       end
-      status = Flightdeck::MissionStore.new(config).status(plan.fetch("operation_id"))
-      assert_equal "planned", status.dig("status", "state")
-      assert_nil status.dig("spec", "graph", "nodes", 0, "operation_execution")
-    ensure
-      Flightdeck::OperationExecution.define_method(:verify_capabilities!, original) if original
+      assert_includes error.message, "missing fields: status_code"
+
+      invalid = mission_observation(
+        config, slug: "status-codes", node_id: "unit-a", state: "running", revision: 3,
+        status_code: "NOT VALID"
+      )
+      error = assert_raises(Flightdeck::ValidationError) do
+        sync.plan(
+          slug: "status-codes",
+          observations_path: write_mission_observations(root, "status-codes", [invalid], name: "invalid-code.json")
+        )
+      end
+      assert_includes error.message, "status_code"
+
+      mismatch = mission_observation(
+        config, slug: "status-codes", node_id: "unit-a", state: "review_ready", revision: 3,
+        status_code: "ready_for_review"
+      )
+      mismatch["outcome"]["code"] = "different_code"
+      error = assert_raises(Flightdeck::ValidationError) do
+        sync.plan(
+          slug: "status-codes",
+          observations_path: write_mission_observations(root, "status-codes", [mismatch], name: "mismatch-code.json")
+        )
+      end
+      assert_includes error.message, "must equal child outcome code"
     end
   end
 
-  def test_work_contract_schemas_cli_and_compatibility_are_closed
-    compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
-    capability = compatibility.dig("capabilities", Flightdeck::WorkStore::CAPABILITY)
-    lifecycle = compatibility.dig("capabilities", Flightdeck::WorkStore::LIFECYCLE_CAPABILITY)
-    assert_equal "1.13.0", compatibility["template_version"]
-    assert_equal({ "mode" => "stop_and_plan_migration" }, capability["fallback"])
-    assert_includes capability["managed_paths"], "lib/flightdeck/work_store.rb"
-    assert_equal "bin/flightdeck work lifecycle-open ", lifecycle.dig("probe", "help_contains")
-    assert_equal({ "mode" => "stop_and_plan_migration" }, lifecycle["fallback"])
-    assert_includes lifecycle["managed_paths"], "lib/flightdeck/work_store.rb"
-    assert_includes lifecycle["managed_paths"], "lib/flightdeck/bridge_store.rb"
-    assert_includes compatibility.dig("capabilities", "flightdeck.command.route-plan.v1", "managed_paths"),
-                    "lib/flightdeck/bridge_store.rb"
-    Flightdeck::WorkStore::SCHEMAS.each do |name|
-      schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", name)))
-      assert_equal "https://flightdeck.dev/schemas/#{name}", schema["$id"]
+  def test_mission_criteria_are_stable_covered_and_disposed_without_validation_bypass
+    with_hub do |root, config|
+      targets = %w[unit-a unit-b].map { |id| mission_authorized_target(config, node_id: id) }
+      mission = Flightdeck::MissionStore.new(config).create(
+        slug: "criterion-contract", title: "Criterion contract", outcome: "Meet both criteria.",
+        mode: "supervised", success_criteria: ["First condition passes.", "Second condition passes."],
+        non_goals: ["No deployment."], authorized_targets: targets
+      )
+      assert_equal %w[criterion-001 criterion-002], mission.dig("spec", "success_criteria").map { |item| item["id"] }
+      add_mission_node(
+        config, slug: "criterion-contract", node_id: "unit-a", criterion_ids: ["criterion-001"]
+      )
+      assert_raises(Flightdeck::UsageError) do
+        add_mission_node(
+          config, slug: "criterion-contract", node_id: "unit-b",
+          criterion_ids: %w[criterion-002 criterion-002]
+        )
+      end
+      error = assert_raises(Flightdeck::ValidationError) do
+        dispatch_mission_node(config, slug: "criterion-contract", node_id: "unit-a")
+      end
+      assert_includes error.message, "do not cover criterion IDs: criterion-002"
+
+      add_mission_node(
+        config, slug: "criterion-contract", node_id: "unit-b", criterion_ids: ["criterion-002"]
+      )
+      dispatch_mission_node(config, slug: "criterion-contract", node_id: "unit-a")
+      degraded = mission_observation(
+        config, slug: "criterion-contract", node_id: "unit-a", state: "review_ready", revision: 1,
+        criterion_results: [
+          { "criterion_id" => "criterion-001", "disposition" => "degraded", "status_code" => "partial_result" }
+        ]
+      )
+      degraded_path = write_mission_observations(root, "criterion-contract", [degraded], name: "degraded-criterion.json")
+      error = assert_raises(Flightdeck::ValidationError) do
+        Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)).plan(
+          slug: "criterion-contract", observations_path: degraded_path
+        )
+      end
+      assert_includes error.message, "requires every assigned criterion to pass"
+
+      blocked = mission_observation(
+        config, slug: "criterion-contract", node_id: "unit-a", state: "failed_validation", revision: 1,
+        validation: "failed", output_declarations: [], criterion_results: [
+          { "criterion_id" => "criterion-001", "disposition" => "blocked", "status_code" => "dependency_blocked" }
+        ]
+      )
+      result = apply_mission_sync(
+        Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)), slug: "criterion-contract",
+        observations_path: write_mission_observations(root, "criterion-contract", [blocked], name: "blocked-criterion.json")
+      )
+      assert_equal "failed_validation", result["resulting_state"]
+      persisted = Flightdeck::MissionStore.new(config).snapshot("criterion-contract").dig("spec", "graph", "nodes", 0)
+      assert_equal "blocked", persisted.dig("criterion_results", 0, "disposition")
+      refute Flightdeck::MissionStore.new(config).fan_in_ready?(
+        Flightdeck::MissionStore.new(config).snapshot("criterion-contract")
+      )
     end
-    Flightdeck::WorkStore::LIFECYCLE_SCHEMAS.each do |name|
-      schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", name)))
-      assert_equal "https://flightdeck.dev/schemas/#{name}", schema["$id"]
-      assert_equal false, schema["additionalProperties"]
-      assert_includes lifecycle["managed_paths"], "hub/schemas/#{name}"
+  end
+
+  def test_mission_sync_plan_token_binds_generation_observations_and_actions
+    with_hub do |root, config|
+      create_mission(config, slug: "plan-token", mode: "watch_only")
+      add_mission_node(config, slug: "plan-token")
+      dispatch_mission_node(config, slug: "plan-token")
+      sync = Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config))
+      observation = mission_observation(
+        config, slug: "plan-token", node_id: "unit-a", state: "running", revision: 1
+      )
+      path = write_mission_observations(root, "plan-token", [observation], name: "plan-token.json")
+      plan = sync.plan(slug: "plan-token", observations_path: path)
+      assert_match(/\A[0-9a-f]{64}\z/, plan["plan_token"])
+      generation = Flightdeck::MissionStore.new(config).snapshot("plan-token").dig("status", "generation")
+      assert_raises(Flightdeck::ValidationError) do
+        sync.apply(slug: "plan-token", observations_path: path, plan_token: "0" * 64)
+      end
+      assert_equal generation, Flightdeck::MissionStore.new(config).snapshot("plan-token").dig("status", "generation")
+
+      changed = observation.merge("cursor" => "different-cursor", "event_id" => "different-event")
+      changed_path = write_mission_observations(root, "plan-token", [changed], name: "changed-plan-token.json")
+      assert_raises(Flightdeck::ValidationError) do
+        sync.apply(slug: "plan-token", observations_path: changed_path, plan_token: plan["plan_token"])
+      end
+      Flightdeck::MissionStore.new(config).checkpoint("plan-token")
+      error = assert_raises(Flightdeck::ValidationError) do
+        sync.apply(slug: "plan-token", observations_path: path, plan_token: plan["plan_token"])
+      end
+      assert_includes error.message, "does not match the locked mission generation"
+      fresh = sync.plan(slug: "plan-token", observations_path: path)
+      applied = sync.apply(slug: "plan-token", observations_path: path, plan_token: fresh["plan_token"])
+      assert applied["applied"]
     end
-    help = StringIO.new
-    assert_equal 0, Flightdeck::CLI.new(root: TEMPLATE_ROOT, out: help, err: StringIO.new).run(["help"])
-    %w[decline lifecycle-open dispatch-plan dispatch-report].each do |name|
-      assert_includes help.string, "bin/flightdeck work #{name} --request FILE"
+  end
+
+  def test_mission_authorized_scope_is_derived_and_tamper_evident
+    with_hub do |_root, config|
+      create_mission(config, slug: "scope-bound")
+      add_mission_node(config, slug: "scope-bound")
+      mission_path = File.join(config.mission_dir, "scope-bound", "mission.yaml")
+      mission = Flightdeck::Support.load_data(mission_path)
+      original_boundary = mission.dig("spec", "authorization_boundary")
+      mission.dig("spec", "non_goals") << "Expanded hidden scope."
+      Flightdeck::Support.atomic_yaml(mission_path, mission)
+      errors = Flightdeck::MissionStore.new(config).validate("scope-bound")
+      assert errors.any? { |message| message.include?("authorization_boundary does not match") }
+
+      mission.dig("spec", "non_goals").pop
+      mission.dig("spec", "graph", "nodes", 0)["host_id"] = "foreign-host"
+      mission["spec"]["authorization_boundary"] = original_boundary
+      Flightdeck::Support.atomic_yaml(mission_path, mission)
+      errors = Flightdeck::MissionStore.new(config).validate("scope-bound")
+      assert errors.any? { |message| message.include?("outside the mission authorized target scope") }
+    end
+  end
+
+  def test_mission_sync_duplicate_out_of_order_not_loaded_and_stale_are_distinct
+    with_hub do |root, config|
+      create_mission(config, slug: "ordering", mode: "watch_only")
+      add_mission_node(config, slug: "ordering")
+      dispatch_mission_node(config, slug: "ordering")
+      sync = Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config))
+      first = mission_observation(config, slug: "ordering", node_id: "unit-a", state: "running", revision: 2)
+      path = write_mission_observations(root, "ordering", [first])
+      apply_mission_sync(sync, slug: "ordering", observations_path: path)
+      generation = Flightdeck::MissionStore.new(config).snapshot("ordering").dig("status", "generation")
+      duplicate = apply_mission_sync(sync, slug: "ordering", observations_path: path)
+      assert_equal "duplicate_event_id", duplicate.dig("ignored", 0, "reason")
+      assert_equal generation, Flightdeck::MissionStore.new(config).snapshot("ordering").dig("status", "generation")
+
+      old = mission_observation(config, slug: "ordering", node_id: "unit-a", state: "blocked", revision: 1)
+      old_path = write_mission_observations(root, "ordering", [old], name: "old.json")
+      assert_equal "stale_revision", sync.plan(slug: "ordering", observations_path: old_path).dig("ignored", 0, "reason")
+      unloaded = mission_observation(config, slug: "ordering", node_id: "unit-a", state: "notLoaded", revision: 3)
+      unloaded_path = write_mission_observations(root, "ordering", [unloaded], name: "unloaded.json")
+      unloaded_plan = sync.plan(slug: "ordering", observations_path: unloaded_path)
+      assert_equal "not_loaded", unloaded_plan.dig("ignored", 0, "reason")
+      assert_equal "running", unloaded_plan["resulting_state"]
+
+      future_store = Flightdeck::MissionStore.new(config, clock: -> { Time.now.utc + 7200 })
+      assert_equal "stale", future_store.status("ordering").dig("status", "state")
+    end
+  end
+
+  def test_mission_rejects_identity_drift_raw_text_secrets_and_oversize
+    with_hub do |root, config|
+      create_mission(config, slug: "hostile")
+      add_mission_node(config, slug: "hostile")
+      dispatch_mission_node(config, slug: "hostile")
+      observation = mission_observation(
+        config, slug: "hostile", node_id: "unit-a", state: "running", revision: 1
+      )
+      observation["runtime_project_id"] = "wrong-runtime"
+      path = write_mission_observations(root, "hostile", [observation])
+      error = assert_raises(Flightdeck::ValidationError) do
+        Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)).plan(slug: "hostile", observations_path: path)
+      end
+      assert_includes error.message, "identity drift"
+
+      malicious = mission_observation(
+        config, slug: "hostile", node_id: "unit-a", state: "running", revision: 1,
+        include_outcome: true
+      )
+      malicious["outcome"]["final_text"] = "done"
+      path = write_mission_observations(root, "hostile", [malicious], name: "raw.json")
+      error = assert_raises(Flightdeck::ValidationError) do
+        Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)).plan(slug: "hostile", observations_path: path)
+      end
+      assert_includes error.message, "forbidden fields"
+      assert_raises(Flightdeck::UsageError) do
+        Flightdeck::MissionStore.new(config).create(
+          slug: "secret", title: "Secret", outcome: "Bearer abcdefghijklmnopqrstuvwxyz"
+        )
+      end
+      assert_raises(Flightdeck::UsageError) do
+        Flightdeck::MissionStore.new(config).create(
+          slug: "oversized", title: "x" * 300, outcome: "bounded"
+        )
+      end
+      store = Flightdeck::MissionStore.new(config)
+      assert_raises(Flightdeck::ValidationError) do
+        store.action_record(store.snapshot("hostile"), type: "deploy", payload: {}, trigger: "malicious")
+      end
+      observation.delete("outcome")
+      refute File.read(File.join(config.mission_dir, "hostile", "mission.yaml")).include?("final_text")
+    end
+  end
+
+  def test_mission_dispatch_unknown_action_ledger_crash_replay_and_lock_conflict
+    with_hub do |_root, config|
+      create_mission(config, slug: "ledger", mode: "watch_only")
+      add_mission_node(config, slug: "ledger")
+      store = Flightdeck::MissionStore.new(config)
+      mission = store.record_dispatch(
+        slug: "ledger", node_id: "unit-a", runtime_project_id: "runtime-unit-a",
+        host_id: "host-local", dispatch_unknown: true
+      )
+      assert_equal "dispatch_unknown", mission.dig("spec", "graph", "nodes", 0, "observed_state")
+      action = store.outbox_for("ledger").first
+      assert_equal "observe", action["type"]
+      store.prepare_action(slug: "ledger", action_id: action["id"])
+      assert_raises(Flightdeck::ValidationError) { store.checkpoint("ledger") }
+      assert_raises(Flightdeck::ValidationError) { store.prepare_action(slug: "ledger", action_id: action["id"]) }
+      store.acknowledge_action(slug: "ledger", action_id: action["id"])
+      assert_equal "acknowledged", store.outbox_for("ledger").first["status"]
+
+      lock_path = File.join(config.mission_dir, "ledger", ".lock")
+      File.open(lock_path, File::RDWR | File::CREAT, 0o600) do |lock|
+        lock.flock(File::LOCK_EX)
+        error = assert_raises(Flightdeck::ValidationError) do
+          store.add_node(
+            slug: "ledger", node_id: "unit-b", logical_project_key: "project-unit-b",
+            runtime_project_id: "runtime-unit-b",
+            project_path: File.join(config.root, "development", "unit-b"), host_id: "host-local",
+            execution_mode: "local", access_mode: "read_only", work_type: "validation", required: false,
+            allowed_output_types: ["validation_result"]
+          )
+        end
+        assert_includes error.message, "lease conflict"
+      end
+
+
+      create_mission(
+        config, slug: "pending-worktree", mode: "watch_only",
+        authorized_targets: [mission_authorized_target(config, execution_mode: "worktree", access_mode: "write")]
+      )
+      add_mission_node(config, slug: "pending-worktree", execution_mode: "worktree", access_mode: "write")
+      store.record_dispatch(
+        slug: "pending-worktree", node_id: "unit-a", runtime_project_id: "runtime-unit-a",
+        host_id: "host-local", pending_client_id: "pending-client-a"
+      )
+      empty = write_mission_observations(config.root, "pending-worktree", [], name: "pending.json")
+      error = assert_raises(Flightdeck::ValidationError) do
+        Flightdeck::MissionSync.new(store).plan(slug: "pending-worktree", observations_path: empty)
+      end
+      assert_includes error.message, "worktree creation is pending or unknown"
+      assert_raises(Flightdeck::ValidationError) do
+        store.record_dispatch(
+          slug: "pending-worktree", node_id: "unit-a", runtime_project_id: "runtime-unit-a",
+          host_id: "host-local", task_id: "task-unit-a", pending_client_id: "wrong-client"
+        )
+      end
+      resolved = store.record_dispatch(
+        slug: "pending-worktree", node_id: "unit-a", runtime_project_id: "runtime-unit-a",
+        host_id: "host-local", task_id: "task-unit-a", pending_client_id: "pending-client-a"
+      )
+      assert_equal "task-unit-a", resolved.dig("spec", "graph", "nodes", 0, "task_id")
+      assert_nil resolved.dig("spec", "graph", "nodes", 0, "pending_client_id")
+
+      create_mission(config, slug: "retry-budget", mode: "watch_only")
+      add_mission_node(config, slug: "retry-budget")
+      store.record_dispatch(
+        slug: "retry-budget", node_id: "unit-a", runtime_project_id: "runtime-unit-a",
+        host_id: "host-local", dispatch_unknown: true
+      )
+      retry_action = store.outbox_for("retry-budget").first
+      4.times do
+        store.prepare_action(slug: "retry-budget", action_id: retry_action["id"])
+        store.fail_action(slug: "retry-budget", action_id: retry_action["id"], code: "transient_failure")
+      end
+      assert_raises(Flightdeck::ValidationError) do
+        store.prepare_action(slug: "retry-budget", action_id: retry_action["id"])
+      end
+
+      started = Time.utc(2026, 1, 1)
+      Flightdeck::MissionStore.new(config, clock: -> { started }).create(
+        slug: "duration-budget", title: "Duration", outcome: "Bounded mission.", mode: "watch_only",
+        success_criteria: ["The bounded mission finishes before its duration budget expires."],
+        authorized_targets: [mission_authorized_target(config)]
+      )
+      expired = Flightdeck::MissionStore.new(config, clock: -> { started + 604_801 })
+      assert_raises(Flightdeck::ValidationError) do
+        expired.add_node(
+          slug: "duration-budget", node_id: "unit-a", logical_project_key: "project-unit-a",
+          runtime_project_id: "runtime-unit-a",
+          project_path: File.join(config.root, "development", "unit-a"), host_id: "host-local",
+          execution_mode: "local", access_mode: "read_only", work_type: "validation", required: true,
+          allowed_output_types: ["validation_result"], criterion_ids: ["criterion-001"]
+        )
+      end
+    end
+  end
+
+  def test_mission_stress_graphs_and_replay_classification_are_bounded
+    nodes = 16.times.map do |index|
+      {
+        "id" => "unit-#{index}", "required" => true, "dependencies" => index.zero? ? [] : ["unit-#{index - 1}"],
+        "observed_state" => "planned", "execution_mode" => "worktree", "access_mode" => "write",
+        "project_path_digest" => Digest::SHA256.hexdigest("worktree-#{index}")
+      }
+    end
+    100.times { assert_empty Flightdeck::MissionGraph.new(Marshal.load(Marshal.dump(nodes))).validate }
+
+    node = { "revision" => 10, "cursor" => "cursor-10", "event_id" => "event-10", "seen_event_ids" => ["event-10"] }
+    sync = Flightdeck::MissionSync.allocate
+    10_000.times do |index|
+      observation = {
+        "revision" => index.even? ? 10 : 9,
+        "cursor" => index.even? ? "cursor-10" : "cursor-9",
+        "event_id" => index.even? ? "event-10" : "event-9"
+      }
+      reason = sync.send(:stale_reason, node, observation)
+      assert_includes %w[duplicate_event_id stale_revision], reason
+    end
+    assert_equal 1, node["seen_event_ids"].length
+  end
+
+  def test_mission_cli_json_surface_is_installable_and_coherent
+    with_hub do |root, _config|
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
+      cli_path = File.join(root, "development", "unit-a")
+      target = {
+        "logical_project_key" => "project-a", "runtime_project_id" => "opaque-runtime",
+        "project_path_digest" => Digest::SHA256.hexdigest(File.expand_path(cli_path)),
+        "host_id" => "local-host", "execution_mode" => "local", "access_mode" => "read_only"
+      }
+      assert_equal 0, cli.run(
+        ["mission", "new", "cli-mission", "--title", "CLI", "--outcome", "validated",
+         "--success-criterion", "verified", "--non-goal", "deployment", "--mode", "watch_only",
+         "--authorized-target-json", JSON.generate(target), "--json"]
+      )
+      created = JSON.parse(output.string)
+      assert_equal "MissionRecord", created["kind"]
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 0, cli.run(
+        [
+          "mission", "add", "cli-mission", "unit-a", "--project-key", "project-a",
+          "--runtime-project-id", "opaque-runtime", "--project-path", cli_path, "--host-id", "local-host",
+          "--execution-mode", "local", "--access-mode", "read_only", "--work-type", "validation",
+          "--required", "--criterion-id", "criterion-001", "--allows-output", "validation_result", "--json"
+        ]
+      )
+      added = JSON.parse(output.string)
+      assert_equal "unit-a", added.dig("spec", "graph", "nodes", 0, "id")
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 0, cli.run(
+        %w[mission record-dispatch cli-mission unit-a --runtime-project-id opaque-runtime --host-id local-host --dispatch-unknown --json]
+      )
+      unknown = JSON.parse(output.string)
+      assert_equal "dispatch_unknown", unknown.dig("status", "state")
+      assert_equal "observe", unknown.dig("status", "outbox", 0, "type")
+    end
+  end
+
+  def test_mission_list_contract_is_deterministic_bounded_paginated_and_read_only
+    with_hub do |root, config|
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
+
+      assert_equal 0, cli.run(["mission", "list", "--hub-root", root, "--limit", "1"])
+      empty = JSON.parse(output.string)
+      assert_equal "flightdeck.mission-list/v1", empty["api_version"]
+      assert_equal "MissionList", empty["kind"]
+      assert_equal [], empty["missions"]
+      assert_equal({ "limit" => 1, "returned" => 0, "next_cursor" => nil }, empty["page"])
+
+      create_mission(config, slug: "zulu-mission")
+      create_mission(config, slug: "alpha-mission")
+      add_mission_node(config, slug: "alpha-mission")
+      store = Flightdeck::MissionStore.new(config)
+      store.record_dispatch(
+        slug: "alpha-mission",
+        node_id: "unit-a",
+        runtime_project_id: "runtime-unit-a",
+        host_id: "host-local",
+        dispatch_unknown: true
+      )
+      alpha_path = File.join(config.mission_dir, "alpha-mission", "mission.yaml")
+      before_bytes = File.binread(alpha_path)
+      before_status = store.status("alpha-mission")
+      before_validation = store.validate("alpha-mission")
+      before_tree = Dir.glob(File.join(config.mission_dir, "**", "*"), File::FNM_DOTMATCH).sort
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 0, cli.run(["mission", "list", "--hub-root", root, "--limit", "1", "--json"])
+      first_page = JSON.parse(output.string)
+      assert_equal ["alpha-mission"], first_page["missions"].map { |item| item["mission_id"] }
+      assert_match(/\Av1\.[A-Za-z0-9_-]+\z/, first_page.dig("page", "next_cursor"))
+      summary = first_page.fetch("missions").first
+      assert_equal %w[
+        created_at fan_in_ready generation mission_id mode progress state title updated_at
+      ], summary.keys.sort
+      assert_equal 1, summary.dig("progress", "total_units")
+      assert_equal 1, summary.dig("progress", "required_units")
+      assert_equal 1, summary.dig("progress", "attention_units")
+      assert_equal "dispatch_unknown", summary["state"]
+      refute_includes output.string, root
+      refute_includes output.string, "Produce validated typed outputs."
+      refute_includes output.string, "project_path"
+      refute_includes output.string, "task_id"
+      refute_includes output.string, "outbox"
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 0, cli.run(
+        ["mission", "list", "--hub-root", root, "--limit", "1", "--cursor", first_page.dig("page", "next_cursor")]
+      )
+      second_page = JSON.parse(output.string)
+      assert_equal ["zulu-mission"], second_page["missions"].map { |item| item["mission_id"] }
+      assert_nil second_page.dig("page", "next_cursor")
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 0, cli.run(["mission", "list", "--hub-root", root, "--limit", "100"])
+      all = JSON.parse(output.string)
+      assert_equal %w[alpha-mission zulu-mission], all["missions"].map { |item| item["mission_id"] }
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 2, cli.run(["mission", "list", "--hub-root", root, "--limit", "101"])
+      assert_equal "invalid_limit", JSON.parse(output.string).dig("error", "code")
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 2, cli.run(["mission", "list", "--hub-root", root, "--cursor", "not-a-v1-cursor"])
+      assert_equal "invalid_cursor", JSON.parse(output.string).dig("error", "code")
+
+      output.truncate(0)
+      output.rewind
+      assert_equal 2, cli.run(["mission", "list", "--hub-root", root, "--unknown-#{'x' * 512}"])
+      invalid_request = JSON.parse(output.string)
+      assert_equal "invalid_request", invalid_request.dig("error", "code")
+      assert_equal "Mission list request is invalid.", invalid_request.dig("error", "message")
+      assert_operator invalid_request.dig("error", "message").bytesize, :<=, 256
+
+      assert_equal before_bytes, File.binread(alpha_path)
+      assert_equal before_status, store.status("alpha-mission")
+      assert_equal before_validation, store.validate("alpha-mission")
+      assert_equal before_tree, Dir.glob(File.join(config.mission_dir, "**", "*"), File::FNM_DOTMATCH).sort
+    end
+  end
+
+  def test_mission_list_contract_returns_safe_structured_root_and_record_errors
+    Dir.mktmpdir("flightdeck-list-errors-") do |directory|
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: directory, out: output, err: StringIO.new)
+      missing = File.join(directory, "absent-hub")
+      assert_equal 1, cli.run(["mission", "list", "--hub-root", missing])
+      missing_error = JSON.parse(output.string)
+      assert_equal "MissionListError", missing_error["kind"]
+      assert_equal false, missing_error["ok"]
+      assert_equal "hub_root_not_found", missing_error.dig("error", "code")
+      refute_includes output.string, missing
+
+      invalid = File.join(directory, "invalid-hub")
+      FileUtils.mkdir_p(invalid)
+      File.write(File.join(invalid, "flightdeck.yaml"), YAML.dump({ "kind" => "NotAFlightdeck" }))
+      output.truncate(0)
+      output.rewind
+      assert_equal 1, cli.run(["mission", "list", "--hub-root", invalid])
+      invalid_error = JSON.parse(output.string)
+      assert_equal "invalid_hub_root", invalid_error.dig("error", "code")
+      refute_includes output.string, invalid
+    end
+
+    with_hub do |root, config|
+      create_mission(config, slug: "valid-mission")
+      create_mission(config, slug: "broken-mission")
+      broken_path = File.join(config.mission_dir, "broken-mission", "mission.yaml")
+      broken = Flightdeck::Support.load_data(broken_path)
+      broken["kind"] = "UnexpectedRecord"
+      Flightdeck::Support.atomic_yaml(broken_path, broken)
+
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
+      assert_equal 1, cli.run(["mission", "list", "--hub-root", root])
+      error = JSON.parse(output.string)
+      assert_equal "flightdeck.mission-list/v1", error["api_version"]
+      assert_equal "MissionListError", error["kind"]
+      assert_equal "hub/schemas/mission-list.schema.json", error["schema"]
+      assert_equal "malformed_mission_record", error.dig("error", "code")
+      assert_equal "broken-mission", error.dig("error", "mission_id")
+      refute_includes output.string, root
+      refute_includes output.string, "UnexpectedRecord"
+      refute error.key?("missions")
+    end
+
+    with_hub do |root, config|
+      create_mission(config, slug: "oversized-mission")
+      path = File.join(config.mission_dir, "oversized-mission", "mission.yaml")
+      File.binwrite(path, "x" * (config.mission_budgets.fetch("max_record_bytes") + 1))
+
+      output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
+      assert_equal 1, cli.run(["mission", "list", "--hub-root", root])
+      error = JSON.parse(output.string)
+      assert_equal "malformed_mission_record", error.dig("error", "code")
+      assert_equal "oversized-mission", error.dig("error", "mission_id")
+      refute_includes output.string, root
     end
 
     with_hub do |root, _config|
-      request_path = File.join(root, "work-create.json")
-      File.write(request_path, JSON.generate(
-        "schema_version" => Flightdeck::WorkStore::CREATE_REQUEST,
-        "request_key" => "request-cli-work-create-0001",
-        "title_hint" => "CLI Work"
-      ))
+      compatibility_path = File.join(root, "hub", "compatibility.json")
+      compatibility = JSON.parse(File.read(compatibility_path))
+      compatibility.fetch("capabilities").delete("flightdeck.command.mission-list.v1")
+      Flightdeck::Support.atomic_write(compatibility_path, JSON.pretty_generate(compatibility))
+
       output = StringIO.new
-      status = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new).run(["work", "create", "--request", request_path, "--json"])
-      assert_equal 0, status
-      created = JSON.parse(output.string)
-      assert_equal Flightdeck::WorkStore::CREATE_RESULT, created["schema_version"]
+      cli = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new)
+      assert_equal 1, cli.run(["mission", "list", "--hub-root", root])
+      error = JSON.parse(output.string)
+      assert_equal "unsupported_hub_contract", error.dig("error", "code")
+      refute_includes output.string, root
+    end
+  end
 
-      bind_path = File.join(root, "work-adapter-bind.json")
-      File.write(bind_path, JSON.generate(
-        "schema_version" => Flightdeck::WorkStore::ADAPTER_BIND_REQUEST,
-        "work_id" => created.dig("work", "work_id"),
-        "resume_generation" => created.dig("resume", "generation"),
-        "adapter" => "omp",
-        "adapter_session_id" => "codex-thread-cli-work-0001",
-        "binding_request_id" => "adapter-binding-cli-work-0001",
-        "structured_channel" => Flightdeck::WorkStore::STRUCTURED_CHANNEL
-      ))
-      bind_output = StringIO.new
-      status = Flightdeck::CLI.new(root: root, out: bind_output, err: StringIO.new).run(["work", "adapter-bind", "--request", bind_path, "--json"])
-      assert_equal 0, status
-      assert_equal Flightdeck::WorkStore::ADAPTER_BIND_RESULT, JSON.parse(bind_output.string)["schema_version"]
+  def test_mission_list_fails_closed_when_same_record_changes_during_read
+    with_hub do |_root, config|
+      create_mission(config, slug: "changing-mission")
+      path = File.join(config.mission_dir, "changing-mission", "mission.yaml")
+      store = Flightdeck::MissionStore.new(
+        config,
+        after_list_record_read: lambda do |changed_path|
+          File.binwrite(changed_path, "#{File.binread(changed_path)}\n")
+        end
+      )
 
-      lifecycle_path = File.join(root, "work-lifecycle-open.json")
-      File.write(lifecycle_path, JSON.generate(
-        "schema_version" => Flightdeck::WorkStore::LIFECYCLE_OPEN_REQUEST,
-        "work_id" => created.dig("work", "work_id")
-      ))
-      lifecycle_output = StringIO.new
-      status = Flightdeck::CLI.new(root: root, out: lifecycle_output, err: StringIO.new).run(
-        ["work", "lifecycle-open", "--request", lifecycle_path, "--json"]
+      error = assert_raises(Flightdeck::MissionStore::ListError) { store.list_page }
+      assert_equal "malformed_mission_record", error.code
+      assert_equal "changing-mission", error.mission_id
+      assert File.file?(path)
+    end
+  end
+
+  def test_mission_list_schema_and_capability_are_declared
+    schema = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "mission-list.schema.json")))
+    assert_equal "https://flightdeck.dev/schemas/mission-list.schema.json", schema["$id"]
+    assert_equal 100, schema.dig("$defs", "success", "properties", "missions", "maxItems")
+    assert_includes schema.dig("$defs", "error", "properties", "error", "properties", "code", "enum"),
+                    "unsupported_hub_contract"
+    assert_includes schema.dig("$defs", "error", "properties", "error", "properties", "code", "enum"),
+                    "mission_limit_exceeded"
+
+    compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
+    capability = compatibility.dig("capabilities", "flightdeck.command.mission-list.v1")
+    assert_equal "command", capability["kind"]
+    assert_equal "bin/flightdeck mission list ", capability.dig("probe", "help_contains")
+    assert_includes capability["managed_paths"], "hub/schemas/mission-list.schema.json"
+  end
+
+  def test_mission_cli_rejects_cross_boundary_nodes_and_handoff_actions
+    with_hub do |root, config|
+      create_mission(
+        config, slug: "authorization", authorized_targets: %w[producer consumer].map do |id|
+          mission_authorized_target(config, node_id: id)
+        end
+      )
+      output = StringIO.new
+      error_output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: error_output)
+      status = cli.run(
+        [
+          "mission", "add", "authorization", "foreign", "--project-key", "foreign-project",
+          "--runtime-project-id", "runtime-foreign",
+          "--project-path", File.join(root, "development", "foreign"), "--host-id", "host-local",
+          "--execution-mode", "local", "--access-mode", "read_only", "--work-type", "validation",
+          "--required", "--criterion-id", "criterion-001", "--allows-output", "validation_result", "--json"
+        ]
+      )
+      assert_equal 1, status
+      assert_includes error_output.string, "outside the mission authorized target scope"
+      assert_empty Flightdeck::MissionStore.new(config).snapshot("authorization").dig("spec", "graph", "nodes")
+
+      add_mission_node(config, slug: "authorization", node_id: "producer", outputs: ["candidate"])
+      add_mission_node(
+        config, slug: "authorization", node_id: "consumer", required: false,
+        dependencies: ["producer"], accepted: ["candidate"]
+      )
+      dispatch_mission_node(config, slug: "authorization", node_id: "producer")
+      observation = mission_observation(
+        config, slug: "authorization", node_id: "producer", state: "review_ready", revision: 1
+      )
+      path = write_mission_observations(root, "authorization", [observation], name: "authorization.json")
+      apply_mission_sync(Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)),
+        slug: "authorization", observations_path: path
+      )
+      mission_path = File.join(config.mission_dir, "authorization", "mission.yaml")
+      mission = Flightdeck::Support.load_data(mission_path)
+      handoff = mission.dig("status", "outbox").find { |action| action["type"] == "dependency_handoff" }
+      refute_nil handoff
+      boundary = mission.dig("spec", "authorization_boundary")
+      assert_match(/\Ascope-[0-9a-f]{48}\z/, handoff["authorization_boundary"])
+      handoff["authorization_boundary"] = "foreign_boundary"
+      Flightdeck::Support.atomic_yaml(mission_path, mission)
+
+      output = StringIO.new
+      error_output = StringIO.new
+      cli = Flightdeck::CLI.new(root: root, out: output, err: error_output)
+      assert_equal 1, cli.run(["mission", "prepare", "authorization", handoff["id"], "--json"])
+      assert_includes error_output.string, "authorization boundary"
+      tampered = Flightdeck::Support.load_data(mission_path)
+      assert_equal "pending", tampered.dig("status", "outbox").find { |action| action["id"] == handoff["id"] }["status"]
+
+      tampered.dig("status", "outbox").find { |action| action["id"] == handoff["id"] }["authorization_boundary"] = boundary
+      tampered.dig("spec", "graph", "nodes").find { |node| node["id"] == "consumer" }["authorization_boundary"] = "foreign_boundary"
+      Flightdeck::Support.atomic_yaml(mission_path, tampered)
+      output = StringIO.new
+      assert_equal 1, Flightdeck::CLI.new(root: root, out: output, err: StringIO.new).run(
+        %w[mission validate authorization --json]
+      )
+      validation = JSON.parse(output.string)
+      assert validation.fetch("errors").any? { |message| message.include?("dependency authorization boundary mismatch") }
+    end
+  end
+
+  def test_mission_artifact_resolvers_bind_producer_consumer_host_and_action_ledger
+    with_hub do |root, config|
+      digest = Digest::SHA256.hexdigest("artifact-bundle")
+      artifact_declaration = lambda do
+        {
+          "type" => "artifact_bundle",
+          "artifact_id" => "bundle-v1",
+          "digest" => digest
+        }
+      end
+
+      create_mission(
+        config, slug: "missing-resolver",
+        authorized_targets: [mission_authorized_target(config, node_id: "producer")]
+      )
+      add_mission_node(config, slug: "missing-resolver", node_id: "producer", outputs: ["artifact_bundle"])
+      dispatch_mission_node(config, slug: "missing-resolver", node_id: "producer")
+      observation = mission_observation(
+        config, slug: "missing-resolver", node_id: "producer", state: "review_ready", revision: 1,
+        output_declarations: [artifact_declaration.call]
+      )
+      error = assert_raises(Flightdeck::ValidationError) do
+        Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)).plan(
+          slug: "missing-resolver",
+          observations_path: write_mission_observations(root, "missing-resolver", [observation], name: "missing-resolver.json")
+        )
+      end
+      assert_includes error.message, "producer artifact resolver"
+
+      create_mission(
+        config, slug: "bound-artifact", authorized_targets: %w[producer consumer].map do |id|
+          mission_authorized_target(config, node_id: id)
+        end
+      )
+      add_mission_node(
+        config, slug: "bound-artifact", node_id: "producer", outputs: ["artifact_bundle"],
+        artifact_resolver_kind: "same_host_workspace", artifact_resolver_id: "workspace_a"
+      )
+      add_mission_node(
+        config, slug: "bound-artifact", node_id: "consumer", required: false,
+        dependencies: ["producer"], accepted: ["artifact_bundle"],
+        artifact_resolver_kind: "same_host_workspace", artifact_resolver_id: "workspace_a"
+      )
+      dispatch_mission_node(config, slug: "bound-artifact", node_id: "producer")
+      observation = mission_observation(
+        config, slug: "bound-artifact", node_id: "producer", state: "review_ready", revision: 1,
+        status_code: "artifact_ready", output_declarations: [artifact_declaration.call]
+      )
+      sync = Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config))
+      result = apply_mission_sync(sync,
+        slug: "bound-artifact",
+        observations_path: write_mission_observations(root, "bound-artifact", [observation], name: "bound-artifact.json")
+      )
+      handoff = result.fetch("actions").find { |action| action["type"] == "dependency_handoff" }
+      assert_equal({ "kind" => "same_host_workspace", "id" => "workspace_a" }, handoff.dig("payload", "artifact_resolver"))
+      expected_ref = "artifact:workspace_a/producer/#{Base64.urlsafe_encode64('task-producer', padding: false)}/#{digest}/bundle-v1"
+      assert_equal expected_ref, handoff.dig("payload", "output_refs", 0, "ref")
+
+      mission_path = File.join(config.mission_dir, "bound-artifact", "mission.yaml")
+      mission = Flightdeck::Support.load_data(mission_path)
+      stored_handoff = mission.dig("status", "outbox").find { |action| action["id"] == handoff["id"] }
+      stored_handoff["payload"]["artifact_resolver"]["id"] = "workspace_b"
+      Flightdeck::Support.atomic_yaml(mission_path, mission)
+      error = assert_raises(Flightdeck::ValidationError) do
+        Flightdeck::MissionStore.new(config).prepare_action(slug: "bound-artifact", action_id: handoff["id"])
+      end
+      assert_includes error.message, "artifact resolver binding"
+
+      create_mission(
+        config, slug: "resolver-mismatch", authorized_targets: %w[producer consumer].map do |id|
+          mission_authorized_target(config, node_id: id)
+        end
+      )
+      add_mission_node(
+        config, slug: "resolver-mismatch", node_id: "producer", outputs: ["artifact_bundle"],
+        artifact_resolver_kind: "external_approved", artifact_resolver_id: "locker_a"
+      )
+      add_mission_node(
+        config, slug: "resolver-mismatch", node_id: "consumer", required: false,
+        dependencies: ["producer"], accepted: ["artifact_bundle"],
+        artifact_resolver_kind: "external_approved", artifact_resolver_id: "locker_b"
+      )
+      dispatch_mission_node(config, slug: "resolver-mismatch", node_id: "producer")
+      observation = mission_observation(
+        config, slug: "resolver-mismatch", node_id: "producer", state: "review_ready", revision: 1,
+        output_declarations: [artifact_declaration.call]
+      )
+      error = assert_raises(Flightdeck::ValidationError) do
+        Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)).plan(
+          slug: "resolver-mismatch",
+          observations_path: write_mission_observations(root, "resolver-mismatch", [observation], name: "resolver-mismatch.json")
+        )
+      end
+      assert_includes error.message, "artifact resolver mismatch"
+
+      create_mission(
+        config, slug: "cross-host", authorized_targets: [
+          mission_authorized_target(config, node_id: "producer", host_id: "host-a"),
+          mission_authorized_target(config, node_id: "consumer", host_id: "host-b")
+        ]
+      )
+      add_mission_node(
+        config, slug: "cross-host", node_id: "producer", outputs: ["artifact_bundle"], host_id: "host-a",
+        artifact_resolver_kind: "same_host_workspace", artifact_resolver_id: "workspace_a"
+      )
+      add_mission_node(
+        config, slug: "cross-host", node_id: "consumer", required: false, host_id: "host-b",
+        dependencies: ["producer"], accepted: ["artifact_bundle"],
+        artifact_resolver_kind: "same_host_workspace", artifact_resolver_id: "workspace_a"
+      )
+      dispatch_mission_node(config, slug: "cross-host", node_id: "producer", host_id: "host-a")
+      observation = mission_observation(
+        config, slug: "cross-host", node_id: "producer", state: "review_ready", revision: 1,
+        output_declarations: [artifact_declaration.call]
+      )
+      error = assert_raises(Flightdeck::ValidationError) do
+        Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)).plan(
+          slug: "cross-host",
+          observations_path: write_mission_observations(root, "cross-host", [observation], name: "cross-host.json")
+        )
+      end
+      assert_includes error.message, "crosses host identity"
+
+      create_mission(
+        config, slug: "approved-external", authorized_targets: [
+          mission_authorized_target(config, node_id: "producer", host_id: "host-a"),
+          mission_authorized_target(config, node_id: "consumer", host_id: "host-b")
+        ]
+      )
+      add_mission_node(
+        config, slug: "approved-external", node_id: "producer", outputs: ["artifact_bundle"], host_id: "host-a",
+        artifact_resolver_kind: "external_approved", artifact_resolver_id: "locker_a"
+      )
+      add_mission_node(
+        config, slug: "approved-external", node_id: "consumer", required: false, host_id: "host-b",
+        dependencies: ["producer"], accepted: ["artifact_bundle"],
+        artifact_resolver_kind: "external_approved", artifact_resolver_id: "locker_a"
+      )
+      dispatch_mission_node(config, slug: "approved-external", node_id: "producer", host_id: "host-a")
+      observation = mission_observation(
+        config, slug: "approved-external", node_id: "producer", state: "review_ready", revision: 1,
+        output_declarations: [artifact_declaration.call]
+      )
+      plan = Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)).plan(
+        slug: "approved-external",
+        observations_path: write_mission_observations(root, "approved-external", [observation], name: "approved-external.json")
+      )
+      assert_equal "external_approved", plan.dig("actions", 0, "payload", "artifact_resolver", "kind")
+    end
+  end
+
+  def test_mission_auto_handoff_requires_provenance_and_jit_idle_receipt
+    with_hub do |root, config|
+      targets = %w[producer consumer].map { |id| mission_authorized_target(config, node_id: id) }
+      create_mission(config, slug: "jit-handoff", authorized_targets: targets)
+      add_mission_node(
+        config, slug: "jit-handoff", node_id: "producer", outputs: ["candidate"],
+        artifact_resolver_kind: "external_approved", artifact_resolver_id: "producer_locker"
+      )
+      add_mission_node(
+        config, slug: "jit-handoff", node_id: "consumer", required: false,
+        dependencies: ["producer"], accepted: ["candidate"],
+        artifact_resolver_kind: "external_approved", artifact_resolver_id: "future_locker"
+      )
+      dispatch_mission_node(config, slug: "jit-handoff", node_id: "producer")
+      observation = mission_observation(
+        config, slug: "jit-handoff", node_id: "producer", state: "review_ready", revision: 1
+      )
+      result = apply_mission_sync(
+        Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)), slug: "jit-handoff",
+        observations_path: write_mission_observations(root, "jit-handoff", [observation], name: "jit-handoff.json")
+      )
+      handoff = result.fetch("actions").find { |action| action["type"] == "dependency_handoff" }
+      refute_nil handoff
+      assert_nil handoff.dig("payload", "artifact_resolver")
+      store = Flightdeck::MissionStore.new(config)
+      store.prepare_action(slug: "jit-handoff", action_id: handoff["id"])
+      error = assert_raises(Flightdeck::ValidationError) do
+        store.acknowledge_action(slug: "jit-handoff", action_id: handoff["id"])
+      end
+      assert_includes error.message, "awaiting_handoff task"
+      receipt = store.record_dispatch(
+        slug: "jit-handoff", node_id: "consumer", runtime_project_id: "runtime-consumer",
+        host_id: "host-local", task_id: "task-consumer"
+      )
+      assert_equal "awaiting_handoff", receipt.dig("spec", "graph", "nodes", 1, "observed_state")
+      status_view = store.status("jit-handoff").dig("spec", "graph", "nodes", 1)
+      assert_equal "running", status_view["observed_state"]
+      assert_equal "handing_off", status_view["status_code"]
+      acknowledged = store.acknowledge_action(slug: "jit-handoff", action_id: handoff["id"])
+      assert_equal "running", acknowledged.dig("spec", "graph", "nodes", 1, "observed_state")
+      %w[dispatch_pending dispatch_unknown].each do |non_actionable_state|
+        simulated = Marshal.load(Marshal.dump(acknowledged))
+        consumer = simulated.dig("spec", "graph", "nodes").find { |node| node["id"] == "consumer" }
+        consumer["observed_state"] = non_actionable_state
+        consumer["task_id"] = nil
+        consumer["pending_client_id"] = "pending-consumer"
+        actions = Flightdeck::MissionSync.new(store).send(
+          :coordination_actions, simulated, [{ "state" => "review_ready" }]
+        )
+        refute actions.any? { |action| %w[dependency_handoff resume].include?(action["type"]) }
+      end
+
+      create_mission(config, slug: "terminal-only", authorized_targets: targets)
+      add_mission_node(config, slug: "terminal-only", node_id: "producer", outputs: ["candidate"])
+      add_mission_node(
+        config, slug: "terminal-only", node_id: "consumer", required: false,
+        dependencies: ["producer"], accepted: ["candidate"]
+      )
+      dispatch_mission_node(config, slug: "terminal-only", node_id: "producer")
+      check_only = mission_observation(
+        config, slug: "terminal-only", node_id: "producer", state: "review_ready", revision: 1,
+        output_declarations: [{ "type" => "candidate", "ref" => "check:operator-evidence", "digest" => nil }]
+      )
+      terminal_plan = Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)).plan(
+        slug: "terminal-only",
+        observations_path: write_mission_observations(root, "terminal-only", [check_only], name: "terminal-only.json")
+      )
+      refute terminal_plan.fetch("actions").any? { |action| %w[dependency_handoff resume].include?(action["type"]) }
+
+      forged = mission_observation(
+        config, slug: "terminal-only", node_id: "producer", state: "review_ready", revision: 2,
+        output_declarations: [{ "type" => "candidate", "ref" => "codex-task:consumer/dGFzay1wcm9kdWNlcg", "digest" => nil }]
+      )
+      error = assert_raises(Flightdeck::ValidationError) do
+        Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)).plan(
+          slug: "terminal-only",
+          observations_path: write_mission_observations(root, "terminal-only", [forged], name: "forged-task-ref.json")
+        )
+      end
+      assert_includes error.message, "terminal reference must use check: or review:"
+    end
+  end
+
+  def test_mission_prepared_handoff_survives_unresolved_dispatch_receipts_fail_closed
+    with_hub do |root, config|
+      node_ids = %w[producer pending-consumer unknown-consumer]
+      targets = node_ids.map { |id| mission_authorized_target(config, node_id: id) }
+      create_mission(config, slug: "unresolved-handoff", authorized_targets: targets)
+      add_mission_node(config, slug: "unresolved-handoff", node_id: "producer", outputs: ["candidate"])
+      %w[pending-consumer unknown-consumer].each do |consumer_id|
+        add_mission_node(
+          config, slug: "unresolved-handoff", node_id: consumer_id, required: false,
+          dependencies: ["producer"], accepted: ["candidate"]
+        )
+      end
+      dispatch_mission_node(config, slug: "unresolved-handoff", node_id: "producer")
+      observation = mission_observation(
+        config, slug: "unresolved-handoff", node_id: "producer", state: "review_ready", revision: 1
+      )
+      result = apply_mission_sync(
+        Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)), slug: "unresolved-handoff",
+        observations_path: write_mission_observations(root, "unresolved-handoff", [observation], name: "unresolved.json")
+      )
+      actions = result.fetch("actions").select { |action| action["type"] == "dependency_handoff" }
+      assert_equal 2, actions.length
+      by_consumer = actions.to_h { |action| [action.dig("payload", "node_id"), action] }
+      store = Flightdeck::MissionStore.new(config)
+
+      pending_action = by_consumer.fetch("pending-consumer")
+      store.prepare_action(slug: "unresolved-handoff", action_id: pending_action["id"])
+      pending = store.record_dispatch(
+        slug: "unresolved-handoff", node_id: "pending-consumer", runtime_project_id: "runtime-pending-consumer",
+        host_id: "host-local", pending_client_id: "client-pending-consumer"
+      )
+      pending_node = pending.dig("spec", "graph", "nodes").find { |node| node["id"] == "pending-consumer" }
+      assert_equal "dispatch_pending", pending_node["observed_state"]
+      assert_equal "prepared", pending.dig("status", "outbox").find { |action| action["id"] == pending_action["id"] }["status"]
+      assert_empty store.validate("unresolved-handoff")
+      mission_path = File.join(config.mission_dir, "unresolved-handoff", "mission.yaml")
+      without_handoff = Flightdeck::Support.load_data(mission_path)
+      without_handoff.dig("status", "outbox").reject! { |action| action["id"] == pending_action["id"] }
+      Flightdeck::Support.atomic_yaml(mission_path, without_handoff)
+      assert store.validate("unresolved-handoff").any? { |message| message.include?("requires exactly one preserved") }
+      Flightdeck::Support.atomic_yaml(mission_path, pending)
+      refute store.next_actions("unresolved-handoff").any? { |action| action["id"] == pending_action["id"] }
+      error = assert_raises(Flightdeck::ValidationError) do
+        store.acknowledge_action(slug: "unresolved-handoff", action_id: pending_action["id"])
+      end
+      assert_includes error.message, "awaiting_handoff task"
+      generation = store.snapshot("unresolved-handoff").dig("status", "generation")
+      repeated = store.record_dispatch(
+        slug: "unresolved-handoff", node_id: "pending-consumer", runtime_project_id: "runtime-pending-consumer",
+        host_id: "host-local", pending_client_id: "client-pending-consumer"
+      )
+      assert_equal generation, repeated.dig("status", "generation")
+      assert_equal 2, repeated.dig("status", "outbox").count { |action| action["type"] == "dependency_handoff" }
+      reconciled = store.record_dispatch(
+        slug: "unresolved-handoff", node_id: "pending-consumer", runtime_project_id: "runtime-pending-consumer",
+        host_id: "host-local", task_id: "task-pending-consumer", pending_client_id: "client-pending-consumer"
+      )
+      assert_equal "awaiting_handoff", reconciled.dig("spec", "graph", "nodes").find { |node| node["id"] == "pending-consumer" }["observed_state"]
+      store.acknowledge_action(slug: "unresolved-handoff", action_id: pending_action["id"])
+
+      unknown_action = by_consumer.fetch("unknown-consumer")
+      store.prepare_action(slug: "unresolved-handoff", action_id: unknown_action["id"])
+      unknown = store.record_dispatch(
+        slug: "unresolved-handoff", node_id: "unknown-consumer", runtime_project_id: "runtime-unknown-consumer",
+        host_id: "host-local", dispatch_unknown: true
+      )
+      unknown_node = unknown.dig("spec", "graph", "nodes").find { |node| node["id"] == "unknown-consumer" }
+      assert_equal "dispatch_unknown", unknown_node["observed_state"]
+      assert_equal "prepared", unknown.dig("status", "outbox").find { |action| action["id"] == unknown_action["id"] }["status"]
+      refute store.next_actions("unresolved-handoff").any? { |action| action["id"] == unknown_action["id"] }
+      error = assert_raises(Flightdeck::ValidationError) do
+        store.acknowledge_action(slug: "unresolved-handoff", action_id: unknown_action["id"])
+      end
+      assert_includes error.message, "awaiting_handoff task"
+      store.fail_action(slug: "unresolved-handoff", action_id: unknown_action["id"], code: "receipt_unresolved")
+      refute store.next_actions("unresolved-handoff").any? { |action| action["id"] == unknown_action["id"] }
+      assert_empty store.validate("unresolved-handoff")
+    end
+  end
+
+  def test_mission_dependent_dispatch_requires_complete_exact_prepared_handoff
+    with_hub do |root, config|
+      node_ids = %w[producer-a producer-b consumer]
+      targets = node_ids.map { |id| mission_authorized_target(config, node_id: id) }
+      create_mission(config, slug: "complete-handoff", authorized_targets: targets)
+      %w[producer-a producer-b].each do |producer_id|
+        add_mission_node(config, slug: "complete-handoff", node_id: producer_id, outputs: ["candidate"])
+      end
+      add_mission_node(
+        config, slug: "complete-handoff", node_id: "consumer", required: false,
+        dependencies: %w[producer-a producer-b], accepted: ["candidate"]
+      )
+      %w[producer-a producer-b].each do |producer_id|
+        dispatch_mission_node(config, slug: "complete-handoff", node_id: producer_id)
+      end
+      observations = [
+        mission_observation(
+          config, slug: "complete-handoff", node_id: "producer-a", state: "review_ready", revision: 1
+        ),
+        mission_observation(
+          config, slug: "complete-handoff", node_id: "producer-b", state: "review_ready", revision: 1,
+          output_declarations: [{ "type" => "candidate", "ref" => "check:terminal-only", "digest" => nil }]
+        )
+      ]
+      result = apply_mission_sync(
+        Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)), slug: "complete-handoff",
+        observations_path: write_mission_observations(root, "complete-handoff", observations, name: "partial-parent.json")
+      )
+      refute result.fetch("actions").any? { |action| action["type"] == "dependency_handoff" }
+      store = Flightdeck::MissionStore.new(config)
+      error = assert_raises(Flightdeck::ValidationError) do
+        store.record_dispatch(
+          slug: "complete-handoff", node_id: "consumer", runtime_project_id: "runtime-consumer",
+          host_id: "host-local", pending_client_id: "client-consumer"
+        )
+      end
+      assert_includes error.message, "requires its exact prepared dependency handoff"
+
+      compatible = mission_observation(
+        config, slug: "complete-handoff", node_id: "producer-b", state: "review_ready", revision: 2
+      )
+      result = apply_mission_sync(
+        Flightdeck::MissionSync.new(store), slug: "complete-handoff",
+        observations_path: write_mission_observations(root, "complete-handoff", [compatible], name: "complete-parent.json")
+      )
+      action = result.fetch("actions").find { |item| item["type"] == "dependency_handoff" }
+      refute_nil action
+      assert_equal %w[producer-a producer-b], action.dig("payload", "dependency_node_ids")
+      assert_equal 2, action.dig("payload", "output_refs").length
+      store.prepare_action(slug: "complete-handoff", action_id: action["id"])
+
+      mission_path = File.join(config.mission_dir, "complete-handoff", "mission.yaml")
+      mission = Flightdeck::Support.load_data(mission_path)
+      stored = mission.dig("status", "outbox").find { |item| item["id"] == action["id"] }
+      stored["payload"]["output_refs"] = [stored.dig("payload", "output_refs", 0)]
+      Flightdeck::Support.atomic_yaml(mission_path, mission)
+      errors = store.validate("complete-handoff")
+      assert errors.any? { |message| message.include?("complete handoffable dependency set") }
+      error = assert_raises(Flightdeck::ValidationError) do
+        store.record_dispatch(
+          slug: "complete-handoff", node_id: "consumer", runtime_project_id: "runtime-consumer",
+          host_id: "host-local", pending_client_id: "client-consumer"
+        )
+      end
+      assert_includes error.message, "complete handoffable dependency set"
+    end
+  end
+
+  def test_mission_core_materializes_root_and_jit_artifact_declarations
+    with_hub do |root, config|
+      targets = %w[root-producer jit-producer consumer].map do |id|
+        mission_authorized_target(config, node_id: id)
+      end
+      create_mission(config, slug: "declaration-bootstrap", authorized_targets: targets)
+      add_mission_node(
+        config, slug: "declaration-bootstrap", node_id: "root-producer", outputs: ["bootstrap"]
+      )
+      add_mission_node(
+        config, slug: "declaration-bootstrap", node_id: "jit-producer",
+        dependencies: ["root-producer"], accepted: ["bootstrap"], outputs: ["artifact_bundle"],
+        artifact_resolver_kind: "external_approved", artifact_resolver_id: "artifact_store"
+      )
+      add_mission_node(
+        config, slug: "declaration-bootstrap", node_id: "consumer", required: false,
+        dependencies: ["jit-producer"], accepted: ["artifact_bundle"],
+        artifact_resolver_kind: "external_approved", artifact_resolver_id: "artifact_store"
+      )
+      dispatch_mission_node(config, slug: "declaration-bootstrap", node_id: "root-producer")
+      root_observation = mission_observation(
+        config, slug: "declaration-bootstrap", node_id: "root-producer", state: "review_ready", revision: 1
+      )
+      assert_equal({ "type" => "bootstrap", "codex_task" => true },
+                   root_observation.dig("outcome", "output_declarations", 0))
+      refute root_observation.dig("outcome", "output_declarations", 0).key?("ref")
+      root_result = apply_mission_sync(
+        Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)), slug: "declaration-bootstrap",
+        observations_path: write_mission_observations(root, "declaration-bootstrap", [root_observation], name: "root-declaration.json")
+      )
+      root_ref = root_result.dig("accepted", 0, "output_refs", 0)
+      assert_equal "codex-task:root-producer/#{Base64.urlsafe_encode64('task-root-producer', padding: false)}", root_ref["ref"]
+      root_handoff = root_result.fetch("actions").find { |action| action["type"] == "dependency_handoff" }
+      store = Flightdeck::MissionStore.new(config)
+      store.prepare_action(slug: "declaration-bootstrap", action_id: root_handoff["id"])
+      store.record_dispatch(
+        slug: "declaration-bootstrap", node_id: "jit-producer", runtime_project_id: "runtime-jit-producer",
+        host_id: "host-local", task_id: "task-jit-producer"
+      )
+      store.acknowledge_action(slug: "declaration-bootstrap", action_id: root_handoff["id"])
+
+      digest = Digest::SHA256.hexdigest("jit artifact")
+      jit_observation = mission_observation(
+        config, slug: "declaration-bootstrap", node_id: "jit-producer", state: "review_ready", revision: 1,
+        output_declarations: [{ "type" => "artifact_bundle", "artifact_id" => "bundle-v2", "digest" => digest }]
+      )
+      changed_observation = Marshal.load(Marshal.dump(jit_observation))
+      changed_observation.dig("outcome", "output_declarations", 0)["artifact_id"] = "bundle-v3"
+      sync = Flightdeck::MissionSync.new(store)
+      plan = sync.plan(
+        slug: "declaration-bootstrap",
+        observations_path: write_mission_observations(root, "declaration-bootstrap", [jit_observation], name: "jit-declaration.json")
+      )
+      changed_plan = sync.plan(
+        slug: "declaration-bootstrap",
+        observations_path: write_mission_observations(root, "declaration-bootstrap", [changed_observation], name: "jit-declaration-changed.json")
+      )
+      refute_equal plan["plan_token"], changed_plan["plan_token"]
+      refute_equal plan.dig("accepted", 0, "event_digest"), changed_plan.dig("accepted", 0, "event_digest")
+      refute_equal plan.dig("actions", 0, "trigger_digest"), changed_plan.dig("actions", 0, "trigger_digest")
+      applied = sync.apply(
+        slug: "declaration-bootstrap", observations_path: File.join(root, "jit-declaration.json"),
+        plan_token: plan.fetch("plan_token")
+      )
+      task_binding = Base64.urlsafe_encode64("task-jit-producer", padding: false)
+      expected = "artifact:artifact_store/jit-producer/#{task_binding}/#{digest}/bundle-v2"
+      assert_equal expected, applied.dig("accepted", 0, "output_refs", 0, "ref")
+      assert_equal expected, applied.dig("actions", 0, "payload", "output_refs", 0, "ref")
+      persisted = store.snapshot("declaration-bootstrap").dig("spec", "graph", "nodes").find do |node|
+        node["id"] == "jit-producer"
+      end
+      assert_equal jit_observation.dig("outcome", "output_declarations"), persisted["output_declarations"]
+      assert_match(/\A[0-9a-f]{64}\z/, persisted["event_digest"])
+    end
+  end
+
+  def test_mission_rejects_forged_declarations_and_record_reference_tamper
+    with_hub do |root, config|
+      targets = %w[producer consumer].map { |id| mission_authorized_target(config, node_id: id) }
+      create_mission(config, slug: "declaration-tamper", authorized_targets: targets)
+      add_mission_node(
+        config, slug: "declaration-tamper", node_id: "producer", outputs: ["artifact_bundle"],
+        artifact_resolver_kind: "external_approved", artifact_resolver_id: "artifact_store"
+      )
+      add_mission_node(
+        config, slug: "declaration-tamper", node_id: "consumer", required: false,
+        dependencies: ["producer"], accepted: ["artifact_bundle"],
+        artifact_resolver_kind: "external_approved", artifact_resolver_id: "artifact_store"
+      )
+      dispatch_mission_node(config, slug: "declaration-tamper", node_id: "producer")
+      digest = Digest::SHA256.hexdigest("artifact")
+      valid = mission_observation(
+        config, slug: "declaration-tamper", node_id: "producer", state: "review_ready", revision: 1,
+        output_declarations: [{ "type" => "artifact_bundle", "artifact_id" => "bundle-v1", "digest" => digest }]
+      )
+      invalid_declarations = [
+        [{ "type" => "artifact_bundle", "artifact_id" => "../escape", "digest" => digest }, "artifact_id"],
+        [{ "type" => "artifact_bundle", "artifact_id" => "bundle-v1", "digest" => digest.upcase }, "lowercase sha256"],
+        [{ "type" => "artifact_bundle", "ref" => "artifact:forged/producer/binding/#{digest}/bundle-v1", "digest" => digest }, "check: or review:"],
+        [{ "type" => "artifact_bundle", "ref" => "codex-task:producer/forged", "digest" => nil }, "check: or review:"]
+      ]
+      invalid_declarations.each_with_index do |(declaration, message), index|
+        observation = Marshal.load(Marshal.dump(valid))
+        observation["outcome"]["output_declarations"] = [declaration]
+        error = assert_raises(Flightdeck::ValidationError) do
+          Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)).plan(
+            slug: "declaration-tamper",
+            observations_path: write_mission_observations(root, "declaration-tamper", [observation], name: "invalid-declaration-#{index}.json")
+          )
+        end
+        assert_includes error.message, message
+      end
+
+      apply_mission_sync(
+        Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)), slug: "declaration-tamper",
+        observations_path: write_mission_observations(root, "declaration-tamper", [valid], name: "valid-declaration.json")
+      )
+      mission_path = File.join(config.mission_dir, "declaration-tamper", "mission.yaml")
+      mission = Flightdeck::Support.load_data(mission_path)
+      producer = mission.dig("spec", "graph", "nodes").find { |node| node["id"] == "producer" }
+      original_ref = producer.dig("output_refs", 0, "ref")
+      producer.dig("output_refs", 0)["ref"] = original_ref.sub("bundle-v1", "bundle-v9")
+      Flightdeck::Support.atomic_yaml(mission_path, mission)
+      errors = Flightdeck::MissionStore.new(config).validate("declaration-tamper")
+      assert errors.any? { |message| message.include?("do not match core-materialized") }
+
+      producer.dig("output_refs", 0)["ref"] = original_ref
+      producer.dig("output_declarations", 0)["artifact_id"] = "bundle-v9"
+      Flightdeck::Support.atomic_yaml(mission_path, mission)
+      errors = Flightdeck::MissionStore.new(config).validate("declaration-tamper")
+      assert errors.any? { |message| message.include?("event digest does not match") }
+    end
+  end
+
+  def test_mission_blocked_and_stale_consumers_are_never_actionable
+    with_hub do |root, config|
+      targets = %w[producer consumer].map { |id| mission_authorized_target(config, node_id: id) }
+      create_mission(config, slug: "non-actionable-consumer", authorized_targets: targets)
+      add_mission_node(config, slug: "non-actionable-consumer", node_id: "producer", outputs: ["candidate"])
+      add_mission_node(
+        config, slug: "non-actionable-consumer", node_id: "consumer", required: false,
+        dependencies: ["producer"], accepted: ["candidate"]
+      )
+      dispatch_mission_node(config, slug: "non-actionable-consumer", node_id: "producer")
+      store = Flightdeck::MissionStore.new(config)
+      observation = mission_observation(
+        config, slug: "non-actionable-consumer", node_id: "producer", state: "review_ready", revision: 1
+      )
+      result = apply_mission_sync(
+        Flightdeck::MissionSync.new(store), slug: "non-actionable-consumer",
+        observations_path: write_mission_observations(root, "non-actionable-consumer", [observation], name: "non-actionable-root.json")
+      )
+      action = result.fetch("actions").find { |item| item["type"] == "dependency_handoff" }
+      store.prepare_action(slug: "non-actionable-consumer", action_id: action["id"])
+      store.record_dispatch(
+        slug: "non-actionable-consumer", node_id: "consumer", runtime_project_id: "runtime-consumer",
+        host_id: "host-local", task_id: "task-consumer"
+      )
+      store.fail_action(slug: "non-actionable-consumer", action_id: action["id"], code: "delivery_failed")
+
+      store.mutate("non-actionable-consumer") do |record|
+        consumer = record.dig("spec", "graph", "nodes").find { |node| node["id"] == "consumer" }
+        consumer["observed_state"] = "blocked"
+      end
+      refute store.next_actions("non-actionable-consumer").any? { |item| item["type"] == "dependency_handoff" }
+      error = assert_raises(Flightdeck::ValidationError) do
+        store.prepare_action(slug: "non-actionable-consumer", action_id: action["id"])
+      end
+      assert_includes error.message, "failed dependency handoff is not retryable"
+
+      stale_time = Time.now.utc - 7200
+      store.mutate("non-actionable-consumer") do |record|
+        consumer = record.dig("spec", "graph", "nodes").find { |node| node["id"] == "consumer" }
+        consumer["observed_state"] = "running"
+        consumer["dispatched_at"] = stale_time.iso8601
+        consumer["updated_at"] = stale_time.iso8601
+      end
+      stale_store = Flightdeck::MissionStore.new(config, clock: -> { Time.now.utc + 7200 })
+      refute stale_store.next_actions("non-actionable-consumer").any? { |item| item["type"] == "dependency_handoff" }
+      error = assert_raises(Flightdeck::ValidationError) do
+        stale_store.prepare_action(slug: "non-actionable-consumer", action_id: action["id"])
+      end
+      assert_includes error.message, "cannot target a stale consumer"
+      assert_raises(Flightdeck::ValidationError) do
+        store.action_record(store.snapshot("non-actionable-consumer"), type: "resume", payload: {}, trigger: "forbidden")
+      end
+    end
+  end
+
+  def test_mission_observation_size_is_checked_before_read_and_state_is_unchanged
+    with_hub do |root, config|
+      create_mission(config, slug: "size-first", mode: "watch_only")
+      add_mission_node(config, slug: "size-first")
+      dispatch_mission_node(config, slug: "size-first")
+      store = Flightdeck::MissionStore.new(config)
+      sync = Flightdeck::MissionSync.new(store)
+      mission_path = File.join(config.mission_dir, "size-first", "mission.yaml")
+      before = Digest::SHA256.file(mission_path).hexdigest
+      oversized = File.join(root, "oversized-observations.json")
+      File.write(oversized, "{" + ("x" * config.mission_budgets.fetch("max_forwarded_bytes")))
+
+      file_singleton = File.singleton_class
+      original_binread = file_singleton.instance_method(:binread)
+      file_singleton.define_method(:binread) { |_path| raise "oversized observation was read before size rejection" }
+      begin
+        error = assert_raises(Flightdeck::ValidationError) do
+          sync.plan(slug: "size-first", observations_path: oversized)
+        end
+        assert_includes error.message, "max_forwarded_bytes"
+        error = assert_raises(Flightdeck::ValidationError) do
+          sync.apply(slug: "size-first", observations_path: oversized, plan_token: "0" * 64)
+        end
+        assert_includes error.message, "max_forwarded_bytes"
+      ensure
+        file_singleton.define_method(:binread, original_binread)
+      end
+      assert_equal before, Digest::SHA256.file(mission_path).hexdigest
+
+      error = assert_raises(Flightdeck::ValidationError) do
+        sync.plan(slug: "size-first", observations_path: root)
+      end
+      assert_includes error.message, "regular file"
+      unreadable = File.join(root, "unreadable-observations.json")
+      File.write(unreadable, "{}")
+      original_readable = file_singleton.instance_method(:readable?)
+      file_singleton.define_method(:readable?) { |_path| false }
+      begin
+        error = assert_raises(Flightdeck::ValidationError) do
+          sync.plan(slug: "size-first", observations_path: unreadable)
+        end
+        assert_includes error.message, "unreadable"
+      ensure
+        file_singleton.define_method(:readable?, original_readable)
+      end
+      assert_equal before, Digest::SHA256.file(mission_path).hexdigest
+    end
+  end
+
+  def test_mission_cli_syncs_outcomeless_tool_states_and_rejects_wrong_outcome_shape
+    with_hub do |root, config|
+      create_mission(config, slug: "tool-states", mode: "watch_only")
+      add_mission_node(config, slug: "tool-states")
+      dispatch_mission_node(config, slug: "tool-states")
+      cli = Flightdeck::CLI.new(root: root, out: StringIO.new, err: StringIO.new)
+      states = %w[running needs_approval blocked runtime_failure cancelled]
+      states.each_with_index do |state, index|
+        revision = index + 1
+        observation = mission_observation(
+          config, slug: "tool-states", node_id: "unit-a", state: state, revision: revision
+        )
+        refute observation.key?("outcome"), state
+        path = write_mission_observations(root, "tool-states", [observation], name: "#{state}.json")
+        output = StringIO.new
+        error_output = StringIO.new
+        status = Flightdeck::CLI.new(root: root, out: output, err: error_output).run(
+          ["mission", "sync-apply", "tool-states", "--observations", path, "--plan-token",
+           Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)).plan(
+             slug: "tool-states", observations_path: path
+           ).fetch("plan_token"), "--json"]
+        )
+        assert_equal 0, status, error_output.string
+        result = JSON.parse(output.string)
+        assert_equal state, result["resulting_state"]
+        node = Flightdeck::MissionStore.new(config).snapshot("tool-states").dig("spec", "graph", "nodes", 0)
+        assert_equal observation["cursor"], node["cursor"]
+        assert_equal revision, node["revision"]
+        assert_nil node["outcome_code"]
+        assert_nil node["validation_status"]
+        assert_empty node["output_refs"]
+      end
+
+      before_not_loaded = Flightdeck::MissionStore.new(config).snapshot("tool-states")
+      unloaded = mission_observation(
+        config, slug: "tool-states", node_id: "unit-a", state: "notLoaded", revision: 6
+      )
+      refute unloaded.key?("outcome")
+      unloaded_path = write_mission_observations(root, "tool-states", [unloaded], name: "not-loaded.json")
+      output = StringIO.new
+      unloaded_token = Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)).plan(
+        slug: "tool-states", observations_path: unloaded_path
+      ).fetch("plan_token")
+      assert_equal 0, Flightdeck::CLI.new(root: root, out: output, err: StringIO.new).run(
+        ["mission", "sync-apply", "tool-states", "--observations", unloaded_path,
+         "--plan-token", unloaded_token, "--json"]
+      )
+      unloaded_result = JSON.parse(output.string)
+      assert_equal "not_loaded", unloaded_result.dig("ignored", 0, "reason")
+      after_not_loaded = Flightdeck::MissionStore.new(config).snapshot("tool-states")
+      assert_equal before_not_loaded.dig("spec", "graph", "nodes", 0, "cursor"), after_not_loaded.dig("spec", "graph", "nodes", 0, "cursor")
+      assert_equal "cancelled", after_not_loaded.dig("spec", "graph", "nodes", 0, "observed_state")
+
+      %w[running needs_approval blocked runtime_failure cancelled notLoaded].each_with_index do |state, index|
+        fabricated = mission_observation(
+          config, slug: "tool-states", node_id: "unit-a", state: state, revision: 20 + index,
+          include_outcome: true
+        )
+        path = write_mission_observations(root, "tool-states", [fabricated], name: "fabricated-#{index}.json")
+        error_output = StringIO.new
+        status = Flightdeck::CLI.new(root: root, out: StringIO.new, err: error_output).run(
+          ["mission", "sync-plan", "tool-states", "--observations", path, "--json"]
+        )
+        assert_equal 1, status
+        assert_includes error_output.string, "forbidden fields: outcome"
+      end
+
+      %w[review_ready failed_validation].each_with_index do |state, index|
+        missing = mission_observation(
+          config, slug: "tool-states", node_id: "unit-a", state: state, revision: 40 + index
+        )
+        missing.delete("outcome")
+        path = write_mission_observations(root, "tool-states", [missing], name: "missing-final-#{index}.json")
+        error_output = StringIO.new
+        status = Flightdeck::CLI.new(root: root, out: StringIO.new, err: error_output).run(
+          ["mission", "sync-plan", "tool-states", "--observations", path, "--json"]
+        )
+        assert_equal 1, status
+        assert_includes error_output.string, "missing fields: outcome"
+      end
+    end
+  end
+
+  def test_mission_cli_freezes_graph_after_any_execution_or_action_marker
+    with_hub do |root, config|
+      add_via_cli = lambda do |slug, node_id|
+        output = StringIO.new
+        error_output = StringIO.new
+        status = Flightdeck::CLI.new(root: root, out: output, err: error_output).run(
+          [
+            "mission", "add", slug, node_id, "--project-key", "project-#{node_id}",
+            "--runtime-project-id", "runtime-#{node_id}",
+            "--project-path", File.join(root, "development", node_id), "--host-id", "host-local",
+            "--execution-mode", "local", "--access-mode", "read_only", "--work-type", "validation",
+            "--optional", "--allows-output", "validation_result", "--json"
+          ]
+        )
+        [status, output.string, error_output.string]
+      end
+      assert_frozen = lambda do |slug, node_id|
+        mission_path = File.join(config.mission_dir, slug, "mission.yaml")
+        before = Digest::SHA256.file(mission_path).hexdigest
+        status, _output, error_output = add_via_cli.call(slug, node_id)
+        assert_equal 1, status
+        assert_includes error_output, "mission graph is frozen once execution begins"
+        assert_equal before, Digest::SHA256.file(mission_path).hexdigest
+      end
+
+      create_mission(
+        config, slug: "planning-open", authorized_targets: %w[unit-a planned-extra].map do |id|
+          mission_authorized_target(config, node_id: id)
+        end
+      )
+      add_mission_node(config, slug: "planning-open")
+      status, output, error_output = add_via_cli.call("planning-open", "planned-extra")
+      assert_equal 0, status, error_output
+      assert_equal 2, JSON.parse(output).dig("spec", "graph", "nodes").length
+
+      create_mission(config, slug: "task-dispatched")
+      add_mission_node(config, slug: "task-dispatched")
+      dispatch_mission_node(config, slug: "task-dispatched")
+      assert_frozen.call("task-dispatched", "late-task-owner")
+
+      create_mission(
+        config, slug: "pending-dispatch",
+        authorized_targets: [mission_authorized_target(config, execution_mode: "worktree", access_mode: "write")]
+      )
+      add_mission_node(config, slug: "pending-dispatch", execution_mode: "worktree", access_mode: "write")
+      Flightdeck::MissionStore.new(config).record_dispatch(
+        slug: "pending-dispatch", node_id: "unit-a", runtime_project_id: "runtime-unit-a",
+        host_id: "host-local", pending_client_id: "pending-unit-a"
+      )
+      assert_frozen.call("pending-dispatch", "late-pending-owner")
+
+      create_mission(config, slug: "unknown-dispatch", mode: "watch_only")
+      add_mission_node(config, slug: "unknown-dispatch")
+      Flightdeck::MissionStore.new(config).record_dispatch(
+        slug: "unknown-dispatch", node_id: "unit-a", runtime_project_id: "runtime-unit-a",
+        host_id: "host-local", dispatch_unknown: true
+      )
+      assert_frozen.call("unknown-dispatch", "late-unknown-owner")
+
+      create_mission(config, slug: "observed-mission", mode: "watch_only")
+      add_mission_node(config, slug: "observed-mission")
+      dispatch_mission_node(config, slug: "observed-mission")
+      running = mission_observation(
+        config, slug: "observed-mission", node_id: "unit-a", state: "running", revision: 1
+      )
+      observations_path = write_mission_observations(
+        root, "observed-mission", [running], name: "freeze-observed.json"
+      )
+      apply_mission_sync(Flightdeck::MissionSync.new(Flightdeck::MissionStore.new(config)),
+        slug: "observed-mission", observations_path: observations_path
+      )
+      assert_frozen.call("observed-mission", "late-observed-owner")
+
+      create_mission(config, slug: "action-mission", mode: "watch_only")
+      add_mission_node(config, slug: "action-mission")
+      store = Flightdeck::MissionStore.new(config)
+      store.mutate("action-mission") do |mission|
+        action = store.action_record(
+          mission,
+          type: "observe",
+          payload: { "node_id" => "unit-a", "reason" => "dispatch_unknown" },
+          trigger: "synthetic-planned-action"
+        )
+        store.append_actions!(mission, [action])
+      end
+      planned_with_action = store.snapshot("action-mission")
+      assert_equal "planned", planned_with_action.dig("status", "state")
+      assert_equal "planned", planned_with_action.dig("spec", "graph", "nodes", 0, "observed_state")
+      assert_frozen.call("action-mission", "late-action-owner")
+      action_id = store.outbox_for("action-mission").first["id"]
+      store.prepare_action(slug: "action-mission", action_id: action_id)
+      assert_frozen.call("action-mission", "late-prepared-owner")
+    end
+  end
+
+  def test_mission_authoring_catalog_exposes_only_exact_safe_eligible_choices
+    with_authoring_fixture do |root, _config, _authoring, catalog, target|
+      refute_nil target
+      assert_equal "flightdeck.command.mission-authoring.v1", catalog["capability"]
+      assert_match(/\Acatalog-[0-9a-f]{48}\z/, catalog["catalog_generation"])
+      assert_equal %w[local worktree], catalog["targets"].map { |item| item["execution_mode"] }.uniq.sort
+      assert_equal %w[read_only write], catalog["targets"].map { |item| item["access_mode"] }.uniq.sort
+      assert catalog["targets"].all? { |item| item.keys.sort == %w[access_mode display_label execution_mode host_id logical_project_key project_path_digest runtime_project_id target_id].sort }
+      refute_includes JSON.generate(catalog), root
+      refute_includes JSON.generate(catalog), "project_path\""
+    end
+  end
+
+  def test_mission_authoring_plan_is_read_only_complete_acyclic_and_canonical
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      nodes = [
+        {
+          "id" => "producer", "target_id" => target.fetch("target_id"), "required" => true,
+          "dependencies" => [], "accepted_input_types" => [], "allowed_output_types" => ["contract_ref"]
+        },
+        {
+          "id" => "consumer", "target_id" => target.fetch("target_id"), "required" => true,
+          "dependencies" => ["producer"], "accepted_input_types" => ["contract_ref"],
+          "allowed_output_types" => ["validation_ref"]
+        }
+      ]
+      draft = authoring_draft(target, nodes: nodes)
+      plan = authoring_plan(authoring, draft)
+      reordered = draft.to_a.reverse.to_h
+      reordered["selected_targets"] = draft.fetch("selected_targets").map { |item| item.to_a.reverse.to_h }
+      same_plan = authoring_plan(authoring, reordered)
+
+      assert_equal plan.values_at("plan_id", "plan_generation", "plan_digest", "plan_token"),
+                   same_plan.values_at("plan_id", "plan_generation", "plan_digest", "plan_token")
+      canonical = lambda do |value|
+        case value
+        when Hash then value.keys.sort.to_h { |key| [key, canonical.call(value[key])] }
+        when Array then value.map { |item| canonical.call(item) }
+        else value
+        end
+      end
+      digest_input = {
+        "capability" => "flightdeck.command.mission-authoring.v1",
+        "catalog_generation" => plan.fetch("catalog_generation"),
+        "mission" => plan.fetch("mission")
+      }
+      assert_equal Digest::SHA256.hexdigest(JSON.generate(canonical.call(digest_input))), plan["plan_digest"]
+      assert_match(/\Amission-[0-9a-f]{24}\z/, plan.dig("mission", "id"))
+      assert_equal %w[producer consumer], plan.dig("mission", "graph", "nodes").map { |node| node["id"] }
+      assert_equal ["criterion-001"], plan.dig("mission", "graph", "nodes", 0, "criterion_ids")
+      assert_equal ["criterion-001"], plan.dig("mission", "graph", "nodes", 1, "criterion_ids")
+      assert_equal target["project_path_digest"], plan.dig("mission", "authorized_targets", 0, "project_path_digest")
+      refute Dir.exist?(config.mission_dir)
+      assert_equal "all_required_nodes_own_all_criteria", plan.fetch("warnings").last.fetch("code")
+    end
+  end
+
+  def test_mission_authoring_rejects_forbidden_secret_future_cycle_and_target_drift
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+
+      forbidden = Marshal.load(Marshal.dump(draft)).merge("raw_yaml" => "kind: MissionRecord")
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring_plan(authoring, forbidden) }
+      assert_equal "malformed_request", error.code
+
+      secret = Marshal.load(Marshal.dump(draft))
+      secret["outcome"] = "Bearer abcdefghijklmnopqrstuvwxyz"
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring_plan(authoring, secret) }
+      assert_equal "forbidden_content", error.code
+
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.plan("schema_version" => "flightdeck.mission-authoring.plan-request/v2", "draft" => draft)
+      end
+      assert_equal "future_version", error.code
+
+      drift = Marshal.load(Marshal.dump(draft))
+      drift.dig("selected_targets", 0)["runtime_project_id"] = "fabricated-runtime"
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring_plan(authoring, drift) }
+      assert_equal "ineligible_target", error.code
+
+      cycle = authoring_draft(
+        target,
+        nodes: [
+          {"id" => "a", "target_id" => target["target_id"], "required" => true, "dependencies" => ["b"], "accepted_input_types" => ["ref"], "allowed_output_types" => ["ref"]},
+          {"id" => "b", "target_id" => target["target_id"], "required" => true, "dependencies" => ["a"], "accepted_input_types" => ["ref"], "allowed_output_types" => ["ref"]}
+        ]
+      )
+      assert_raises(Flightdeck::MissionAuthoring::ContractError, Flightdeck::ValidationError) do
+        authoring_plan(authoring, cycle)
+      end
+
+      bounded = authoring_draft(target)
+      bounded.fetch("nodes").first["id"] = "a#{'b' * 127}"
+      assert_equal 128, bounded.fetch("nodes").first.fetch("id").bytesize
+      authoring_plan(authoring, bounded)
+      oversized = Marshal.load(Marshal.dump(bounded))
+      oversized.fetch("nodes").first["id"] = "a#{'b' * 128}"
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring_plan(authoring, oversized) }
+      assert_equal "malformed_request", error.code
+      assert_equal "node ID exceeds 128 bytes", error.message
+    end
+  end
+
+  def test_mission_authoring_create_is_exact_atomic_and_recoverable
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      plan = authoring_plan(authoring, draft)
+      created = authoring.create(authoring_create_request(plan, draft, "client-operation-001"))
+      assert_equal "created", created["outcome"]
+      mission = Flightdeck::MissionStore.new(config).snapshot(created.fetch("mission_id"))
+      assert_equal 1, mission.dig("spec", "graph", "nodes").length
+      assert_equal plan["plan_id"], mission.dig("metadata", "authoring", "plan_id")
+      assert_equal plan["plan_digest"], mission.dig("metadata", "authoring", "plan_digest")
+      assert_empty Flightdeck::MissionStore.new(config).validate(created.fetch("mission_id"))
+
+      recovered = authoring.operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-001"
+      )
+      assert_equal "created", recovered["outcome"]
+      assert_equal created["mission_id"], recovered["mission_id"]
+    end
+  end
+
+  def test_mission_authoring_stale_duplicate_conflicting_and_consumed_operations_fail_closed
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      plan = authoring_plan(authoring, draft)
+      stale = authoring_create_request(plan, draft, "client-operation-stale")
+      stale["confirmation"]["plan_token"] = "0" * 64
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring.create(stale) }
+      assert_equal "stale_or_mismatched_plan", error.code
+      not_created = authoring.operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-stale"
+      )
+      assert_equal "not_created", not_created["outcome"]
+
+      drift_draft = authoring_draft(target, title: "Exact path catalog drift")
+      drift_plan = authoring_plan(authoring, drift_draft)
+      registry = Flightdeck::Support.load_data(config.project_registry_path)
+      registry.dig("projects", "authoring-project")["runtime_project_id"] = "runtime-project-replaced"
+      Flightdeck::Support.atomic_yaml(config.project_registry_path, registry)
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.create(authoring_create_request(drift_plan, drift_draft, "client-operation-drift"))
+      end
+      assert_equal "stale_or_mismatched_plan", error.code
+      registry.dig("projects", "authoring-project")["runtime_project_id"] = "runtime-project-authoring"
+      Flightdeck::Support.atomic_yaml(config.project_registry_path, registry)
+
+      request = authoring_create_request(plan, draft, "client-operation-once")
+      authoring.create(request)
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring.create(request) }
+      assert_equal "duplicate_operation", error.code
+
+      changed_draft = authoring_draft(target, title: "Different exact plan")
+      changed_plan = authoring_plan(authoring, changed_draft)
+      conflict = authoring_create_request(changed_plan, changed_draft, "client-operation-once")
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring.create(conflict) }
+      assert_equal "conflicting_operation", error.code
+
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.create(authoring_create_request(plan, draft, "client-operation-second"))
+      end
+      assert_equal "consumed_plan", error.code
+    end
+  end
+
+  def test_mission_authoring_failed_atomic_write_leaves_no_partial_mission
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      plan = authoring_plan(authoring, draft)
+      request = authoring_create_request(plan, draft, "client-operation-atomic-failure")
+      original = Flightdeck::Support.method(:atomic_yaml)
+      Flightdeck::Support.singleton_class.define_method(:atomic_yaml) do |path, value|
+        raise IOError, "synthetic Mission write failure" if path.end_with?("/mission.yaml")
+
+        original.call(path, value)
+      end
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring.create(request) }
+      assert_equal "persistence_failed", error.code
+      refute File.exist?(File.join(config.mission_dir, plan.dig("mission", "id"), "mission.yaml"))
+      status = authoring.operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-atomic-failure"
+      )
+      assert_equal "not_created", status["outcome"]
+
+      Flightdeck::Support.singleton_class.define_method(:atomic_yaml, original)
+      retry_plan = authoring_plan(authoring, draft)
+      assert_equal plan["plan_id"], retry_plan["plan_id"]
+      retried = authoring.create(authoring_create_request(retry_plan, draft, "client-operation-after-not-created"))
+      assert_equal "created", retried["outcome"]
+    ensure
+      Flightdeck::Support.singleton_class.define_method(:atomic_yaml, original) if original
+    end
+  end
+
+  def test_mission_authoring_unknown_result_recovers_exact_created_without_retry
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      plan = authoring_plan(authoring, draft)
+      request = authoring_create_request(plan, draft, "client-operation-unknown")
+      original = authoring.method(:write_operation!)
+      authoring.define_singleton_method(:write_operation!) do |record|
+        raise IOError, "synthetic lost result" if record["state"] == "created"
+
+        original.call(record)
+      end
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring.create(request) }
+      assert_equal "unknown_outcome", error.code
+      assert File.file?(File.join(config.mission_dir, plan.dig("mission", "id"), "mission.yaml"))
+
+      recovered = Flightdeck::MissionAuthoring.new(config).operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-unknown"
+      )
+      assert_equal "created", recovered["outcome"]
+      assert_equal plan.dig("mission", "id"), recovered["mission_id"]
+    end
+  end
+
+  def test_mission_authoring_post_commit_fault_remains_unknown_and_consumed
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      plan = authoring_plan(authoring, draft)
+      request = authoring_create_request(plan, draft, "client-operation-post-commit")
+      original = Flightdeck::MissionStore.instance_method(:persist_complete_mission!)
+      Flightdeck::MissionStore.define_method(:persist_complete_mission!) do |mission|
+        original.bind(self).call(mission)
+        raise IOError, "synthetic post-commit failure"
+      end
+
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) { authoring.create(request) }
+      assert_equal "unknown_outcome", error.code
+      operation_path = Dir.glob(File.join(config.mission_dir, ".authoring-operations", "*.json")).first
+      assert_equal "unresolved", JSON.parse(File.read(operation_path)).fetch("state")
+      assert File.file?(File.join(config.mission_dir, plan.dig("mission", "id"), "mission.yaml"))
+      recovered = Flightdeck::MissionAuthoring.new(config).operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-post-commit"
+      )
+      assert_equal "created", recovered["outcome"]
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.create(authoring_create_request(plan, draft, "client-operation-after-post-commit"))
+      end
+      assert_equal "consumed_plan", error.code
+    ensure
+      Flightdeck::MissionStore.define_method(:persist_complete_mission!, original) if original
+    end
+  end
+
+  def test_mission_authoring_recovery_returns_unresolved_on_binding_or_store_conflict
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      plan = authoring_plan(authoring, draft)
+      created = authoring.create(authoring_create_request(plan, draft, "client-operation-conflict"))
+      mission_path = File.join(config.mission_dir, created.fetch("mission_id"), "mission.yaml")
+      mission = Flightdeck::Support.load_data(mission_path)
+      mission.dig("metadata", "authoring")["operation_digest"] = "f" * 64
+      Flightdeck::Support.atomic_yaml(mission_path, mission)
+      status = authoring.operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-conflict"
+      )
+      assert_equal "unresolved", status["outcome"]
+      assert_equal "mission_identity_conflict", status["reason"]
+
+      operation_path = Dir.glob(File.join(config.mission_dir, ".authoring-operations", "*.json")).first
+      File.write(operation_path, "{\"schema_version\":\"future\"}\n")
+      status = authoring.operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-conflict"
+      )
+      assert_equal "unresolved", status["outcome"]
+      assert_equal "operation_store_invalid", status["reason"]
+    end
+  end
+
+  def test_mission_authoring_recovery_rejects_unbound_and_unsafe_operation_records
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      plan = authoring_plan(authoring, draft)
+      authoring.create(authoring_create_request(plan, draft, "client-operation-boundary"))
+      operation_path = Dir.glob(File.join(config.mission_dir, ".authoring-operations", "*.json")).first
+      operation = JSON.parse(File.read(operation_path))
+      operation["mission_id"] = "../../outside"
+      Flightdeck::Support.atomic_write(operation_path, "#{JSON.pretty_generate(operation)}\n")
+
+      status = authoring.operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-boundary"
+      )
+      assert_equal "unresolved", status["outcome"]
+      assert_equal "operation_store_invalid", status["reason"]
+
+      File.delete(operation_path)
+      File.symlink(__FILE__, operation_path)
+      status = authoring.operation(
+        "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+        "operation_id" => "client-operation-boundary"
+      )
+      assert_equal "unresolved", status["outcome"]
+      assert_equal "operation_store_invalid", status["reason"]
+    end
+  end
+
+  def test_mission_authoring_cli_converts_unexpected_failures_to_closed_json
+    with_authoring_fixture do |root, _config, _authoring, _catalog, _target|
+      request_path = File.join(root, "catalog-internal-error.json")
+      File.write(request_path, JSON.generate("schema_version" => Flightdeck::MissionAuthoring::CATALOG_REQUEST))
+      original = Flightdeck::MissionAuthoring.instance_method(:catalog)
+      Flightdeck::MissionAuthoring.define_method(:catalog) { |_request| raise IOError, "sensitive local path" }
+
+      output = StringIO.new
+      status = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new).run(
+        ["mission", "authoring-catalog", "--request", request_path]
+      )
+      result = JSON.parse(output.string)
+      assert_equal 1, status
+      assert_equal Flightdeck::MissionAuthoring::ERROR_RESULT, result["schema_version"]
+      assert_equal "internal_error", result.dig("error", "code")
+      refute_includes output.string, "sensitive local path"
+      refute_includes result.dig("error", "message"), "operation ID"
+    ensure
+      Flightdeck::MissionAuthoring.define_method(:catalog, original) if original
+    end
+  end
+
+  def test_mission_authoring_capability_schema_and_cli_are_closed_machine_readable_surfaces
+    compatibility = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "compatibility.json")))
+    family = compatibility.fetch("capabilities").keys.grep(/mission-authoring/)
+    assert_equal ["flightdeck.command.mission-authoring.v1"], family
+    assert_equal "1.2.0", compatibility["template_version"]
+    assert_equal({"mode" => "stop_and_plan_migration"}, compatibility.dig("capabilities", family.first, "fallback"))
+
+    types = JSON.parse(File.read(File.join(TEMPLATE_ROOT, "hub", "schemas", "mission-authoring-types.schema.json")))
+    assert_equal false, types.dig("$defs", "draft", "additionalProperties")
+    assert_equal false, types.dig("$defs", "draftNode", "additionalProperties")
+    assert_equal false, types.dig("$defs", "selectedTarget", "additionalProperties")
+
+    with_authoring_fixture do |root, _config, _authoring, _catalog, target|
+      request_path = File.join(root, "catalog-request.json")
+      File.write(request_path, JSON.generate("schema_version" => Flightdeck::MissionAuthoring::CATALOG_REQUEST))
+      output = StringIO.new
+      status = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new).run(
+        ["mission", "authoring-catalog", "--request", request_path, "--json"]
       )
       assert_equal 0, status
-      assert_equal Flightdeck::WorkStore::LIFECYCLE_OPEN_RESULT, JSON.parse(lifecycle_output.string)["schema_version"]
+      assert_equal Flightdeck::MissionAuthoring::CATALOG_RESULT, JSON.parse(output.string)["schema_version"]
 
-      list_output = StringIO.new
-      status = Flightdeck::CLI.new(root: root, out: list_output, err: StringIO.new).run(["work", "list", "--hub-root", root, "--json"])
+      draft = authoring_draft(target)
+      File.write(
+        request_path,
+        JSON.generate("schema_version" => Flightdeck::MissionAuthoring::PLAN_REQUEST, "draft" => draft)
+      )
+      output = StringIO.new
+      status = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new).run(
+        ["mission", "authoring-plan", "--request", request_path]
+      )
       assert_equal 0, status
-      assert_equal Flightdeck::WorkStore::LIST_RESULT, JSON.parse(list_output.string)["schema_version"]
+      plan = JSON.parse(output.string)
+      assert_equal Flightdeck::MissionAuthoring::PLAN_RESULT, plan["schema_version"]
+
+      File.write(request_path, JSON.generate(authoring_create_request(plan, draft, "client-cli-operation")))
+      output = StringIO.new
+      status = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new).run(
+        ["mission", "authoring-create", "--request", request_path]
+      )
+      assert_equal 0, status
+      assert_equal "created", JSON.parse(output.string)["outcome"]
+
+      File.write(
+        request_path,
+        JSON.generate(
+          "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+          "operation_id" => "client-cli-operation"
+        )
+      )
+      output = StringIO.new
+      status = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new).run(
+        ["mission", "authoring-operation", "--request", request_path]
+      )
+      assert_equal 0, status
+      assert_equal "created", JSON.parse(output.string)["outcome"]
+
+      File.write(request_path, JSON.generate("schema_version" => "future", "shell" => "echo denied"))
+      output = StringIO.new
+      status = Flightdeck::CLI.new(root: root, out: output, err: StringIO.new).run(
+        ["mission", "authoring-catalog", "--request", request_path]
+      )
+      result = JSON.parse(output.string)
+      assert_equal 1, status
+      assert_equal false, result["ok"]
+      assert_equal "malformed_request", result.dig("error", "code")
+    end
+  end
+
+  def test_mission_authoring_requires_declared_capability_before_any_operation_state
+    with_authoring_fixture do |root, config, authoring, _catalog, target|
+      compatibility_path = File.join(root, "hub", "compatibility.json")
+      compatibility = JSON.parse(File.read(compatibility_path))
+      compatibility.fetch("capabilities").delete(Flightdeck::MissionAuthoring::CAPABILITY)
+      Flightdeck::Support.atomic_write(compatibility_path, JSON.pretty_generate(compatibility))
+      draft = authoring_draft(target)
+      plan_request = { "schema_version" => Flightdeck::MissionAuthoring::PLAN_REQUEST, "draft" => draft }
+      create_request = {
+        "schema_version" => Flightdeck::MissionAuthoring::CREATE_REQUEST,
+        "operation_id" => "unsupported-operation",
+        "confirmation" => { "plan_id" => "plan-#{'a' * 48}", "plan_generation" => "generation-#{'a' * 48}", "plan_digest" => "a" * 64, "plan_token" => "a" * 64 },
+        "draft" => draft
+      }
+      [
+        -> { authoring.catalog("schema_version" => Flightdeck::MissionAuthoring::CATALOG_REQUEST) },
+        -> { authoring.plan(plan_request) },
+        -> { authoring.create(create_request) },
+        -> { authoring.operation("schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST, "operation_id" => "unsupported-operation") }
+      ].each do |callable|
+        error = assert_raises(Flightdeck::MissionAuthoring::ContractError, &callable)
+        assert_equal "unsupported_hub_contract", error.code
+      end
+      refute Dir.exist?(File.join(config.mission_dir, ".authoring-operations"))
+    end
+  end
+
+  def test_mission_authoring_requires_core_mission_schema_before_mutation
+    with_authoring_fixture do |root, config, authoring, _catalog, target|
+      draft = authoring_draft(target)
+      assert_equal Flightdeck::MissionAuthoring::CATALOG_RESULT,
+                   authoring.catalog("schema_version" => Flightdeck::MissionAuthoring::CATALOG_REQUEST)["schema_version"]
+      mission_schema = File.join(root, "hub", "schemas", "mission.schema.json")
+      original = File.binread(mission_schema)
+      FileUtils.rm_f(mission_schema)
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.create(
+          {
+            "schema_version" => Flightdeck::MissionAuthoring::CREATE_REQUEST,
+            "operation_id" => "missing-core-schema",
+            "confirmation" => { "plan_id" => "plan-#{'a' * 48}", "plan_generation" => "generation-#{'a' * 48}", "plan_digest" => "a" * 64, "plan_token" => "a" * 64 },
+            "draft" => draft
+          }
+        )
+      end
+      assert_equal "unsupported_hub_contract", error.code
+      refute Dir.exist?(File.join(config.mission_dir, ".authoring-operations"))
+
+      Flightdeck::Support.atomic_write(mission_schema, original)
+      schema = JSON.parse(original)
+      schema["$id"] = "https://flightdeck.dev/schemas/incorrect-mission.schema.json"
+      Flightdeck::Support.atomic_write(mission_schema, JSON.pretty_generate(schema))
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.operation(
+          "schema_version" => Flightdeck::MissionAuthoring::OPERATION_REQUEST,
+          "operation_id" => "mismatched-core-schema"
+        )
+      end
+      assert_equal "unsupported_hub_contract", error.code
+      refute Dir.exist?(File.join(config.mission_dir, ".authoring-operations"))
+    end
+  end
+
+  def test_mission_list_excludes_internal_authoring_operations
+    with_authoring_fixture do |_root, config, authoring, _catalog, target|
+      created_draft = authoring_draft(target, title: "Created authoring operation")
+      created_plan = authoring_plan(authoring, created_draft)
+      authoring.create(authoring_create_request(created_plan, created_draft, "list-created-operation"))
+
+      unresolved_draft = authoring_draft(target, title: "Unresolved authoring operation")
+      unresolved_plan = authoring_plan(authoring, unresolved_draft)
+      original_write = authoring.method(:write_operation!)
+      authoring.define_singleton_method(:write_operation!) do |record|
+        raise IOError, "synthetic lost result" if record["state"] == "created"
+
+        original_write.call(record)
+      end
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.create(authoring_create_request(unresolved_plan, unresolved_draft, "list-unresolved-operation"))
+      end
+      assert_equal "unknown_outcome", error.code
+      authoring.define_singleton_method(:write_operation!, original_write)
+
+      not_created_draft = authoring_draft(target, title: "Not-created authoring operation")
+      not_created_plan = authoring_plan(authoring, not_created_draft)
+      original_atomic = Flightdeck::Support.method(:atomic_yaml)
+      Flightdeck::Support.singleton_class.define_method(:atomic_yaml) do |path, value|
+        raise IOError, "synthetic Mission write failure" if path.end_with?("/mission.yaml")
+
+        original_atomic.call(path, value)
+      end
+      error = assert_raises(Flightdeck::MissionAuthoring::ContractError) do
+        authoring.create(authoring_create_request(not_created_plan, not_created_draft, "list-not-created-operation"))
+      end
+      assert_equal "persistence_failed", error.code
+      Flightdeck::Support.singleton_class.define_method(:atomic_yaml, original_atomic)
+
+      page = Flightdeck::MissionStore.new(config).list_page
+      assert_equal 2, page.dig("page", "returned")
+      assert_equal [created_plan, unresolved_plan].map { |plan| plan.dig("mission", "id") }.sort,
+                   page.fetch("missions").map { |mission| mission.fetch("mission_id") }.sort
+    ensure
+      authoring.define_singleton_method(:write_operation!, original_write) if authoring && original_write
+      Flightdeck::Support.singleton_class.define_method(:atomic_yaml, original_atomic) if original_atomic
     end
   end
 end

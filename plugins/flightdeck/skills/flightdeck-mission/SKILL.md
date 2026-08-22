@@ -93,13 +93,6 @@ completion. Normalize every tool state to a bounded generic `status_code`
 without prose. Treat it as display metadata only, and require a final
 `status_code` to equal the child `outcome.code` exactly.
 
-When the runtime task adapter exposes an explicit structured Codex skill-event
-record, forward only the schema-valid bounded `skill_events` fields. Never
-derive skill use from a prompt, task title, display label, command, tool
-payload, free text, or the skill selected during planning. Omit the field when
-the adapter does not provide trustworthy invocation evidence; absence is not
-proof that no skill ran.
-
 In `supervised`, execute only allowlisted actions emitted by the deterministic
 mission outbox. A child declares an artifact only as `{type, artifact_id,
 digest}` or its own task as `{type, codex_task: true}`; it never supplies a

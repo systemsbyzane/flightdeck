@@ -1,5 +1,0 @@
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://flightdeck.dev/schemas/omp-operation-observe-result.schema.json", "title": "Persisted bounded OMP Operation observation result", "type": "object", "additionalProperties": false,
-  "required": ["schema_version", "schema", "ok", "capability", "operation_id", "execution_id", "execution_state", "agent", "replayed"],
-  "properties": {"schema_version": {"const": "flightdeck.omp-operation.observe-result/v1"}, "schema": {"const": "hub/schemas/omp-operation-observe-result.schema.json"}, "ok": {"const": true}, "capability": {"const": "flightdeck.command.omp-operation-observation.v1"}, "operation_id": {"$ref": "omp-operation-types.schema.json#/$defs/operationId"}, "execution_id": {"$ref": "omp-operation-types.schema.json#/$defs/executionId"}, "execution_state": {"enum": ["authorized", "running", "attention_required", "failed", "cancelled", "review_ready"]}, "agent": {"$ref": "omp-operation-types.schema.json#/$defs/safeAgent"}, "replayed": {"type": "boolean"}}
-}

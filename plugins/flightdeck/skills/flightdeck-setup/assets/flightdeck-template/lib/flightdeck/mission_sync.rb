@@ -128,6 +128,12 @@ module Flightdeck
       validate_batch!(batch, mission)
       raise ValidationError, "dispatch_only missions do not monitor or sync" if mission.dig("spec", "mode") == "dispatch_only"
       @store.enforce_sync_ready!(mission)
+      pending_worktree = mission.dig("spec", "graph", "nodes").find do |node|
+        node["execution_mode"] == "worktree" && !Support.present?(node["task_id"])
+      end
+      if pending_worktree
+        raise ValidationError, "worktree creation is pending or unknown for #{pending_worktree['id']}"
+      end
 
       simulated = Support.stringify(mission)
       accepted = []

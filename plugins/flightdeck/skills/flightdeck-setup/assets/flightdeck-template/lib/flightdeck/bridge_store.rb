@@ -13,7 +13,7 @@ module Flightdeck
       @config = config
     end
 
-    def plan(repository_id:, mode:, profile: nil, include_instruction_files: true)
+    def plan(repository_id:, mode:, profile: nil)
       mode = mode.to_s
       raise UsageError, "bridge mode must be one of: #{MODES.join(', ')}" unless MODES.include?(mode)
 
@@ -71,7 +71,7 @@ module Flightdeck
         "template" => definition.fetch("template"),
         "targets" => targets,
         "existing_targets" => targets.select { |path| File.exist?(File.join(root, path)) },
-        "agents_files" => include_instruction_files ? instruction_files(root) : [],
+        "agents_files" => instruction_files(root),
         "desired_state" => desired_state,
         "blockers" => blockers,
         "idempotent" => desired_state == "valid",

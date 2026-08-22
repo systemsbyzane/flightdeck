@@ -457,14 +457,6 @@ Run a bounded reconcile cycle:
    `logical_project_key`, `runtime_project_id`, `project_path_digest`,
    `host_id`, `task_id`, `cursor`, `revision`, `event_id`, `observed_state`,
    `status_code`, `observed_at`, and `worktree_ready` as its base fields. Add
-   optional `skill_events` only from explicit structured Codex task skill-event
-   metadata. Each event contains exactly `schema_version`, `skill_id`, nullable
-   `skill_version`, `lifecycle_status`, `observed_at`, `evidence_id`, and
-   `evidence_source`; the source must be `codex_task_skill_event`. Never infer
-   these events from prompts, titles, display labels, commands, free text, or
-   arbitrary tool payloads. The core binds accepted events to the persisted
-   Mission/node/project/host/task identity and rejects unresolved identities,
-   conflicting evidence IDs, malformed versions, or over-budget input. Add
    the schema-valid child `outcome` only for `review_ready` or
    `failed_validation`; require it there, require its code to equal
    `status_code`, and forbid it for every other state. Exclude titles,

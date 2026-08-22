@@ -3,21 +3,12 @@
 require "optparse"
 require_relative "bridge_bulk_store"
 require_relative "doctor"
-require_relative "hub_snapshot"
-require_relative "operations_snapshot"
 require_relative "mission_authoring"
-require_relative "mission_objectives"
-require_relative "skill_telemetry"
-require_relative "operation_authoring"
-require_relative "operation_detail"
-require_relative "operation_lifecycle"
 require_relative "mission_sync"
 require_relative "repo_planner"
 require_relative "repository_store"
 require_relative "route_planner"
 require_relative "setup_store"
-require_relative "work_store"
-require_relative "operation_execution"
 
 module Flightdeck
   class CLI
@@ -30,15 +21,12 @@ module Flightdeck
     def run(argv)
       arguments = argv.dup
       return mission_list(arguments.drop(2)) if arguments.first(2) == %w[mission list]
-      return mission_client_snapshot(arguments.drop(2)) if arguments.first(2) == %w[mission client-snapshot]
-      return work_list(arguments.drop(2)) if arguments.first(2) == %w[work list]
 
       command = arguments.shift || "help"
       return help if %w[help -h --help].include?(command)
 
       config = Config.new(root: @root)
       case command
-      when "hub" then hub(arguments)
       when "doctor" then doctor(config, arguments)
       when "status" then status(config, arguments)
       when "setup" then setup(config, arguments)
@@ -47,8 +35,6 @@ module Flightdeck
       when "bridge" then bridge(config, arguments)
       when "task" then task(config, arguments)
       when "mission" then mission(config, arguments)
-      when "operation" then operation(config, arguments)
-      when "work" then work(config, arguments)
       else raise UsageError, "unknown command: #{command}"
       end
     rescue UsageError, OptionParser::ParseError => e
@@ -64,77 +50,6 @@ module Flightdeck
     end
 
     private
-
-    def hub(argv)
-      subcommand = argv.shift
-      return hub_operations_snapshot(argv) if subcommand == "operations-snapshot"
-      raise UsageError, "hub requires snapshot" unless subcommand == "snapshot"
-
-      options = {}
-      OptionParser.new do |parser|
-        parser.on("--hub-root PATH") { |value| options[:hub_root] = value }
-        parser.on("--json") { options[:json] = true }
-      end.parse!(argv)
-      empty!(argv)
-      raise UsageError, "--hub-root is required" unless options[:hub_root]
-
-      selected_root = options[:hub_root].to_s
-      unless Pathname.new(selected_root).absolute?
-        raise HubSnapshot::SnapshotError.new("invalid_hub_root", "Selected Hub root must be an absolute path.")
-      end
-      unless File.directory?(selected_root)
-        raise HubSnapshot::SnapshotError.new("hub_root_not_found", "Selected Hub root does not exist.")
-      end
-      config = Config.new(root: selected_root)
-      unless config.data["api_version"] == "flightdeck.dev/v1alpha1" &&
-             config.data["kind"] == "FlightdeckRegistry" &&
-             config.data["schema"] == "hub/schemas/flightdeck.schema.json"
-        raise HubSnapshot::SnapshotError.new("invalid_hub_root", "Selected Hub root is not a Flightdeck Hub.")
-      end
-      json(HubSnapshot.new(config).snapshot)
-      0
-    rescue HubSnapshot::SnapshotError => e
-      emit_hub_snapshot_error(e.code, e.message)
-      1
-    rescue UsageError, OptionParser::ParseError
-      emit_hub_snapshot_error("invalid_request", "Hub snapshot request is invalid.")
-      2
-    rescue ConfigurationError, ValidationError, SystemCallError
-      emit_hub_snapshot_error("invalid_hub_root", "Selected Hub root is not a valid Flightdeck Hub.")
-      1
-    end
-
-    def hub_operations_snapshot(argv)
-      options = { archive_view: "active" }
-      OptionParser.new do |parser|
-        parser.on("--hub-root PATH") { |value| options[:hub_root] = value }
-        parser.on("--archive-view VIEW") { |value| options[:archive_view] = value }
-        parser.on("--json") { options[:json] = true }
-      end.parse!(argv)
-      empty!(argv)
-      raise UsageError, "--hub-root is required" unless options[:hub_root]
-      selected_root = options[:hub_root].to_s
-      raise OperationsSnapshot::SnapshotError.new("invalid_hub_root", "Selected Hub root must be an absolute path.") unless Pathname.new(selected_root).absolute?
-      raise OperationsSnapshot::SnapshotError.new("hub_root_not_found", "Selected Hub root does not exist.") unless File.directory?(selected_root)
-      config = Config.new(root: selected_root)
-      unless config.data["api_version"] == "flightdeck.dev/v1alpha1" && config.data["kind"] == "FlightdeckRegistry" && config.data["schema"] == "hub/schemas/flightdeck.schema.json"
-        raise OperationsSnapshot::SnapshotError.new("invalid_hub_root", "Selected Hub root is not a Flightdeck Hub.")
-      end
-      unless %w[active archived].include?(options[:archive_view])
-        raise OperationsSnapshot::SnapshotError.new("invalid_request", "Operations archive view is invalid.")
-      end
-      json(OperationsSnapshot.new(config).snapshot(archive_view: options[:archive_view]))
-      0
-    rescue OperationsSnapshot::SnapshotError => e
-      emit_operations_snapshot_error(e.code, e.message)
-      1
-    rescue UsageError, OptionParser::ParseError
-      emit_operations_snapshot_error("invalid_request", "Operations snapshot request is invalid.")
-      2
-    rescue ConfigurationError, ValidationError, SystemCallError
-      emit_operations_snapshot_error("invalid_hub_root", "Selected Hub root is not a valid Flightdeck Hub.")
-      1
-    end
 
     def mission_list(argv)
       options = { limit: MissionStore::LIST_DEFAULT_LIMIT }
@@ -192,65 +107,6 @@ module Flightdeck
         raise MissionStore::ListError.new(
           "unsupported_hub_contract",
           "Selected Hub does not declare the Mission list v1 contract."
-        )
-      end
-    end
-
-    def mission_client_snapshot(argv)
-      options = {}
-      OptionParser.new do |parser|
-        parser.on("--hub-root PATH") { |value| options[:hub_root] = value }
-        parser.on("--mission SLUG") { |value| options[:slug] = value }
-        parser.on("--parent-chat-id ID") { |value| options[:parent_chat_id] = value }
-        parser.on("--json") { options[:json] = true }
-      end.parse!(argv)
-      empty!(argv)
-      raise UsageError, "--hub-root, --mission, and --parent-chat-id are required" unless options[:hub_root] && options[:slug] && options[:parent_chat_id]
-
-      selected_root = options[:hub_root].to_s
-      unless Pathname.new(selected_root).absolute?
-        raise MissionStore::ClientSnapshotError.new("invalid_hub_root", "Hub root must be an absolute path.")
-      end
-      unless File.directory?(selected_root)
-        raise MissionStore::ClientSnapshotError.new("hub_root_not_found", "Selected Hub root does not exist.")
-      end
-      config = Config.new(root: selected_root)
-      unless config.data["api_version"] == "flightdeck.dev/v1alpha1" &&
-             config.data["kind"] == "FlightdeckRegistry" &&
-             config.data["schema"] == "hub/schemas/flightdeck.schema.json"
-        raise MissionStore::ClientSnapshotError.new("invalid_hub_root", "Selected Hub root is not a Flightdeck Hub.")
-      end
-      verify_mission_client_snapshot_capability!(config)
-      json(MissionStore.new(config).client_snapshot(slug: options[:slug], parent_chat_id: options[:parent_chat_id]))
-      0
-    rescue MissionStore::ClientSnapshotError => e
-      emit_mission_client_snapshot_error(e.code, e.message)
-      e.exit_status
-    rescue UsageError, OptionParser::ParseError
-      emit_mission_client_snapshot_error("invalid_request", "Mission client snapshot request is invalid.")
-      2
-    rescue ConfigurationError, ValidationError, SystemCallError
-      emit_mission_client_snapshot_error("invalid_hub_root", "Selected Hub root is not a valid Flightdeck Hub.")
-      1
-    end
-
-    def verify_mission_client_snapshot_capability!(config)
-      compatibility_path = File.join(config.root, "hub", "compatibility.json")
-      schema_path = File.join(config.root, MissionStore::CLIENT_SNAPSHOT_SCHEMA)
-      unless File.file?(compatibility_path) && !File.symlink?(compatibility_path) &&
-             File.file?(schema_path) && !File.symlink?(schema_path)
-        raise MissionStore::ClientSnapshotError.new(
-          "unsupported_hub_contract",
-          "Selected Hub does not declare the Mission client snapshot v1 contract."
-        )
-      end
-      compatibility = Support.load_data(compatibility_path)
-      capability = compatibility.dig("capabilities", "flightdeck.command.mission-client-snapshot.v1")
-      unless compatibility["schema_version"] == "flightdeck.hub-compatibility/v1" &&
-             compatibility["product"] == "flightdeck" && capability.is_a?(Hash)
-        raise MissionStore::ClientSnapshotError.new(
-          "unsupported_hub_contract",
-          "Selected Hub does not declare the Mission client snapshot v1 contract."
         )
       end
     end
@@ -533,13 +389,9 @@ module Flightdeck
 
     def mission(config, argv)
       subcommand = argv.shift
-      if %w[objective-plan objective-create objective-snapshot].include?(subcommand)
-        return mission_objective(config, subcommand, argv)
-      end
       if %w[authoring-catalog authoring-plan authoring-create authoring-operation].include?(subcommand)
         return mission_authoring(config, subcommand, argv)
       end
-      return mission_skill_telemetry(config, argv) if subcommand == "skill-telemetry"
       store = MissionStore.new(config)
       case subcommand
       when "new"
@@ -551,7 +403,6 @@ module Flightdeck
           parser.on("--success-criterion TEXT") { |value| options[:success_criteria] << value }
           parser.on("--non-goal TEXT") { |value| options[:non_goals] << value }
           parser.on("--mode MODE") { |value| options[:mode] = value }
-          parser.on("--parent-chat-id ID") { |value| options[:parent_chat_id] = value }
           parser.on("--authorized-target-json JSON") do |value|
             options[:authorized_targets] << parse_json_option!(value, "--authorized-target-json")
           end
@@ -575,10 +426,6 @@ module Flightdeck
       when "status"
         slug, json_output = mission_slug_with_json(argv, "mission status requires SLUG")
         emit_mission(store.status(slug), json_output, "Mission #{slug} status: #{store.status(slug).dig('status', 'state')}.")
-      when "operation"
-        slug, json_output = mission_slug_with_json(argv, "mission operation requires SLUG")
-        raise UsageError, "mission operation requires --json" unless json_output
-        json(store.operation_projection(slug))
       when "validate"
         slug, json_output = mission_slug_with_json(argv, "mission validate requires SLUG")
         errors = store.validate(slug)
@@ -688,225 +535,9 @@ module Flightdeck
         slug, json_output = mission_slug_with_json(argv, "mission close requires SLUG")
         emit_mission(store.close(slug), json_output, "Explicitly closed mission #{slug}.")
       else
-        raise UsageError, "mission requires new, show, validate, status, operation, skill-telemetry, add, record-dispatch, sync-plan, sync-apply, checkpoint, outbox, next-actions, prepare, acknowledge, fail, or close"
+        raise UsageError, "mission requires new, show, validate, status, add, record-dispatch, sync-plan, sync-apply, checkpoint, outbox, next-actions, prepare, acknowledge, fail, or close"
       end
       0
-    end
-
-    def mission_objective(config, subcommand, argv)
-      options = {}
-      OptionParser.new do |parser|
-        parser.on("--request FILE") { |value| options[:request_path] = value }
-        parser.on("--json") { |value| options[:json] = value }
-      end.parse!(argv)
-      empty!(argv)
-      raise UsageError, "--request is required" unless options[:request_path]
-
-      request = MissionObjectives.load_request(options.fetch(:request_path))
-      objectives = MissionObjectives.new(config)
-      result = case subcommand
-               when "objective-plan" then objectives.plan(request)
-               when "objective-create" then objectives.create(request)
-               when "objective-snapshot" then objectives.snapshot(request)
-               end
-      json(result)
-      0
-    rescue UsageError, ValidationError => e
-      json(MissionObjectives.error_result(e))
-      1
-    rescue StandardError
-      json(MissionObjectives.error_result(MissionObjectives::ContractError.new("internal_error", "Mission objective operation failed closed")))
-      1
-    end
-
-    def mission_skill_telemetry(config, argv)
-      operation_id = required_argument!(argv, "mission skill-telemetry requires SLUG")
-      options = { limit: SkillTelemetry::DEFAULT_LIMIT }
-      OptionParser.new do |parser|
-        parser.on("--limit N", Integer) { |value| options[:limit] = value }
-        parser.on("--cursor CURSOR") { |value| options[:cursor] = value }
-        parser.on("--json") { options[:json] = true }
-      end.parse!(argv)
-      empty!(argv)
-      json(SkillTelemetry.new(config).snapshot(operation_id: operation_id, limit: options[:limit], cursor: options[:cursor]))
-      0
-    rescue SkillTelemetry::ContractError => e
-      error = { "code" => e.code, "message" => e.message }
-      error["operation_id"] = e.operation_id if e.operation_id
-      json(
-        "api_version" => SkillTelemetry::API_VERSION,
-        "kind" => "MissionSkillTelemetryError",
-        "schema" => SkillTelemetry::SCHEMA,
-        "capability" => SkillTelemetry::CAPABILITY,
-        "ok" => false,
-        "error" => error
-      )
-      1
-    rescue UsageError, OptionParser::ParseError
-      json(
-        "api_version" => SkillTelemetry::API_VERSION,
-        "kind" => "MissionSkillTelemetryError",
-        "schema" => SkillTelemetry::SCHEMA,
-        "capability" => SkillTelemetry::CAPABILITY,
-        "ok" => false,
-        "error" => { "code" => "invalid_request", "message" => "Skill telemetry request is invalid." }
-      )
-      2
-    end
-
-    def operation(config, argv)
-      subcommand = argv.shift
-      request = nil
-      names = %w[
-        authoring-catalog authoring-plan authoring-launch authoring-guidance authoring-operation detail lifecycle
-        execution-plan execution-bind execution-start-report execution-start-open execution-retry-bind
-        execution-observe execution-open
-      ]
-      raise UsageError, "operation requires #{names.join(', ')}" unless names.include?(subcommand)
-
-      options = {}
-      OptionParser.new do |parser|
-        parser.on("--request FILE") { |value| options[:request_path] = value }
-        parser.on("--json") { options[:json] = true }
-      end.parse!(argv)
-      empty!(argv)
-      raise UsageError, "--request is required" unless options[:request_path]
-
-      if subcommand == "detail"
-        request = OperationDetail.load_request(options.fetch(:request_path))
-        json(OperationDetail.new(config).detail(request))
-        return 0
-      end
-
-      if subcommand == "lifecycle"
-        request = OperationLifecycle.load_request(options.fetch(:request_path))
-        json(OperationLifecycle.new(config).apply(request))
-        return 0
-      end
-
-      execution_command = subcommand.to_s.start_with?("execution-")
-      request = execution_command ? OperationExecution.load_request(options.fetch(:request_path)) : OperationAuthoring.load_request(options.fetch(:request_path))
-      authoring = OperationAuthoring.new(config)
-      execution = OperationExecution.new(config)
-      result = case subcommand
-               when "authoring-catalog" then authoring.catalog(request)
-               when "authoring-plan" then authoring.plan(request)
-               when "authoring-launch" then authoring.launch(request)
-               when "authoring-guidance" then authoring.guidance(request)
-               when "authoring-operation" then authoring.operation(request)
-               when "execution-plan" then execution.plan(request)
-               when "execution-bind" then execution.bind(request)
-               when "execution-start-report" then execution.start_report(request)
-               when "execution-start-open" then execution.start_open(request)
-               when "execution-retry-bind" then execution.retry_bind(request)
-               when "execution-observe" then execution.observe(request)
-               when "execution-open" then execution.open(request)
-               end
-      json(result)
-      0
-    rescue UsageError, ValidationError => e
-      if subcommand == "detail"
-        json(OperationDetail.error_result(e, request: request))
-      elsif subcommand == "lifecycle"
-        json(OperationLifecycle.error_result(e))
-      elsif subcommand.to_s.start_with?("execution-")
-        json(OperationExecution.error_result(subcommand, e))
-      else
-        json(OperationAuthoring.error_result(subcommand.to_s.delete_prefix("authoring-"), e))
-      end
-      1
-    rescue StandardError
-      if subcommand == "detail"
-        json(OperationDetail.error_result(OperationDetail::ContractError.new("internal_error", "Operation detail failed closed"), request: request))
-        return 1
-      end
-      if subcommand == "lifecycle"
-        json(OperationLifecycle.error_result(OperationLifecycle::ContractError.new("internal_error", "Operation lifecycle action failed closed")))
-        return 1
-      end
-      if subcommand.to_s.start_with?("execution-")
-        error = OperationExecution::ContractError.new("internal_error", "Operation execution command failed closed")
-        json(OperationExecution.error_result(subcommand, error))
-      else
-        error = OperationAuthoring::ContractError.new(
-          "internal_error",
-          subcommand == "authoring-launch" ?
-            "Operation launch failed closed; recover only with the original operation ID" :
-            "Operation authoring failed closed"
-        )
-        json(OperationAuthoring.error_result(subcommand.to_s.delete_prefix("authoring-"), error))
-      end
-      1
-    end
-
-    def work_list(argv)
-      options = { limit: WorkStore::DEFAULT_LIMIT }
-      OptionParser.new do |parser|
-        parser.on("--hub-root PATH") { |value| options[:hub_root] = value }
-        parser.on("--limit N", Integer) { |value| options[:limit] = value }
-        parser.on("--cursor CURSOR") { |value| options[:cursor] = value }
-        parser.on("--json") { options[:json] = true }
-      end.parse!(argv)
-      empty!(argv)
-      selected_root = options.fetch(:hub_root).to_s
-      unless Pathname.new(selected_root).absolute? && File.directory?(selected_root)
-        raise WorkStore::ContractError.new("invalid_hub_root", "Selected Hub root is unavailable")
-      end
-      config = Config.new(root: selected_root)
-      unless config.data["api_version"] == "flightdeck.dev/v1alpha1" && config.data["kind"] == "FlightdeckRegistry" &&
-             config.data["schema"] == "hub/schemas/flightdeck.schema.json"
-        raise WorkStore::ContractError.new("invalid_hub_root", "Selected Hub root is not a Flightdeck Hub")
-      end
-      json(WorkStore.new(config).list_page(limit: options[:limit], cursor: options[:cursor]))
-      0
-    rescue KeyError, UsageError, OptionParser::ParseError
-      json(WorkStore.error_result("list", WorkStore::ContractError.new("malformed_request", "Work list request is invalid")))
-      2
-    rescue WorkStore::ContractError => e
-      json(WorkStore.error_result("list", e))
-      1
-    rescue ConfigurationError, ValidationError, SystemCallError
-      json(WorkStore.error_result("list", WorkStore::ContractError.new("invalid_hub_root", "Selected Hub root is not a valid Flightdeck Hub")))
-      1
-    end
-
-    def work(config, argv)
-      subcommand = argv.shift
-      names = %w[create adapter-bind open coordinate launch decline lifecycle-open dispatch-plan dispatch-report guidance]
-      raise UsageError, "work requires #{names.join(', ')}" unless names.include?(subcommand)
-
-      options = {}
-      OptionParser.new do |parser|
-        parser.on("--request FILE") { |value| options[:request_path] = value }
-        parser.on("--json") { options[:json] = true }
-      end.parse!(argv)
-      empty!(argv)
-      raise UsageError, "--request is required" unless options[:request_path]
-
-      request = WorkStore.load_request(options.fetch(:request_path))
-      store = WorkStore.new(config)
-      result = case subcommand
-               when "create" then store.create(request)
-               when "adapter-bind" then store.bind_adapter(request)
-               when "open" then store.open(request)
-               when "coordinate" then store.coordinate(request)
-               when "launch" then store.launch(request)
-               when "decline" then store.decline(request)
-               when "lifecycle-open" then store.lifecycle_open(request)
-               when "dispatch-plan" then store.dispatch_plan(request)
-               when "dispatch-report" then store.dispatch_report(request)
-               when "guidance" then store.guidance(request)
-               end
-      json(result)
-      0
-    rescue UsageError, ValidationError => e
-      operation = names&.include?(subcommand) ? subcommand : "open"
-      json(WorkStore.error_result(operation, e))
-      1
-    rescue StandardError
-      operation = names&.include?(subcommand) ? subcommand : "open"
-      json(WorkStore.error_result(operation, WorkStore::ContractError.new("internal_error", "Work operation failed closed")))
-      1
     end
 
     def mission_authoring(config, subcommand, argv)
@@ -953,24 +584,6 @@ module Flightdeck
           bin/flightdeck help
           bin/flightdeck doctor [--json] [--strict]
           bin/flightdeck status [--json] [--write]
-          bin/flightdeck hub snapshot --hub-root ABSOLUTE_PATH [--json]
-          bin/flightdeck hub operations-snapshot --hub-root ABSOLUTE_PATH [--archive-view active|archived] [--json]
-          bin/flightdeck work list --hub-root ABSOLUTE_PATH [--limit 1..100] [--cursor CURSOR] [--json]
-          bin/flightdeck work create --request FILE [--json]
-          bin/flightdeck work adapter-bind --request FILE [--json]
-          bin/flightdeck work open --request FILE [--json]
-          bin/flightdeck work coordinate --request FILE [--json]
-          bin/flightdeck work launch --request FILE [--json]
-          bin/flightdeck work decline --request FILE [--json]
-          bin/flightdeck work lifecycle-open --request FILE [--json]
-          bin/flightdeck work dispatch-plan --request FILE [--json]
-          bin/flightdeck work dispatch-report --request FILE [--json]
-          bin/flightdeck work guidance --request FILE [--json]
-          bin/flightdeck operation detail --request FILE [--json]
-          bin/flightdeck operation lifecycle --request FILE [--json]
-          bin/flightdeck mission objective-plan --request FILE [--json]
-          bin/flightdeck mission objective-create --request FILE [--json]
-          bin/flightdeck mission objective-snapshot --request FILE [--json]
           bin/flightdeck setup plan --repositories-root PATH [--failure-policy stop|continue] [--json]
           bin/flightdeck setup connect --repositories-root PATH [--failure-policy stop|continue] [--json]
           bin/flightdeck route plan --workload NAME --work-type TYPE [--repo-id ID] [--project-key KEY] [--json]
@@ -984,30 +597,15 @@ module Flightdeck
           bin/flightdeck task show SLUG
           bin/flightdeck task validate SLUG
           bin/flightdeck task transition SLUG STATE [--note NOTE]
-          bin/flightdeck mission new SLUG --title TITLE --outcome OUTCOME [--success-criterion TEXT] [--non-goal TEXT] [--authorized-target-json JSON] [--mode dispatch_only|watch_only|supervised] [--parent-chat-id OPAQUE_ID] [--json]
+          bin/flightdeck mission new SLUG --title TITLE --outcome OUTCOME [--success-criterion TEXT] [--non-goal TEXT] [--authorized-target-json JSON] [--mode dispatch_only|watch_only|supervised] [--json]
           bin/flightdeck mission list --hub-root ABSOLUTE_PATH [--limit 1..100] [--cursor CURSOR] [--json]
-          bin/flightdeck mission client-snapshot --hub-root ABSOLUTE_PATH --mission SLUG --parent-chat-id OPAQUE_ID [--json]
           bin/flightdeck mission show SLUG [--json]
           bin/flightdeck mission validate SLUG [--json]
           bin/flightdeck mission status SLUG [--json]
-          bin/flightdeck mission operation SLUG --json
-          bin/flightdeck mission skill-telemetry SLUG [--limit 1..100] [--cursor CURSOR] [--json]
           bin/flightdeck mission authoring-catalog --request FILE [--json]
           bin/flightdeck mission authoring-plan --request FILE [--json]
           bin/flightdeck mission authoring-create --request FILE [--json]
           bin/flightdeck mission authoring-operation --request FILE [--json]
-          bin/flightdeck operation authoring-catalog --request FILE [--json]
-          bin/flightdeck operation authoring-plan --request FILE [--json]
-          bin/flightdeck operation authoring-launch --request FILE [--json]
-          bin/flightdeck operation authoring-guidance --request FILE [--json]
-          bin/flightdeck operation authoring-operation --request FILE [--json]
-          bin/flightdeck operation execution-plan --request FILE [--json]
-          bin/flightdeck operation execution-bind --request FILE [--json]
-          bin/flightdeck operation execution-start-report --request FILE [--json]
-          bin/flightdeck operation execution-start-open --request FILE [--json]
-          bin/flightdeck operation execution-retry-bind --request FILE [--json]
-          bin/flightdeck operation execution-observe --request FILE [--json]
-          bin/flightdeck operation execution-open --request FILE [--json]
           bin/flightdeck mission add SLUG NODE --project-key KEY --runtime-project-id ID (--project-path PATH|--project-path-digest SHA256) --host-id HOST --execution-mode local|worktree --access-mode read_only|write --work-type TYPE (--required|--optional) [--criterion-id ID] [--depends-on NODE] [--accepts TYPE] --allows-output TYPE [--artifact-resolver-kind same_host_workspace|external_approved --artifact-resolver-id ID] [--json]
           bin/flightdeck mission record-dispatch SLUG NODE --runtime-project-id ID --host-id HOST [--task-id ID [--pending-client-id ID]|--pending-client-id ID|--dispatch-unknown] [--project-path PATH|--project-path-digest SHA256] [--json]
           bin/flightdeck mission sync-plan SLUG --observations FILE [--json]
@@ -1020,56 +618,24 @@ module Flightdeck
           bin/flightdeck mission fail SLUG ACTION_ID --code CODE [--json]
           bin/flightdeck mission close SLUG [--json]
 
-        doctor, status, hub snapshot, hub operations-snapshot, work list, work open, work lifecycle-open,
-        work dispatch-plan, operation detail, setup plan, route plan, repo plan,
-        bridge plan, mission list, mission client-snapshot, mission show, mission validate, mission status, mission operation,
-        mission skill-telemetry, mission authoring-catalog, mission
-        authoring-plan, mission authoring-operation, mission objective-plan, mission objective-snapshot,
-        mission sync-plan, mission outbox, mission next-actions, operation authoring-catalog,
-        operation authoring-plan, operation authoring-operation, operation execution-open, and
-        operation execution-start-open are read-only.
+        doctor, status, setup plan, route plan, repo plan, bridge plan, mission list, mission show,
+        mission validate, mission status, mission authoring-catalog, mission
+        authoring-plan, mission authoring-operation, mission sync-plan, mission
+        outbox, and mission next-actions are read-only.
         status --write, setup connect, repo onboard, bridge install, task new,
-        task transition, mission authoring-create, mission objective-create, and other mission mutations use
+        task transition, mission authoring-create, and other mission mutations use
         explicit state-changing names and write only their documented scope.
-        operation lifecycle is an explicit state-changing command. close acknowledges only a
-        review-ready authored Operation; archive hides only completed or terminal Operations;
-        restore returns an archived Operation to the active view without deleting evidence.
         Mission authoring commands accept only their closed versioned JSON request
         schemas and always emit a closed JSON result. Create requires the exact
         current plan identity, generation, digest, token, and one opaque operation ID.
         Never retry an unknown authoring-create result; query authoring-operation
         with the original operation ID.
-        Operation authoring uses server-authored Operation IDs and exact catalog target identities.
-        It creates a durable planned Operation only; it never dispatches a task or claims task, skill,
-        or work success. Never retry an unknown authoring-launch result; query
-        operation authoring-operation with the original operation ID.
-        Operation execution is a separate post-confirmation runtime-neutral boundary. execution-plan
-        revalidates the exact launched Work proposal and current dispatch authorization; execution-bind
-        binds stable Flightdeck agents to opaque adapter sessions; execution-observe accepts only signed,
-        bounded, renderer-safe observations. These commands never replace the Codex conversation adapter.
-        Pre-bind failures use execution-start-report; execution-start-open recovers the bounded audit ledger;
-        only execution-retry-bind may consume the exact producer-issued retry generation.
-        Work stores selected-Hub display metadata and normalized event links only. It never stores
-        prompts, responses, commands, tool payloads, paths, or renderer-visible runtime project/task IDs.
-        work create is the ordinary runtime handoff and requires no classification or extra model turn.
-        work adapter-bind returns a native-only secret that must never cross renderer IPC. work coordinate
-        accepts only an HMAC-authenticated exact Hub/Work/session/resume-bound adapter observation; logical
-        project keys are re-resolved against the exact current Hub catalog and produce a review-only proposal.
-        work launch and work decline require the exact stored Operation plan confirmation. A decline is
-        durable and never dispatches. Unknown launch outcomes are recovered through work lifecycle-open and
-        are never blindly resubmitted. work dispatch-plan authorizes exact targets only after launch and
-        requires independent targets to be dispatched concurrently by an independently authorized native
-        owner; it does not dispatch. work dispatch-report persists exact deduplicated receipts and partial
-        failures. work guidance requires the exact
-        active nonterminal Operation ID; an ordinary follow-up is never inferred to be guidance.
         Mission mode defaults to dispatch_only; only watch_only and supervised accept explicit sync.
         watch_only and supervised require explicit --success-criterion and --authorized-target-json.
         dispatch_only derives one success criterion from --outcome when none is supplied.
         Repeat --success-criterion and --non-goal to persist multiple bounded intent entries.
         Authorized target JSON is a closed exact scope for logical/runtime project, path digest,
         host, execution mode, and access mode; core derives the authorization boundary token.
-        --parent-chat-id is an operator-only creation-time binding for the read-only Mission
-        client snapshot. It is stored only as a SHA-256 digest and cannot be added or changed later.
         Artifact resolver kind and ID are optional as a pair and bind reference resolution only.
         Mission graph nodes may be added only while fully planned. After any dispatch,
         observation, or outbox action, create a new mission for newly discovered owners.
@@ -1148,37 +714,6 @@ module Flightdeck
         "schema" => MissionStore::LIST_SCHEMA,
         "ok" => false,
         "error" => error
-      )
-    end
-
-    def emit_hub_snapshot_error(code, message)
-      json(
-        "api_version" => HubSnapshot::API_VERSION,
-        "kind" => "HubSnapshotError",
-        "schema" => HubSnapshot::SCHEMA,
-        "ok" => false,
-        "error" => { "code" => code, "message" => message }
-      )
-    end
-
-    def emit_operations_snapshot_error(code, message)
-      json(
-        "api_version" => OperationsSnapshot::API_VERSION,
-        "kind" => "OperationsSnapshotError",
-        "schema" => OperationsSnapshot::SCHEMA,
-        "ok" => false,
-        "error" => { "code" => code, "message" => message }
-      )
-    end
-
-    def emit_mission_client_snapshot_error(code, message)
-      json(
-        "api_version" => MissionStore::CLIENT_SNAPSHOT_API_VERSION,
-        "kind" => "MissionClientSnapshotError",
-        "schema" => MissionStore::CLIENT_SNAPSHOT_SCHEMA,
-        "ok" => false,
-        "error" => { "code" => code, "message" => message },
-        "recovery" => { "mode" => "manual_recovery_required" }
       )
     end
 
