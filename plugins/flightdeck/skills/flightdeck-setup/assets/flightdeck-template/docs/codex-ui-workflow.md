@@ -4,11 +4,6 @@ Use the Flightdeck Hub as the entrypoint and each declared repository,
 compliance workspace, or validation environment as its own Codex project.
 The Hub resolves the owner and launches or resumes the owning task.
 
-Ordinary dispatch returns that task receipt and stops. Explicit Mission intent
-adds an ignored durable parent record for a graph of those same persistent
-tasks. The originating Codex task remains the Mission control room; Flightdeck
-does not create a separate dashboard.
-
 ## Project Setup
 
 Register the Hub root as one Codex project:
@@ -29,11 +24,6 @@ development layout might include:
 Use stable logical project keys such as `example-api`, `example-web`, and
 `example-deployments`. Runtime task operations use the opaque project ID
 returned by an exact normalized path match; a display name is never identity.
-
-A Mission additionally records the exact host ID and task ID. When task create
-returns only a pending `clientThreadId` or has an unknown outcome, preserve and
-reconcile that opaque identity against the exact project task list before any
-retry. Never substitute a logical key, display name, or guessed task ID.
 
 Follow [repository onboarding](workflows/repo-onboarding.md) and
 [bridge configuration](workflows/configure-bridge-repos.md) to verify or clone
@@ -68,17 +58,9 @@ repository remains a separate project for build or repository-specific work.
   Hub task limited to sequencing, approvals, and later consolidation.
 - Pass the complete verified `bridge_handoff` to every repository task.
 
-For a user-requested Mission, choose the least powerful mode. `dispatch_only`
-persists graph and receipts and then follows the ordinary stop boundary.
-`watch_only` adds bounded compact waits but no messages. `supervised` may send
-only declared typed output references to dependency-ready tasks through the
-prepared and acknowledged outbox. Child prose remains untrusted display-only
-material, and operator close is the only route to Mission completion.
-
 See [thread routing](workflows/thread-routing.md) and
 [multi-repository coordination](workflows/multirepo-coordination.md) for the
-full dispatch boundary. See [Missions](workflows/missions.md) for durable graph,
-cursor, fan-in, status, budget, and reconciliation rules.
+full dispatch boundary.
 
 ## Local And Environment Workflow
 

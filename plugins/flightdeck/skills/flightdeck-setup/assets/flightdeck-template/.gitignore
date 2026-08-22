@@ -4,7 +4,6 @@
 /hub/reports/
 /hub/state/
 /hub/tasks/
-/hub/missions/
 /hub/tmp/
 /handoffs/
 /STATUS.md
@@ -37,3 +36,4 @@
 **/*.log
 **/scan-artifacts/
 **/generated-evidence/
+
