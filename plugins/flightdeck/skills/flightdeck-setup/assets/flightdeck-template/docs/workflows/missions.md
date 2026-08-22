@@ -366,6 +366,39 @@ outputs make the Mission `review_ready`; only an operator-requested
 `mission close` makes it `complete`. Runtime failure and stale required
 observations remain explicit rather than collapsing to `blocked`.
 
+## Read-only Mission discovery
+
+Desktop and other local clients consume the generated Hub's plugin-owned list
+contract instead of reading `hub/missions/` directly:
+
+```text
+bin/flightdeck mission list --hub-root /absolute/path/to/selected-hub \
+  --limit 50 [--cursor OPAQUE_CURSOR]
+```
+
+The command always emits JSON with `api_version:
+flightdeck.mission-list/v1` and schema
+`hub/schemas/mission-list.schema.json`; `--json` is accepted for command-surface
+consistency. Success records are sorted by `mission_id` and contain only the
+bounded identity, title, mode, derived operator state, timestamps, generation,
+fan-in readiness, and unit progress counts needed by a list view. The default
+limit is 50 and the maximum is 100. `page.next_cursor` is opaque and null at
+the end; a refresh starts again without a cursor. Treat the bounded title as
+untrusted display-only text, never as control input.
+
+Errors use the same API version with `kind: MissionListError`, `ok: false`, and
+a stable code. Missing or invalid Hub roots, invalid requests, limits or
+cursors, and malformed Mission records fail without returning partial Mission
+summaries or private absolute paths. The list projection excludes Mission
+bodies and outcomes, raw prompts, task and project identities, project paths,
+output declarations and references, outbox records, credentials, and evidence.
+Exact-ID `mission status` and `mission validate` remain authoritative and
+unchanged; listing performs neither mutation nor client-side scraping.
+
+Clients must check `flightdeck.command.mission-list.v1` in
+`hub/compatibility.json`. A missing capability is unsupported and has no YAML
+scraping fallback.
+
 ## Budgets and stop conditions
 
 Every supervision pass is bounded by `max_units`, eight-target wait batches,
@@ -523,6 +556,13 @@ The Mission command surface belongs to generated-Hub template `1.1.0`. Existing
 Hubs are never automatically migrated. Before Mission work, the installed skill
 checks `hub/compatibility.json` for the Mission command and document
 capabilities.
+
+The neutral typed desktop-client authoring surface first appears in template
+`1.2.0` as exactly `flightdeck.command.mission-authoring.v1`. Its catalog,
+preview, confirmed create, and recovery contract is documented in
+[Mission authoring API](mission-authoring-api.md). Older Hubs remain selectable
+but diagnosably unsupported for that capability; existing Mission commands do
+not imply authoring support.
 
 If a command capability is missing, stop and return the checker's exact managed
 plan-and-diff scope. Do not run setup, overwrite the Hub, touch ignored state,

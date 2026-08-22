@@ -109,15 +109,7 @@ module Flightdeck
       store = BridgeStore.new(@config)
       mode = repository.fetch("bridge_mode")
       profile = repository.fetch("bridge_profile")
-      # The complete recursive instruction inventory is an explicit bridge-plan
-      # projection. Routing consumes only bridge integrity and handoff evidence,
-      # so do not scan every nested AGENTS file on this latency-critical path.
-      bridge_plan = store.plan(
-        repository_id: repository_id,
-        mode: mode,
-        profile: profile,
-        include_instruction_files: false
-      )
+      bridge_plan = store.plan(repository_id: repository_id, mode: mode, profile: profile)
       unless bridge_plan["desired_state"] == "valid" && bridge_plan.fetch("blockers").empty?
         details = bridge_plan.fetch("blockers")
         details = ["bridge is not installed"] if details.empty?

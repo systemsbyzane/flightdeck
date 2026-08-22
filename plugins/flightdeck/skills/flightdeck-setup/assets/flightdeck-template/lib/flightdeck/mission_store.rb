@@ -3,17 +3,11 @@
 require "digest"
 require "base64"
 require_relative "mission_graph"
-require_relative "operation_execution"
 
 module Flightdeck
   class MissionStore
     LIST_API_VERSION = "flightdeck.mission-list/v1"
     LIST_SCHEMA = "hub/schemas/mission-list.schema.json"
-    CLIENT_SNAPSHOT_API_VERSION = "flightdeck.mission-client-snapshot/v1"
-    CLIENT_SNAPSHOT_SCHEMA = "hub/schemas/mission-client-snapshot.schema.json"
-    OPERATION_API_VERSION = "flightdeck.operation/v1"
-    OPERATION_SCHEMA = "hub/schemas/operation.schema.json"
-    OPERATION_CAPABILITY = "flightdeck.command.operation-projection.v1"
     LIST_DEFAULT_LIMIT = 50
     LIST_MAX_LIMIT = 100
     LIST_MAX_MISSIONS = 1_000
@@ -63,16 +57,6 @@ module Flightdeck
       end
     end
 
-    class ClientSnapshotError < Error
-      attr_reader :code, :exit_status
-
-      def initialize(code, message, exit_status: 1)
-        super(message)
-        @code = code
-        @exit_status = exit_status
-      end
-    end
-
     attr_reader :config
 
     def initialize(config, clock: -> { Time.now.utc }, after_list_record_read: nil)
@@ -82,7 +66,7 @@ module Flightdeck
     end
 
     def create(slug:, title:, outcome:, mode: nil, success_criteria: nil, non_goals: [],
-               authorized_targets: [], parent_chat_id: nil)
+               authorized_targets: [])
       Support.validate_slug!(slug, label: "mission slug")
       validate_text!(title, "--title", max: 256)
       validate_text!(outcome, "--outcome", max: 2048)
@@ -116,9 +100,7 @@ module Flightdeck
           "title" => title.to_s.strip,
           "created_at" => now,
           "updated_at" => now
-        }.tap do |metadata|
-          metadata["client_snapshot_binding"] = client_snapshot_binding!(parent_chat_id) if parent_chat_id
-        end,
+        },
         "spec" => {
           "mode" => selected_mode,
           "outcome" => outcome.to_s.strip,
@@ -180,8 +162,7 @@ module Flightdeck
     # Persists the already-complete graph as one Mission record. No partial
     # Mission is visible if graph construction or the final atomic write fails.
     def create_complete(slug:, title:, outcome:, mode: nil, success_criteria: nil, non_goals: [],
-                        authorized_targets: [], nodes: [], authoring_binding: nil,
-                        operation_authoring_binding: nil)
+                        authorized_targets: [], nodes: [], authoring_binding: nil)
       mission = preview_complete(
         slug: slug,
         title: title,
@@ -193,10 +174,15 @@ module Flightdeck
         nodes: nodes
       )
       if authoring_binding
-        mission["metadata"]["authoring"] = validate_authoring_binding!(authoring_binding, "Mission authoring")
-      end
-      if operation_authoring_binding
-        mission["metadata"]["operation_authoring"] = validate_authoring_binding!(operation_authoring_binding, "Operation authoring")
+        value = Support.stringify(authoring_binding)
+        required = %w[operation_digest plan_id plan_digest]
+        unless value.keys.sort == required.sort &&
+               MissionStore::SHA256.match?(value["operation_digest"].to_s) &&
+               MissionStore::SHA256.match?(value["plan_digest"].to_s) &&
+               value["plan_id"].to_s.match?(/\Aplan-[0-9a-f]{48}\z/)
+          raise UsageError, "Mission authoring binding is invalid"
+        end
+        mission["metadata"]["authoring"] = required.to_h { |field| [field, value.fetch(field)] }
       end
       validate_or_raise!(mission, expected_slug: slug)
       persist_complete_mission!(mission)
@@ -412,108 +398,10 @@ module Flightdeck
         node["observed_state"] = "running"
         node["status_code"] = "handing_off"
       end
-      OperationExecution.new(config, clock: @clock).apply_to_mission!(view)
       derive_state!(view, touch: false)
       view["status"]["fan_in_ready"] = fan_in_ready?(view)
       view["status"]["prepared_actions"] = outbox(view).count { |action| action["status"] == "prepared" }
       view
-    end
-
-    # The desktop boundary is intentionally observational.  It exposes only
-    # opaque identities already persisted by core and never offers a recovery,
-    # dispatch, or mutation path.
-    def client_snapshot(slug:, parent_chat_id:)
-      Support.validate_slug!(slug, label: "mission slug")
-      begin
-        validate_opaque!(parent_chat_id, "parent chat ID")
-      rescue ValidationError
-        raise ClientSnapshotError.new("invalid_request", "Parent chat ID is invalid.", exit_status: 2)
-      end
-      record_path = mission_path(slug)
-      raise ClientSnapshotError.new("mission_not_found", "Mission does not exist.") unless File.file?(record_path)
-      raise ClientSnapshotError.new("malformed_mission_record", "Mission record is malformed.") if File.symlink?(record_path)
-
-      mission = snapshot(slug)
-      if operation_backed?(mission)
-        raise ClientSnapshotError.new(
-          "operation_not_mission",
-          "Authored Operations are available only through the Operation detail contract."
-        )
-      end
-      validate_client_snapshot_binding!(mission, parent_chat_id)
-      mission = read_only_status_view(mission)
-      node_values = nodes(mission)
-      if node_values.any? do |node|
-           %w[dispatch_pending dispatch_unknown].include?(node["observed_state"]) ||
-             Support.present?(node["pending_client_id"])
-         end
-        raise ClientSnapshotError.new(
-          "identity_unresolved",
-          "Mission contains a pending or unknown task identity; recover it through the original operation."
-        )
-      end
-
-      routes = node_values.map do |node|
-        client_owner_route(node)
-      end
-      summaries = node_values.map do |node|
-        {
-          "node_id" => node.fetch("id"),
-          "project_label" => node.fetch("logical_project_key"),
-          "status" => node.fetch("observed_state"),
-          "task_binding" => task_identity_binding(node["task_id"])
-        }
-      end
-      events = node_values.filter_map do |node|
-        next unless Support.present?(node["task_id"])
-
-        {
-          "task_id" => node.fetch("task_id"),
-          "node_id" => node.fetch("id"),
-          "status" => node.fetch("observed_state"),
-          "revision" => node["revision"],
-          "event_id" => node["event_id"]
-        }
-      end
-      {
-        "api_version" => CLIENT_SNAPSHOT_API_VERSION,
-        "kind" => "MissionClientSnapshot",
-        "schema" => CLIENT_SNAPSHOT_SCHEMA,
-        "ok" => true,
-        "provenance" => {
-          "mission_id" => mission.dig("metadata", "id"),
-          "parent_chat_id" => parent_chat_id,
-          "owner_routes" => routes
-        },
-        "nodes" => summaries,
-        "task_events" => events,
-        "recovery" => { "mode" => "none" }
-      }
-    rescue ValidationError
-      raise ClientSnapshotError.new("malformed_mission_record", "Mission record is malformed.")
-    end
-
-    # Renderer-safe projection of one exact durable Mission Operation. Raw adapter
-    # session references remain private; only the stable Flightdeck agent and
-    # authenticated bounded observation are exposed.
-    def operation_projection(slug)
-      verify_operation_projection_capability!
-      mission = status(slug)
-      events = Array(mission.dig("status", "skill_events"))
-      {
-        "api_version" => OPERATION_API_VERSION,
-        "kind" => "Operation",
-        "schema" => OPERATION_SCHEMA,
-        "ok" => true,
-        "operation" => {
-          "operation_id" => mission.dig("metadata", "id"),
-          "title" => mission.dig("metadata", "title"),
-          "mode" => mission.dig("spec", "mode"),
-          "state" => mission.dig("status", "state"),
-          "updated_at" => mission.dig("metadata", "updated_at"),
-          "children" => nodes(mission).map { |node| operation_child_projection(node, events) }
-        }
-      }
     end
 
     def validate(slug)
@@ -870,25 +758,14 @@ module Flightdeck
       %w[title created_at updated_at].each do |field|
         errors << "metadata.#{field} is required" unless Support.present?(mission.dig("metadata", field))
       end
-      %w[authoring operation_authoring].each do |field|
-        authoring = mission.dig("metadata", field)
-        next unless authoring
-
+      authoring = mission.dig("metadata", "authoring")
+      if authoring
         unless authoring.is_a?(Hash) && authoring.keys.sort == %w[operation_digest plan_digest plan_id]
-          errors << "metadata.#{field} must be a closed operation and plan binding"
+          errors << "metadata.authoring must be a closed operation and plan binding"
         else
-          errors << "metadata.#{field} operation_digest must be sha256" unless SHA256.match?(authoring["operation_digest"].to_s)
-          errors << "metadata.#{field} plan_digest must be sha256" unless SHA256.match?(authoring["plan_digest"].to_s)
-          errors << "metadata.#{field} plan_id is invalid" unless authoring["plan_id"].to_s.match?(/\Aplan-[0-9a-f]{48}\z/)
-        end
-      end
-      client_binding = mission.dig("metadata", "client_snapshot_binding")
-      if client_binding
-        unless client_binding.is_a?(Hash) && client_binding.keys.sort == %w[binding_version parent_chat_digest]
-          errors << "metadata.client_snapshot_binding must be a closed parent-chat binding"
-        else
-          errors << "metadata.client_snapshot_binding version is invalid" unless client_binding["binding_version"] == "flightdeck.mission-client-binding/v1"
-          errors << "metadata.client_snapshot_binding parent_chat_digest must be sha256" unless SHA256.match?(client_binding["parent_chat_digest"].to_s)
+          errors << "metadata.authoring operation_digest must be sha256" unless SHA256.match?(authoring["operation_digest"].to_s)
+          errors << "metadata.authoring plan_digest must be sha256" unless SHA256.match?(authoring["plan_digest"].to_s)
+          errors << "metadata.authoring plan_id is invalid" unless authoring["plan_id"].to_s.match?(/\Aplan-[0-9a-f]{48}\z/)
         end
       end
       %w[metadata.created_at metadata.updated_at].each do |field|
@@ -984,19 +861,7 @@ module Flightdeck
       end
 
       after_id = decode_list_cursor(cursor)
-      ids = discover_mission_ids.select do |mission_id|
-        next false if after_id && mission_id <= after_id
-
-        mission = fetch_list_record(mission_id)
-        validate_or_raise!(mission, expected_slug: mission_id)
-        !operation_backed?(mission)
-      rescue ValidationError, UsageError, SystemCallError
-        raise ListError.new(
-          "malformed_mission_record",
-          "Mission record is malformed.",
-          mission_id: mission_id
-        )
-      end
+      ids = discover_mission_ids.select { |mission_id| after_id.nil? || mission_id > after_id }
       page_ids = ids.first(limit + 1)
       has_more = page_ids.length > limit
       page_ids = page_ids.first(limit)
@@ -1017,105 +882,6 @@ module Flightdeck
     end
 
     private
-
-    # An authored Operation is classified only by the validated binding written
-    # by OperationAuthoring. IDs, titles, directory names, and graph content are
-    # never used as substitutes for this persisted producer identity.
-    def operation_backed?(mission)
-      binding = mission.dig("metadata", "operation_authoring")
-      return false if binding.nil?
-
-      binding.is_a?(Hash) && binding.keys.sort == %w[operation_digest plan_digest plan_id] &&
-        SHA256.match?(binding["operation_digest"].to_s) &&
-        SHA256.match?(binding["plan_digest"].to_s) &&
-        binding["plan_id"].to_s.match?(/\Aplan-[0-9a-f]{48}\z/)
-    end
-
-    def verify_operation_projection_capability!
-      compatibility_path = File.join(config.root, "hub", "compatibility.json")
-      schema_path = File.join(config.root, OPERATION_SCHEMA)
-      unless [compatibility_path, schema_path].all? { |path| File.file?(path) && !File.symlink?(path) }
-        raise ValidationError, "Hub does not declare the Operation projection v1 contract"
-      end
-      compatibility = Support.load_data(compatibility_path)
-      capability = compatibility.dig("capabilities", OPERATION_CAPABILITY)
-      managed = Array(capability&.fetch("managed_paths", []))
-      unless compatibility["schema_version"] == "flightdeck.hub-compatibility/v1" &&
-             compatibility["product"] == "flightdeck" && capability.is_a?(Hash) &&
-             capability["kind"] == "command" &&
-             capability.dig("probe", "help_contains") == "bin/flightdeck mission operation " &&
-             [
-               "lib/flightdeck/mission_store.rb", "lib/flightdeck/operation_execution.rb",
-               "hub/schemas/operation-execution-types.schema.json", OPERATION_SCHEMA
-             ].all? { |path| managed.include?(path) }
-        raise ValidationError, "Hub does not declare the Operation projection v1 contract"
-      end
-    rescue ValidationError
-      raise ValidationError, "Hub does not declare the Operation projection v1 contract"
-    end
-
-    def operation_child_projection(node, events)
-      task_id = node["task_id"]
-      execution = node["operation_execution"]
-      session = if execution
-                  { "state" => "execution_bound", "agent_id" => execution.fetch("agent_id") }
-                elsif task_id
-                  { "state" => "resolved", "task_id" => task_id }
-                elsif node["pending_client_id"]
-                  { "state" => "pending_identity" }
-                else
-                  { "state" => "unavailable" }
-                end
-      child_events = events.select { |event| event["node_id"] == node["id"] }
-      {
-        "node_id" => node["id"],
-        "project" => { "logical_project_key" => node["logical_project_key"] },
-        "state" => node["observed_state"],
-        "status_code" => node["status_code"],
-        "session" => session,
-        "execution" => execution || { "availability" => "unavailable" },
-        "verified_skills" => operation_skill_summary(child_events),
-        "files_changed" => { "availability" => "not_collected" },
-        "output_refs" => Array(node["output_refs"]).filter_map do |reference|
-          value = reference.is_a?(Hash) ? reference["ref"] : reference
-          value if value.to_s.start_with?("artifact:", "codex-task:", "review:operation-execution/")
-        end
-      }
-    end
-
-    def operation_skill_summary(events)
-      items = events.group_by { |event| [event["skill_id"], event["skill_version"]] }.map do |(skill_id, skill_version), skill_events|
-        latest_by_child = skill_events.group_by { |event| event["node_id"] }.values.map do |child_events|
-          child_events.max_by { |event| [event["observed_at"], event["evidence_id"]] }
-        end
-        statuses = latest_by_child.map { |event| event["lifecycle_status"] }
-        {
-          "skill_id" => skill_id,
-          "skill_version" => skill_version,
-          "lifecycle_status" => operation_skill_status(statuses)
-        }
-      end.sort_by { |item| [item["skill_id"], item["skill_version"].to_s] }
-      state = if items.empty?
-                "absent"
-              elsif items.any? { |item| %w[failed blocked unknown_outcome].include?(item["lifecycle_status"]) }
-                "partial_failure"
-              elsif items.any? { |item| item["lifecycle_status"] == "started" }
-                "in_progress"
-              else
-                "succeeded"
-              end
-      { "state" => state, "items" => items }
-    end
-
-    def operation_skill_status(statuses)
-      return "unknown_outcome" if statuses.include?("unknown_outcome")
-      return "failed" if statuses.include?("failed")
-      return "blocked" if statuses.include?("blocked")
-      return "started" if statuses.include?("started")
-      return "succeeded" if statuses.include?("succeeded")
-
-      "completed"
-    end
 
     def discover_mission_ids
       root = config.mission_dir
@@ -1184,50 +950,6 @@ module Flightdeck
         "Mission record is malformed.",
         mission_id: mission_id
       )
-    end
-
-    def client_owner_route(node)
-      {
-        "node_id" => node.fetch("id"),
-        "project_label" => node.fetch("logical_project_key"),
-        "runtime_project_id" => node.fetch("runtime_project_id"),
-        "host_id" => node.fetch("host_id"),
-        "execution_mode" => node.fetch("execution_mode"),
-        "access_mode" => node.fetch("access_mode"),
-        "authorization_boundary" => node.fetch("authorization_boundary")
-      }
-    end
-
-    def client_snapshot_binding!(parent_chat_id)
-      validate_opaque!(parent_chat_id, "parent chat ID")
-      {
-        "binding_version" => "flightdeck.mission-client-binding/v1",
-        "parent_chat_digest" => Digest::SHA256.hexdigest(parent_chat_id.to_s)
-      }
-    end
-
-    def validate_client_snapshot_binding!(mission, parent_chat_id)
-      binding = mission.dig("metadata", "client_snapshot_binding")
-      unless binding.is_a?(Hash) && binding["binding_version"] == "flightdeck.mission-client-binding/v1" &&
-             SHA256.match?(binding["parent_chat_digest"].to_s)
-        raise ClientSnapshotError.new(
-          "identity_unresolved",
-          "Mission has no valid operator-controlled parent-chat binding."
-        )
-      end
-      presented = Digest::SHA256.hexdigest(parent_chat_id.to_s)
-      unless secure_equal?(binding.fetch("parent_chat_digest"), presented)
-        raise ClientSnapshotError.new(
-          "identity_unresolved",
-          "Parent-chat identity does not match the persisted Mission binding."
-        )
-      end
-    end
-
-    def secure_equal?(left, right)
-      return false unless left.is_a?(String) && right.is_a?(String) && left.bytesize == right.bytesize
-
-      left.bytes.zip(right.bytes).reduce(0) { |difference, (a, b)| difference | (a ^ b) }.zero?
     end
 
     def encode_list_cursor(mission_id)
@@ -1961,19 +1683,6 @@ module Flightdeck
       mission["status"]["state"] = state
       mission["metadata"]["updated_at"] = timestamp if touch
       state
-    end
-
-    def validate_authoring_binding!(binding, label)
-      value = Support.stringify(binding)
-      required = %w[operation_digest plan_id plan_digest]
-      unless value.keys.sort == required.sort &&
-             MissionStore::SHA256.match?(value["operation_digest"].to_s) &&
-             MissionStore::SHA256.match?(value["plan_digest"].to_s) &&
-             value["plan_id"].to_s.match?(/\Aplan-[0-9a-f]{48}\z/)
-        raise UsageError, "#{label} binding is invalid"
-      end
-
-      required.to_h { |field| [field, value.fetch(field)] }
     end
 
     def validate_mission_authorization!(mission)

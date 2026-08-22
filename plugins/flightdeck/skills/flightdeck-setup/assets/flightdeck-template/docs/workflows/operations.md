@@ -35,11 +35,12 @@ For non-trivial work, the Hub first records:
 - requested execution mode and approval boundaries
 - starting branch and SHA for every repo, discovered at runtime
 
-The Hub then chooses the smallest useful execution graph. It must not create a
-repo task merely because a repo was inspected, and it must not edit nested repo
-code from the Hub project.
+The Hub then chooses the smallest useful owner split. It must not create a repo
+task merely because a repo was inspected, and it must not edit nested repo code
+from the Hub project. That split remains receipt-and-stop unless the user
+explicitly opts into a [Mission](missions.md).
 
-## V1 Command Surface
+## Command Surface
 
 Run the control plane from the Hub root. The implemented v1 interface is:
 
@@ -47,18 +48,6 @@ Run the control plane from the Hub root. The implemented v1 interface is:
 bin/flightdeck help
 bin/flightdeck doctor [--json] [--strict]
 bin/flightdeck status [--json] [--write]
-bin/flightdeck hub operations-snapshot --hub-root ABSOLUTE_PATH [--archive-view active|archived] [--json]
-bin/flightdeck work list --hub-root ABSOLUTE_PATH [--limit 1..100] [--cursor CURSOR] [--json]
-bin/flightdeck work create --request FILE [--json]
-bin/flightdeck work adapter-bind --request FILE [--json]
-bin/flightdeck work open --request FILE [--json]
-bin/flightdeck work coordinate --request FILE [--json]
-bin/flightdeck work launch --request FILE [--json]
-bin/flightdeck work decline --request FILE [--json]
-bin/flightdeck work lifecycle-open --request FILE [--json]
-bin/flightdeck work dispatch-plan --request FILE [--json]
-bin/flightdeck work dispatch-report --request FILE [--json]
-bin/flightdeck work guidance --request FILE [--json]
 bin/flightdeck task new TYPE SLUG --title TITLE --outcome OUTCOME [--workload NAME]
 bin/flightdeck task show SLUG [--json]
 bin/flightdeck task transition SLUG STATE [--note NOTE]
@@ -69,18 +58,6 @@ bin/flightdeck mission list --hub-root ABSOLUTE_PATH [--limit 1..100] [--cursor 
 bin/flightdeck mission show SLUG [--json]
 bin/flightdeck mission validate SLUG [--json]
 bin/flightdeck mission status SLUG [--json]
-bin/flightdeck mission operation SLUG --json
-bin/flightdeck mission skill-telemetry SLUG [--limit 1..100] [--cursor CURSOR] [--json]
-bin/flightdeck operation authoring-catalog --request FILE [--json]
-bin/flightdeck operation authoring-plan --request FILE [--json]
-bin/flightdeck operation authoring-launch --request FILE [--json]
-bin/flightdeck operation authoring-guidance --request FILE [--json]
-bin/flightdeck operation authoring-operation --request FILE [--json]
-bin/flightdeck operation lifecycle --request FILE [--json]
-bin/flightdeck operation execution-plan --request FILE [--json]
-bin/flightdeck operation execution-bind --request FILE [--json]
-bin/flightdeck operation execution-observe --request FILE [--json]
-bin/flightdeck operation execution-open --request FILE [--json]
 bin/flightdeck mission add SLUG NODE --project-key KEY --runtime-project-id ID (--project-path PATH|--project-path-digest SHA256) --host-id HOST --execution-mode local|worktree --access-mode read_only|write --work-type TYPE (--required|--optional) [--criterion-id ID] [--depends-on NODE] [--accepts TYPE] --allows-output TYPE [--artifact-resolver-kind same_host_workspace|external_approved --artifact-resolver-id ID] [--json]
 bin/flightdeck mission record-dispatch SLUG NODE --runtime-project-id OPAQUE --host-id HOST (--task-id OPAQUE|--pending-client-id OPAQUE|--dispatch-unknown) [--project-path PATH|--project-path-digest SHA256]
 bin/flightdeck mission sync-plan SLUG --observations FILE [--json]
@@ -104,100 +81,6 @@ The canonical workflow adapter types are `patching`, `research`, `development`,
 `daily-ops`, and `compliance`. Task state and generated reports are local runtime
 artifacts excluded from control-plane Git history.
 
-## Control Center / Operations projection
-
-The read-only Operations contract is a selected-Hub projection, not a Codex
-history browser. `hub operations-snapshot` returns only durable Hub task and
-Mission state and fails closed when that state or its declared capability is
-invalid. It does not poll, resume, dispatch, synchronize, or mutate work.
-
-The summary has deterministic counts and at most 100 alerts for
-`approval_required`, `blocked`, `failed_validation`, or `reconcile_required`.
-It does not manufacture a health claim. The UI may show an operation's title,
-status, timestamps, route scope, and proven Mission/task children, but must
-not derive activity, changed files, validations, artifacts, or skills from a
-title, outcome, prompt, expected skill list, repository, or agent prose.
-Those optional fields are shown only when their typed durable Hub observation
-exists. Legacy Mission children without authenticated skill telemetry retain
-the typed unavailable/empty state.
-
-The default `active` archive view excludes only Operations explicitly archived
-through the lifecycle command. The `archived` view returns only those records.
-Archiving is reversible visibility metadata: it never deletes the Operation,
-its agents, execution observations, validation, changes, or result evidence.
-Legacy task projections remain active because they lack a canonical authored
-Operation identity and cannot safely accept lifecycle mutation.
-
-`operation lifecycle` accepts one closed request with `close`, `archive`, or
-`restore`. `close` is the explicit operator acknowledgement gate and succeeds
-only when the authored Operation is `review_ready`; the Operation then projects
-as `completed`. `archive` accepts only completed or terminal Operations, so
-active work cannot be hidden. `restore` accepts only an archived Operation and
-returns it to the active view. Request identities are replay-safe, records are
-bounded and private ignored Hub state, and conflicts fail closed.
-
-Template 1.12 adds authenticated runtime-agent telemetry for adapter-backed
-Operations. Flightdeck durably projects whatever task agents and subagents the
-runtime actually reports, including custom names and sources, without a
-hardcoded agent catalog. Each owning Flightdeck agent retains at most 64
-runtime agents so observation, recovery, and detail projections share one
-fail-closed bound. Only typed authenticated tool, skill, file, change,
-approval, yield, validation, error, and terminal-result claims are shown. Raw
-reasoning and runtime/session references are never stored. Where OMP provides
-only a parent tool-call correlation, parent identity remains explicitly
-correlated rather than invented. Where OMP provides no parent evidence,
-parentage is explicitly unavailable and no owning-agent relationship is
-synthesized.
-
-An Operations snapshot card retains its `mission:` or `task:` `operation_id`
-as source identity. Detail navigation is separately typed under `detail` and
-requires `flightdeck.command.operations-snapshot-detail-identity.v1`. Open
-detail only when `detail.availability` is `available`, passing its canonical
-`operation_id` unchanged. `unavailable` is terminal for that snapshot record;
-the client must not strip a prefix, hash, parse a title, use an array position,
-or substitute Mission/task/runtime/project identity.
-
-## Work, Operation detail, and Mission objectives
-
-`work coordinate` is the Hub-owned intake boundary for the desktop Work
-surface. It returns exactly one typed disposition:
-
-- `runtime_delegate` for ordinary conversation through the Hub-selected
-  runtime adapter;
-- `operation_proposal` when the request explicitly names at least two exact
-  attached projects (or explicitly requests every attached project);
-- `guidance_attached` when the caller supplies one exact active authored
-Operation identity; or
-- `runtime_unavailable` when the declared primary adapter is unavailable.
-
-An Operation proposal is review-only. It uses the existing Operation-authoring
-plan and cannot launch until the operator confirms the exact plan identity,
-digest, generation, and token. The Hub delegates ordinary conversation to its
-declared Codex adapter. A confirmed Operation separately selects the exact
-declared execution adapter; template 1.9 selects OMP and declares Codex
-app-server unavailable. Changing that selection changes compatibility and
-adapter implementation, not the Work UI or durable Operation lifecycle.
-
-`operation detail` resolves only an exact durable authored Operation and
-projects goal, authorization boundary, progress, named project agents,
-dependencies, typed validations, artifacts, approvals, result totals, and
-explicit non-goals. Changed files and skills remain unavailable until an
-authenticated task-bound producer persists them; the projection never infers
-them from prose, prompts, titles, or expected-skill lists.
-Pre-bind execution failures are durable producer state rather than inferred
-client activity. The start-recovery capability binds each report to the exact
-Operation, agent, dispatch generation/receipt, and registered runtime project;
-retry requires the current producer-issued retry generation. Detail and the
-Operations snapshot render only its bounded sanitized projection.
-
-Mission objectives are separate from execution-graph `MissionRecord` state.
-`mission objective-plan` produces an ordered review of exact durable Operation
-identities. `mission objective-create` requires the exact Hub-authored
-confirmation and persists an immutable ordered membership record under ignored
-Hub state. `mission objective-snapshot` is the recovery and read boundary; it
-derives Mission progress from those exact Operations and never treats a
-MissionRecord node or status projection as child-Operation membership.
-
 `task new` intentionally creates only an intake skeleton. Enrich the generated
 `hub/tasks/<slug>/task.yaml` with the structured targets, success criteria,
 authorization actions, execution units, checks, risks, and evidence required by
@@ -214,52 +97,6 @@ Mission bodies, outcomes, prompts, task IDs, project identities and paths,
 output declarations and references, outbox data, credentials, and evidence.
 Clients must require `flightdeck.command.mission-list.v1`; they must not infer
 support from a template version or scrape ignored Mission YAML.
-Authored Operation records are excluded only when their validated persisted
-Operation-authoring binding is present. Require
-`flightdeck.command.mission-operation-separation.v1` when that separation is a
-consumer invariant; legacy Mission records remain listed normally.
-
-`mission skill-telemetry` is the JSON-only read contract for explicit
-structured Codex task skill events accepted during Mission sync. It returns a
-generation-bound, paginated, deduplicated operation summary with exact bounded
-child provenance. It never infers skill use from prompt, title, label, command,
-free text, or arbitrary tool payloads. Clients must require
-`flightdeck.command.skill-telemetry.v1`; a supported empty result is `absent`,
-while an old Hub is explicitly unsupported.
-
-`hub snapshot` and `hub operations-snapshot` are the bounded client discovery
-surfaces described in the [Hub-first application contract](../architecture/hub-first.md).
-`mission operation` is the narrow per-Mission view described in the
-[Operation projection API](operation-projection-api.md). All three require
-their exact capabilities and schemas; clients must not scrape Hub state or
-infer a fallback when a preserved Hub is unsupported.
-
-An Operations snapshot card retains its `mission:` or `task:` `operation_id`
-as source identity. Detail navigation is separately typed under `detail` and
-requires `flightdeck.command.operations-snapshot-detail-identity.v1`. Open
-detail only when `detail.availability` is `available`, passing its canonical
-`operation_id` unchanged. `unavailable` is terminal for that snapshot record;
-the client must not strip a prefix, hash, parse a title, use an array position,
-or substitute Mission/task/runtime/project identity.
-
-`operation authoring-*` is the closed client producer contract for a durable
-planned Operation; see [Operation authoring API](operation-authoring-api.md).
-It never dispatches child tasks or infers task, skill, file, or success state.
-
-`work *` is the selected-Hub durable command/conversation metadata contract;
-see the [Work control API](work-control-api.md). It stores display-safe Work
-identity and normalized event/Operation links, not transcript or runtime
-payloads. Structured runtime recommendations are untrusted, logical-key-only
-inputs revalidated against the exact Hub catalog. Proposal review, explicit
-launch or decline, unknown-outcome recovery, native-only dispatch authorization,
-receipt attachment, and exact nonterminal guidance remain separate typed
-actions. A proposal is durable `not_started` and creates no Mission/task until
-the exact five-field `Confirm & Launch` action succeeds. Decline is durable and
-dispatch-free. Launch authors one idempotent Operation; `dispatch-plan` then
-returns the exact route/bridge-bound parallel target set but starts nothing.
-Only an independently approved native dispatcher may act on it and must report
-every receipt through the generation-bound `dispatch-report` contract. Current
-client policy may remain fail-closed even when the producer capability exists.
 
 ## Mission Operations
 
@@ -448,10 +285,12 @@ metadata required for dispatch. It must not inspect target code or artifacts,
 resolve detailed workbook contents, hash evidence, create temporary analysis
 scripts, invoke project-specific analysis, or start implementation.
 
-Keep intake, cross-repo design, sequencing, and approvals in the Hub. After
-dispatch, stop the Hub turn. The operator monitors child tasks directly. Read
-or consolidate results only when the operator later asks to resume, check a
-completed task, or coordinate follow-up work.
+Keep intake, cross-repo design, sequencing, and approvals in the Hub. For
+ordinary dispatch, stop the Hub turn after the receipt. The operator monitors
+child tasks directly. Read or consolidate results only when the operator later
+asks to resume, check a completed task, or coordinate follow-up work. Explicit
+Mission observation is the bounded exception defined above; it must follow the
+selected mode, normalized-envelope, cursor, outbox, budget, and stop contracts.
 
 Use Local mode for read-only audits, research against an intentional checkout,
 current-branch work, and program workspaces. Use Worktree mode for isolated

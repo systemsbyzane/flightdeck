@@ -28,25 +28,6 @@
             "plan_id": {"type": "string", "pattern": "^plan-[0-9a-f]{48}$"},
             "plan_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
           }
-        },
-        "operation_authoring": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["operation_digest", "plan_id", "plan_digest"],
-          "properties": {
-            "operation_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-            "plan_id": {"type": "string", "pattern": "^plan-[0-9a-f]{48}$"},
-            "plan_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
-          }
-        },
-        "client_snapshot_binding": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["binding_version", "parent_chat_digest"],
-          "properties": {
-            "binding_version": {"const": "flightdeck.mission-client-binding/v1"},
-            "parent_chat_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
-          }
         }
       }
     },

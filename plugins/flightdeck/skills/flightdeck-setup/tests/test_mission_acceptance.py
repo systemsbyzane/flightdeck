@@ -876,28 +876,6 @@ class GeneratedHubMissionCliAcceptanceTest(unittest.TestCase):
         arguments.append("--json")
         return self.cli(*arguments)
 
-    def test_operation_projection_is_typed_and_excludes_untrusted_runtime_fields(self) -> None:
-        slug = "operation-projection"
-        self.new_mission(slug, "watch_only", authorized_targets=["source"])
-        self.add_node(slug, "source")
-        self.record_dispatch(slug, "source")
-
-        projection = self.cli("mission", "operation", slug, "--json")
-
-        self.assertEqual("flightdeck.operation/v1", projection["api_version"])
-        self.assertEqual("hub/schemas/operation.schema.json", projection["schema"])
-        child = projection["operation"]["children"][0]
-        self.assertEqual("project-source", child["project"]["logical_project_key"])
-        self.assertEqual("resolved", child["session"]["state"])
-        self.assertIn("task_id", child["session"])
-        self.assertEqual({"state": "absent", "items": []}, child["verified_skills"])
-        self.assertEqual({"availability": "not_collected"}, child["files_changed"])
-        self.assertEqual([], child["output_refs"])
-        serialized = json.dumps(projection)
-        self.assertNotIn("runtime_project_id", serialized)
-        self.assertNotIn("project_path", serialized)
-        self.assertNotIn("pending_client_id", serialized)
-
     @staticmethod
     def authorized_target(
         node_id: str,
